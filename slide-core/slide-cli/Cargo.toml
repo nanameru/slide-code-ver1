@@ -1,0 +1,19 @@
+[package]
+name = "slide-cli"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "slide"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+slide-common = { path = "../slide-common" }
+slide-tui = { path = "../slide-tui" }
+slide-core = { path = "../slide-core" }

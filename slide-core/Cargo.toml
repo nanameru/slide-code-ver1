@@ -1,0 +1,28 @@
+[workspace]
+members = [
+    "slide-cli",
+    "slide-core", 
+    "slide-tui",
+    "slide-common",
+    "slide-ansi-escape",
+    "slide-arg0",
+    "slide-apply-patch",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+
+[workspace.lints]
+rust = {}
+
+[workspace.lints.clippy]
+expect_used = "deny"
+uninlined_format_args = "deny"
+unwrap_used = "deny"
+
+[profile.release]
+lto = "fat"
+strip = "symbols"
+codegen-units = 1

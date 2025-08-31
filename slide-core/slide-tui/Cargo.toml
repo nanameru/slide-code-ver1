@@ -1,0 +1,14 @@
+[package]
+name = "slide-tui"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+slide-common = { path = "../slide-common" }
