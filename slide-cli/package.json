@@ -1,18 +1,39 @@
 {
-  "name": "@yourorg/slide",
-  "version": "0.0.1",
-  "license": "Apache-2.0",
+  "name": "@taiyo/slide",
+  "version": "0.1.0",
+  "description": "Terminal-based AI agent for generating markdown slides through chat interaction",
+  "author": "Taiyo Kimura",
+  "license": "MIT",
+  "homepage": "https://github.com/kimurataiyou/slide-code-test",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kimurataiyou/slide-code-test.git"
+  },
+  "keywords": [
+    "slides",
+    "markdown",
+    "cli",
+    "tui",
+    "presentation",
+    "ai"
+  ],
   "bin": {
     "slide": "bin/slide.js"
   },
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=16"
   },
   "files": [
     "bin",
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
+  "scripts": {
+    "prepack": "echo 'Preparing package for publishing...'",
+    "postpack": "echo 'Package prepared successfully!'"
+  },
   "dependencies": {
     "@vscode/ripgrep": "^1.15.14"
   },

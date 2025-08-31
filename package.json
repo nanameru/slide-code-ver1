@@ -1,0 +1,21 @@
+{
+  "name": "slide-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Slide CLI workspace for local development",
+  "scripts": {
+    "dev": "./slide.sh",
+    "build": "cd slide-rs && cargo build --release",
+    "test": "cd slide-rs && cargo test",
+    "install-global": "cd slide-cli && npm link",
+    "uninstall-global": "npm unlink -g @taiyo/slide"
+  },
+  "workspaces": [
+    "slide-cli"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "author": "Taiyo Kimura",
+  "license": "MIT"
+}
