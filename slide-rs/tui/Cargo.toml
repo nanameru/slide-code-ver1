@@ -11,4 +11,5 @@ ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
-slide-common = { path = "../slide-common" }
+slide-common = { path = "../common" }
+clap = { version = "4", features = ["derive"] }

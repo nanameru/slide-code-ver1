@@ -83,7 +83,7 @@ fn ui(f: &mut Frame, _app: &App) {
             Constraint::Min(0),
             Constraint::Length(3),
         ])
-        .split(f.size());
+        .split(f.area());
 
     // Header
     let header = Paragraph::new("Slide CLI - Interactive Mode")

@@ -3,11 +3,27 @@ pub mod preview;
 pub mod interactive;
 
 use anyhow::Result;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use clap::Parser;
 
 pub use app::*;
 pub use preview::*;
 pub use interactive::*;
+
+#[derive(Debug, Parser, Default)]
+pub struct Cli {
+    /// Enable debug output
+    #[clap(long)]
+    pub debug: bool,
+}
+
+pub async fn run_main(cli: Cli, _sandbox_exe: Option<PathBuf>) -> Result<()> {
+    if cli.debug {
+        println!("Debug mode enabled");
+    }
+    
+    run_interactive().await
+}
 
 /// Run slide preview for a markdown file
 pub async fn run_preview<P: AsRef<Path>>(file_path: P) -> Result<()> {

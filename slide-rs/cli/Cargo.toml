@@ -14,6 +14,7 @@ path = "src/main.rs"
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
-slide-common = { path = "../slide-common" }
-slide-tui = { path = "../slide-tui" }
-slide-core = { path = "../slide-core" }
+slide-common = { path = "../common" }
+slide-tui = { path = "../tui" }
+slide-core = { path = "../core" }
+slide-arg0 = { path = "../arg0" }

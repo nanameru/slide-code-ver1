@@ -1,12 +1,13 @@
 [workspace]
 members = [
-    "slide-cli",
-    "slide-core", 
-    "slide-tui",
-    "slide-common",
-    "slide-ansi-escape",
-    "slide-arg0",
-    "slide-apply-patch",
+    "ansi-escape",
+    "apply-patch",
+    "arg0",
+    "chatgpt", 
+    "cli",
+    "common",
+    "core",
+    "tui",
 ]
 resolver = "2"
 

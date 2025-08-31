@@ -1,0 +1,13 @@
+[package]
+name = "slide-core"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1"
+slide-common = { path = "../common" }
+slide-chatgpt = { path = "../chatgpt" }
+tokio = { version = "1", features = ["full"] }
