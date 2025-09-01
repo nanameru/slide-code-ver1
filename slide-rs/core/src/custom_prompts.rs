@@ -1,4 +1,12 @@
-use codex_protocol::custom_prompts::CustomPrompt;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomPrompt {
+    pub id: String,
+    pub name: String,
+    pub prompt: String,
+    pub description: Option<String>,
+}
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;

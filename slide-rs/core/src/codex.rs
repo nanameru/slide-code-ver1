@@ -29,7 +29,7 @@ use tracing::info;
 use tracing::trace;
 use tracing::warn;
 use uuid::Uuid;
-use crate::ModelProviderInfo;
+use crate::model_provider_info::ModelProviderInfo;
 use crate::apply_patch;
 use crate::apply_patch::ApplyPatchExec;
 use crate::apply_patch::CODEX_APPLY_PATCH_ARG1;

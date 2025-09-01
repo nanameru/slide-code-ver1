@@ -1,6 +1,26 @@
 use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplyPatchAction {
+    pub files: Vec<ApplyPatchFileChange>,
+    pub description: String,
+}
+
+impl ApplyPatchAction {
+    pub fn is_empty(&self) -> bool {
+        self.files.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplyPatchFileChange {
+    pub path: String,
+    pub content: String,
+    pub operation: String, // "add", "update", "delete"
+}
 
 /// Minimal patch applier supporting Add/Update/Delete blocks in the custom format.
 /// This implementation is intentionally simple: Update replaces the entire file

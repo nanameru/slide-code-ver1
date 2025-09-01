@@ -4,14 +4,27 @@ use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_patch_safety;
-use codex_apply_patch::ApplyPatchAction;
-use codex_apply_patch::ApplyPatchFileChange;
-use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseInputItem;
+use slide_apply_patch::ApplyPatchAction;
+use slide_apply_patch::ApplyPatchFileChange;
+use crate::conversation_history::FunctionCallOutputPayload;
+use crate::conversation_history::ResponseInputItem;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub const CODEX_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SafetyDecision {
+    AutoApprove,
+    AskUser,
+    Reject { reason: String },
+}
+
+#[derive(Debug, Clone)]
+pub struct PatchAssessment {
+    pub decision: SafetyDecision,
+    pub reason: Option<String>,
+}
 
 pub(crate) enum InternalApplyPatchInvocation {
     /// The `apply_patch` call was handled programmatically, without any sort

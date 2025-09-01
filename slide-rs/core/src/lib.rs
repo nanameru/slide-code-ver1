@@ -25,6 +25,7 @@ pub mod environment_context;
 pub mod user_notification;
 pub mod config;
 pub mod config_types;
+pub mod config_profile;
 pub mod model_provider_info;
 pub mod openai_model_info;
 pub mod model_family;
@@ -39,5 +40,10 @@ pub mod flags;
 pub mod project_doc;
 pub mod rollout;
 pub mod user_agent;
+pub mod codex_conversation;
+pub mod custom_prompts;
+pub mod exec_env;
+pub mod turn_diff_tracker;
+pub mod protocol;
 
 pub use chat_completions::*;
