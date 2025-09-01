@@ -25,6 +25,9 @@ use widgets::{
 };
 use crate::agent::AgentHandle;
 use slide_core::codex::Event as CoreEvent;
+use crate::app_event_sender::AppEventSender;
+use crate::user_approval_widget::ApprovalRequest;
+use crate::bottom_pane::{BottomPane, BottomPaneParams};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -83,6 +86,8 @@ pub struct App {
     recent_files: Vec<String>,
     // Agent integration
     agent: Option<AgentHandle>,
+    // Bottom pane integration
+    bottom_pane: BottomPane,
 }
 
 impl App {
@@ -114,6 +119,7 @@ impl App {
             preview_path: None,
             recent_files,
             agent: None,
+            bottom_pane: BottomPane::new(BottomPaneParams{ has_input_focus: true, placeholder_text: "Ask Codex to do anything".into()}),
         }
     }
 
@@ -387,7 +393,21 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
         // Handle events with timeout
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
-                app.handle_key_event(key);
+                // Forward to bottom pane in insert mode first
+                if matches!(app.mode, Mode::Insert) {
+                    if let Some(res) = app.bottom_pane.handle_key_event(key) {
+                        if let crate::bottom_pane::InputResult::Submitted(text) = res {
+                            if !text.is_empty() { app.messages.push(format!("You: {}", text)); }
+                            if let Some(agent) = &app.agent {
+                                let to_send = text.clone();
+                                let agent_clone = agent.codex.clone();
+                                tokio::spawn(async move { let _ = agent_clone.submit(slide_core::codex::Op::UserInput { text: to_send }).await; });
+                            }
+                        }
+                    }
+                } else {
+                    app.handle_key_event(key);
+                }
             }
         }
 
@@ -465,9 +485,9 @@ fn ui(f: &mut Frame, app: &App) {
         .block(Block::default().borders(Borders::ALL).title("Hints"));
     f.render_widget(help, body[1]);
 
-    // Composer
-    let composer = ComposerWidget::new(&app.input, matches!(app.mode, Mode::Insert));
-    f.render_widget(composer, chunks[2]);
+    // Composer/bottom pane area
+    // Render bottom pane regardless of mode; focusは modeに応じて将来切替
+    app.bottom_pane.render_ref(chunks[2], f.buffer_mut());
 
     // Status bar
     let status = match app.status {
@@ -557,10 +577,9 @@ fn handle_core_event(app: &mut App, ev: CoreEvent) {
         CoreEvent::ExecCommandEnd { exit_code, .. } => {
             app.messages.push(format!("[exec] exit {}", exit_code));
         }
-        CoreEvent::ApplyPatchApprovalRequest { .. } => {
-            app.modal_title = "Approval".into();
-            app.modal_body = "Apply patch? (approve via CLI)".into();
-            app.show_modal = true;
+        CoreEvent::ApplyPatchApprovalRequest { id, changes, reason } => {
+            let req = ApprovalRequest::Patch { id, changes, reason };
+            app.bottom_pane.show_approval_modal(req, AppEventSender::new(()));
         }
         CoreEvent::PatchApplyBegin { .. } => {
             app.messages.push("[patch] applying...".into());
@@ -579,10 +598,9 @@ fn handle_core_event(app: &mut App, ev: CoreEvent) {
             app.status = RunStatus::Error;
         }
         CoreEvent::ShutdownComplete => {}
-        CoreEvent::ExecApprovalRequest { .. } => {
-            app.modal_title = "Approval".into();
-            app.modal_body = "Execute command? (approve via CLI)".into();
-            app.show_modal = true;
+        CoreEvent::ExecApprovalRequest { id, command, cwd: _, reason } => {
+            let req = ApprovalRequest::Exec { id, command, reason };
+            app.bottom_pane.show_approval_modal(req, AppEventSender::new(()));
         }
     }
 }

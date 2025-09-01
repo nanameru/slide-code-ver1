@@ -20,6 +20,9 @@ pub mod popup_consts;
 pub mod scroll_state;
 pub mod approval_modal_view;
 pub use chat_composer::{ChatComposer, InputResult};
+use crate::app_event_sender::AppEventSender;
+use crate::user_approval_widget::ApprovalRequest;
+use approval_modal_view::ApprovalModalView;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancellationEvent {
@@ -89,14 +92,19 @@ impl BottomPane {
     }
 
     /// キーイベント委譲
-    pub fn handle_key_event(&mut self, key_event: KeyEvent) {
+    pub fn handle_key_event(&mut self, key_event: KeyEvent) -> Option<InputResult> {
         if let Some(mut view) = self.active_view.take() {
             view.handle_key_event(self, key_event);
             if !view.is_complete() {
                 self.active_view = Some(view);
             }
+            None
         } else {
-            let _ = self.composer.handle_key_event(key_event);
+            let (res, _redraw) = self.composer.handle_key_event(key_event);
+            match res {
+                InputResult::Submitted(_) => Some(res),
+                _ => None,
+            }
         }
     }
 
@@ -129,10 +137,9 @@ impl BottomPane {
     }
 }
 
-// 簡易なアプリイベント送信スタブ（将来、本体の送信機構と統合）
-#[derive(Clone, Default)]
-pub struct AppEventSender;
-impl AppEventSender {
-    pub fn new() -> Self { Self }
-    pub fn send<T>(&self, _event: T) {}
+impl BottomPane {
+    /// 承認モーダルの表示
+    pub fn show_approval_modal(&mut self, req: ApprovalRequest, tx: AppEventSender) {
+        self.active_view = Some(Box::new(ApprovalModalView::new(req, tx)));
+    }
 }
