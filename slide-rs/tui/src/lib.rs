@@ -2,6 +2,7 @@ pub mod app;
 pub mod preview;
 pub mod interactive;
 pub mod agent;
+pub mod bottom_pane;
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
