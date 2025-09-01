@@ -12,6 +12,12 @@ pub(crate) use bottom_pane_view::BottomPaneView;
 pub mod chat_composer;
 pub mod chat_composer_history;
 pub mod textarea;
+pub mod command_popup;
+pub mod file_search_popup;
+pub mod list_selection_view;
+pub mod selection_popup_common;
+pub mod popup_consts;
+pub mod scroll_state;
 pub use chat_composer::{ChatComposer, InputResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,4 +126,12 @@ impl BottomPane {
         // Composer
         self.composer.render_ref(content, buf);
     }
+}
+
+// 簡易なアプリイベント送信スタブ（将来、本体の送信機構と統合）
+#[derive(Clone, Default)]
+pub struct AppEventSender;
+impl AppEventSender {
+    pub fn new() -> Self { Self }
+    pub fn send<T>(&self, _event: T) {}
 }
