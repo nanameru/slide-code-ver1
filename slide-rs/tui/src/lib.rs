@@ -1,6 +1,7 @@
 pub mod app;
 pub mod preview;
 pub mod interactive;
+pub mod agent;
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};

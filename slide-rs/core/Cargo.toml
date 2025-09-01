@@ -11,3 +11,6 @@ anyhow = "1"
 slide-common = { path = "../common" }
 slide-chatgpt = { path = "../chatgpt" }
 tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+slide-apply-patch = { path = "../apply-patch" }
+uuid = { version = "1", features = ["v4"] }

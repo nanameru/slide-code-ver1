@@ -1,6 +1,6 @@
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -8,8 +8,8 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
-    text::Text,
-    widgets::{Block, Borders, Paragraph},
+    text::{Line, Text},
+    widgets::{Block, Borders, Clear, Paragraph},
     Frame, Terminal,
 };
 use std::io;
@@ -19,6 +19,7 @@ pub struct SlidePreview {
     slides: Vec<String>,
     current_slide: usize,
     should_quit: bool,
+    show_help: bool,
 }
 
 impl SlidePreview {
@@ -27,6 +28,7 @@ impl SlidePreview {
             slides,
             current_slide: 0,
             should_quit: false,
+            show_help: false,
         }
     }
 
@@ -46,7 +48,7 @@ impl SlidePreview {
             if event::poll(Duration::from_millis(100))? {
                 if let Event::Key(key) = event::read()? {
                     if key.kind == KeyEventKind::Press {
-                        self.handle_key_event(key.code);
+                        self.handle_key_event(key);
                     }
                 }
             }
@@ -67,8 +69,8 @@ impl SlidePreview {
         Ok(())
     }
 
-    fn handle_key_event(&mut self, key: KeyCode) {
-        match key {
+    fn handle_key_event(&mut self, key: KeyEvent) {
+        match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
                 self.should_quit = true;
             }
@@ -87,6 +89,9 @@ impl SlidePreview {
             }
             KeyCode::End => {
                 self.current_slide = self.slides.len().saturating_sub(1);
+            }
+            KeyCode::Char('h') => {
+                self.show_help = !self.show_help;
             }
             _ => {}
         }
@@ -125,11 +130,50 @@ impl SlidePreview {
             .wrap(ratatui::widgets::Wrap { trim: true });
         f.render_widget(slide, chunks[1]);
 
-        // Footer with controls
-        let controls = "Navigation: ← → (or j k) | Home/End | Press 'q' to quit";
+        // Footer (status bar style)
+        let controls = format!(
+            "NORMAL | Slide {}/{} | ←/→ or j/k | Home/End | h:help | q:quit",
+            self.current_slide + 1,
+            self.slides.len()
+        );
         let footer = Paragraph::new(controls)
             .style(Style::default().fg(Color::Yellow))
             .block(Block::default().borders(Borders::ALL));
         f.render_widget(footer, chunks[2]);
+
+        // Help modal
+        if self.show_help {
+            let area = centered_rect(60, 60, f.area());
+            let help = Paragraph::new(Text::from(
+                "Preview Help\n\nNavigation:\n  ←/→ or j/k: Prev/Next slide\n  Home/End: First/Last slide\n  h: Toggle help\n  q: Quit preview",
+            ))
+            .block(Block::default().borders(Borders::ALL).title("Help"));
+            f.render_widget(Clear, area);
+            f.render_widget(help, area);
+        }
     }
+
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, r: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    use ratatui::layout::{Constraint, Direction, Layout};
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    let horizontal = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1]);
+
+    horizontal[1]
 }
