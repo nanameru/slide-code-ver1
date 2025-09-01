@@ -6,7 +6,7 @@ members = [
     "chatgpt", 
     "cli",
     "common",
-    "core",
+    "core", "protocol",
     "tui",
 ]
 resolver = "2"

@@ -10,8 +10,13 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-pub use protocol::*;
-use protocol as _reexport_for_doc;
+use slide_common::custom_prompts::CustomPrompt;
+use slide_common::message_history::HistoryEntry;
+use slide_common::models::ResponseItem;
+use slide_common::parse_command::ParsedCommand;
+use slide_common::plan_tool::UpdatePlanArgs;
+use slide_common::config_types::ReasoningEffort as ReasoningEffortConfig;
+use slide_common::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use mcp_types::CallToolResult;
 use mcp_types::Tool as McpTool;
 use serde::Deserialize;
