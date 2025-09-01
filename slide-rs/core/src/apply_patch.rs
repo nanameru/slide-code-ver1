@@ -93,8 +93,9 @@ pub(crate) async fn apply_patch(
                     ResponseInputItem::FunctionCallOutput {
                         call_id: call_id.to_owned(),
                         output: FunctionCallOutputPayload {
-                            content: "patch rejected by user".to_string(),
-                            success: Some(false),
+                            success: false,
+                            message: "patch rejected by user".to_string(),
+                            output: None,
                         },
                     }
                     .into()
@@ -104,8 +105,9 @@ pub(crate) async fn apply_patch(
         SafetyCheck::Reject { reason } => ResponseInputItem::FunctionCallOutput {
             call_id: call_id.to_owned(),
             output: FunctionCallOutputPayload {
-                content: format!("patch rejected: {reason}"),
-                success: Some(false),
+                success: false,
+                message: format!("patch rejected: {reason}"),
+                output: None,
             },
         }
         .into(),
