@@ -74,7 +74,9 @@ async function resolveRgDir() {
 function getUpdatedPath(newDirs) {
   const pathSep = process.platform === "win32" ? ";" : ":";
   const existingPath = process.env.PATH || "";
-  return [...newDirs, ...existingPath.split(pathSep).filter(Boolean)].join(pathSep);
+  return [...newDirs, ...existingPath.split(pathSep).filter(Boolean)].join(
+    pathSep,
+  );
 }
 
 const additionalDirs = [];
@@ -97,7 +99,9 @@ child.on("error", (err) => {
 
 const forwardSignal = (signal) => {
   if (child.killed) return;
-  try { child.kill(signal); } catch {}
+  try {
+    child.kill(signal);
+  } catch {}
 };
 
 ["SIGINT", "SIGTERM", "SIGHUP"].forEach((sig) => {

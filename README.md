@@ -2,6 +2,8 @@
 
 slide-code.mdの要件に基づいて構築された、チャット形式でMarkdownスライドを生成するRust製CLIツールです。
 
+<!-- Verification comment: Repository access and lint functionality verified -->
+
 ## 🚀 機能
 
 - **対話的スライド生成**: ターミナル上でチャット形式でスライドを作成
