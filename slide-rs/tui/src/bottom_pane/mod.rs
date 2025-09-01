@@ -18,6 +18,7 @@ pub mod list_selection_view;
 pub mod selection_popup_common;
 pub mod popup_consts;
 pub mod scroll_state;
+pub mod approval_modal_view;
 pub use chat_composer::{ChatComposer, InputResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
