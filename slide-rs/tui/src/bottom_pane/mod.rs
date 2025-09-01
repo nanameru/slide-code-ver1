@@ -19,6 +19,7 @@ pub mod selection_popup_common;
 pub mod popup_consts;
 pub mod scroll_state;
 pub mod approval_modal_view;
+pub mod paste_burst;
 pub use chat_composer::{ChatComposer, InputResult};
 use crate::app_event_sender::AppEventSender;
 use crate::user_approval_widget::ApprovalRequest;
