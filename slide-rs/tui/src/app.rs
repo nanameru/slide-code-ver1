@@ -82,6 +82,7 @@ pub struct App {
     popup_filter: String,
     // Next action
     preview_path: Option<PathBuf>,
+    temp_created_path: Option<PathBuf>,
     // MRU files
     recent_files: Vec<String>,
     // Agent integration
@@ -117,6 +118,7 @@ impl App {
             popup_selected: 0,
             popup_filter: String::new(),
             preview_path: None,
+            temp_created_path: None,
             recent_files,
             agent: None,
             bottom_pane: BottomPane::new(BottomPaneParams{ has_input_focus: true, placeholder_text: "Ask Codex to do anything".into()}),
@@ -198,6 +200,15 @@ impl App {
                 }
                 KeyCode::Enter => {
                     if self.show_modal {
+                        self.show_modal = false;
+                    }
+                }
+                KeyCode::Char('p') => {
+                    if self.show_modal && self.temp_created_path.is_some() {
+                        if let Some(path) = self.temp_created_path.take() {
+                            self.preview_path = Some(path);
+                            self.should_quit = true;
+                        }
                         self.show_modal = false;
                     }
                 }
@@ -303,9 +314,10 @@ impl App {
                 match create_slide_from_template() {
                     Ok(path) => {
                         self.modal_title = "Created".into();
-                        self.modal_body = format!("Created new slide: {}", path);
+                        self.modal_body = format!("Created new slide: {}\n\nPress 'p' to preview or any other key to continue.", path);
                         self.show_modal = true;
-                        self.mru_add(path);
+                        self.mru_add(path.clone());
+                        self.temp_created_path = Some(PathBuf::from(path));
                     }
                     Err(e) => {
                         self.modal_title = "Error".into();

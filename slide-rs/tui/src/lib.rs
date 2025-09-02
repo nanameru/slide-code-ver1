@@ -6,17 +6,37 @@ pub mod bottom_pane;
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 pub use app::*;
 pub use preview::*;
 pub use interactive::*;
 
-#[derive(Debug, Parser, Default)]
+#[derive(Debug, Parser)]
 pub struct Cli {
     /// Enable debug output
     #[clap(long)]
     pub debug: bool,
+    
+    #[clap(subcommand)]
+    pub command: Option<Command>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    Preview {
+        #[clap(value_parser)]
+        file_path: PathBuf,
+    },
+}
+
+impl Default for Cli {
+    fn default() -> Self {
+        Self {
+            debug: false,
+            command: None,
+        }
+    }
 }
 
 pub async fn run_main(cli: Cli, _sandbox_exe: Option<PathBuf>) -> Result<()> {

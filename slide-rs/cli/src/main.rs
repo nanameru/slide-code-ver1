@@ -1,5 +1,6 @@
 use slide_arg0::arg0_dispatch_or_else;
-use slide_tui::Cli as TuiCli;
+use slide_tui::{Cli as TuiCli, Command};
+use clap::Parser;
 use std::path::PathBuf;
 
 fn main() -> anyhow::Result<()> {
@@ -19,9 +20,16 @@ async fn cli_main(slide_linux_sandbox_exe: Option<PathBuf>, is_slide_mode: bool)
         println!("Running in Slide mode");
     }
     
-    // For now, just run the TUI
-    let tui_cli = TuiCli::default();
-    slide_tui::run_main(tui_cli, slide_linux_sandbox_exe).await?;
+    let tui_cli = TuiCli::parse();
+    
+    match &tui_cli.command {
+        Some(Command::Preview { file_path }) => {
+            slide_tui::run_preview(file_path).await?;
+        }
+        None => {
+            slide_tui::run_main(tui_cli, slide_linux_sandbox_exe).await?;
+        }
+    }
     
     Ok(())
 }
