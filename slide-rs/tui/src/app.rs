@@ -118,7 +118,7 @@ impl App {
             preview_path: None,
             recent_files,
             agent: None,
-            bottom_pane: BottomPane::new(BottomPaneParams{ has_input_focus: true, placeholder_text: "Ask Codex to do anything".into()}),
+            bottom_pane: BottomPane::new(BottomPaneParams{ has_input_focus: true, placeholder_text: "Ask Slide Code to do anything".into()}),
         }
     }
 
