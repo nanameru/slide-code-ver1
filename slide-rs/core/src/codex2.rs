@@ -1,0 +1,151 @@
+use anyhow::Result;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::mpsc;
+use tokio::sync::Mutex;
+
+use crate::client::{ModelClient, ResponseEvent};
+use slide_chatgpt::client::{ChatGptClient, SlideRequest};
+
+#[derive(Debug, Clone)]
+pub enum Event {
+    SessionConfigured {},
+    TaskStarted,
+    AgentMessageDelta { delta: String },
+    AgentMessage { message: String },
+    ExecCommandBegin { command: Vec<String>, cwd: PathBuf },
+    ExecCommandEnd { exit_code: i32 },
+    ApplyPatchApprovalRequest {
+        id: String,
+        changes: HashMap<PathBuf, String>,
+        reason: Option<String>,
+    },
+    PatchApplyBegin {},
+    PatchApplyEnd { success: bool },
+    TurnDiff { unified_diff: String },
+    TaskComplete,
+    Error { message: String },
+    ShutdownComplete,
+    ExecApprovalRequest {
+        id: String,
+        command: Vec<String>,
+        cwd: PathBuf,
+        reason: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum Op {
+    UserInput { text: String },
+    Interrupt,
+    Shutdown,
+}
+
+#[derive(Clone)]
+pub struct Codex {
+    inner: Arc<Inner>,
+}
+
+struct Inner {
+    tx_submit: mpsc::Sender<Op>,
+    rx_event: Mutex<mpsc::Receiver<Event>>,
+}
+
+pub struct CodexSpawnOk {
+    pub codex: Codex,
+}
+
+impl Codex {
+    pub async fn spawn(client: Arc<dyn ModelClient + Send + Sync>) -> Result<CodexSpawnOk> {
+        let (tx_submit, mut rx_submit) = mpsc::channel::<Op>(64);
+        let (tx_event, rx_event) = mpsc::channel::<Event>(256);
+
+        // Send initial configured event to signal readiness
+        let _ = tx_event.send(Event::SessionConfigured {}).await;
+
+        // Background task processing submissions
+        tokio::spawn(async move {
+            let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
+            let slide_client = ChatGptClient::new(api_key);
+            while let Some(op) = rx_submit.recv().await {
+                match op {
+                    Op::UserInput { text } => {
+                        let _ = tx_event.send(Event::TaskStarted).await;
+                        if let Some(prompt) = text.strip_prefix("/slide ") {
+                            match slide_client.generate_slides(SlideRequest { prompt: prompt.to_string(), num_slides: 6, language: "ja".to_string() }).await {
+                                Ok(resp) => {
+                                    for line in resp.markdown.lines() {
+                                        let delta = format!("{}\n", line);
+                                        let _ = tx_event.send(Event::AgentMessageDelta { delta }).await;
+                                    }
+                                    let save_path = PathBuf::from("slides").join("draft.md");
+                                    if let Some(parent) = save_path.parent() { let _ = std::fs::create_dir_all(parent); }
+                                    if let Err(e) = std::fs::write(&save_path, resp.markdown.as_bytes()) {
+                                        let _ = tx_event.send(Event::Error { message: format!("failed to save slides: {e}") }).await;
+                                    } else {
+                                        let _ = tx_event.send(Event::AgentMessage { message: format!("Saved to {}", save_path.display()) }).await;
+                                    }
+                                    let _ = tx_event.send(Event::TaskComplete).await;
+                                }
+                                Err(e) => { let _ = tx_event.send(Event::Error { message: e.to_string() }).await; }
+                            }
+                            continue;
+                        }
+                        match client.stream(text).await {
+                            Ok(mut rx) => {
+                                while let Some(ev) = rx.recv().await {
+                                    match ev {
+                                        ResponseEvent::TextDelta(delta) => {
+                                            let _ = tx_event
+                                                .send(Event::AgentMessageDelta { delta })
+                                                .await;
+                                        }
+                                        ResponseEvent::Completed => {
+                                            let _ = tx_event.send(Event::TaskComplete).await;
+                                            break;
+                                        }
+                                        ResponseEvent::Error(message) => {
+                                            let _ = tx_event.send(Event::Error { message }).await;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                let _ = tx_event
+                                    .send(Event::Error { message: e.to_string() })
+                                    .await;
+                            }
+                        }
+                    }
+                    Op::Interrupt => {
+                        // Minimal implementation: no-op for now
+                    }
+                    Op::Shutdown => {
+                        let _ = tx_event.send(Event::ShutdownComplete).await;
+                        break;
+                    }
+                }
+            }
+        });
+
+        let inner = Arc::new(Inner { tx_submit, rx_event: Mutex::new(rx_event) });
+        Ok(CodexSpawnOk { codex: Codex { inner } })
+    }
+
+    pub async fn submit(&self, op: Op) -> Result<()> {
+        self.inner
+            .tx_submit
+            .send(op)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))
+    }
+
+    pub async fn next_event(&self) -> Option<Event> {
+        let mut rx = self.inner.rx_event.lock().await;
+        rx.recv().await
+    }
+}
+
+

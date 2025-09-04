@@ -2,6 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{buffer::Buffer, layout::Rect, style::Style, widgets::{StatefulWidgetRef, WidgetRef}};
 use std::{cell::RefCell, ops::Range};
 use unicode_width::UnicodeWidthStr;
+// use ratatui::widgets::WidgetRef; // already imported above via super modules
 
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct TextAreaState { pub scroll: u16 }

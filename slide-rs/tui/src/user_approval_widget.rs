@@ -5,6 +5,7 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph, WidgetRef},
+    prelude::Widget,
 };
 
 use crate::app_event_sender::AppEventSender;
@@ -40,9 +41,12 @@ impl UserApprovalWidget {
 impl WidgetRef for &UserApprovalWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let block = Block::default().borders(Borders::ALL).border_type(BorderType::Double).title("Approval Required");
+        let inner_area = block.inner(area);
         block.render(area, buf);
 
-        let inner = Layout::vertical([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)]).areas(block.inner(area))[1];
+        let areas = Layout::vertical([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)])
+            .areas::<3>(inner_area);
+        let inner = areas[1];
         let lines: Vec<Span> = match &self.request {
             ApprovalRequest::Exec { command, reason, .. } => {
                 let mut v = vec![Span::raw(format!("$ {}", command.join(" ")))] ;

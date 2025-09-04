@@ -1,5 +1,5 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::{buffer::Buffer, layout::{Constraint, Layout, Rect}, style::{Color, Modifier, Style}, text::Line, widgets::{Block, BorderType, Borders, StatefulWidgetRef, WidgetRef}};
+use ratatui::{buffer::Buffer, layout::{Constraint, Layout, Rect}, prelude::Stylize, style::{Color, Modifier, Style}, text::Line, widgets::{Block, BorderType, Borders, StatefulWidgetRef, WidgetRef}};
 
 use super::{chat_composer_history::ChatComposerHistory, textarea::{TextArea, TextAreaState}};
 

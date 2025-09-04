@@ -3,6 +3,9 @@ pub mod preview;
 pub mod interactive;
 pub mod agent;
 pub mod bottom_pane;
+pub mod app_event_sender;
+pub mod user_approval_widget;
+pub mod widgets;
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};

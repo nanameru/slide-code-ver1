@@ -40,6 +40,6 @@ impl BottomPaneView for ApprovalModalView {
     fn is_complete(&self) -> bool { self.current.is_complete() && self.queue.is_empty() }
     fn desired_height(&self, width: u16) -> u16 { self.current.desired_height(width) }
     fn render(&self, area: Rect, buf: &mut Buffer) { (&self.current).render_ref(area, buf); }
-    fn try_consume_approval_request(&mut self, req: ApprovalRequest) -> Option<ApprovalRequest> { self.enqueue_request(req); None }
+    // Additional queuing API can be added to the trait in the future; for now, queue is internal
 }
 

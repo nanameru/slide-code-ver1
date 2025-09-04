@@ -28,5 +28,12 @@ impl AgentHandle {
         let _id = self.codex.submit(Op::UserInput { text }).await?;
         Ok(())
     }
+
+    pub fn submit_text_bg(&self, text: String) {
+        let c = self.codex.clone();
+        tokio::spawn(async move {
+            let _ = c.submit(Op::UserInput { text }).await;
+        });
+    }
 }
 

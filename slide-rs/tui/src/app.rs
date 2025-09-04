@@ -15,8 +15,7 @@ use ratatui::{
 use std::{io, path::PathBuf, time::Instant};
 use tokio::time::{sleep, Duration};
 
-mod widgets;
-use widgets::{
+use crate::widgets::{
     chat::ChatWidget,
     composer::ComposerWidget,
     list_selection::ListSelection,
@@ -147,12 +146,7 @@ impl App {
         self.last_tick = Instant::now();
         if let Some(agent) = &self.agent {
             let to_send = text.clone();
-            let agent_clone = agent.codex.clone();
-            tokio::spawn(async move {
-                let _ = agent_clone
-                    .submit(slide_core::codex::Op::UserInput { text: to_send })
-                    .await;
-            });
+            agent.submit_text_bg(to_send);
         }
     }
 
@@ -400,8 +394,7 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
                             if !text.is_empty() { app.messages.push(format!("You: {}", text)); }
                             if let Some(agent) = &app.agent {
                                 let to_send = text.clone();
-                                let agent_clone = agent.codex.clone();
-                                tokio::spawn(async move { let _ = agent_clone.submit(slide_core::codex::Op::UserInput { text: to_send }).await; });
+                                agent.submit_text_bg(to_send);
                             }
                         }
                     }
@@ -411,15 +404,19 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
             }
         }
 
-        // Drain core events (non-blocking)
+        // Drain core events (non-blocking) without holding borrow on app.agent
+        let mut drained_events = Vec::new();
         if let Some(agent) = app.agent.as_mut() {
             loop {
                 match agent.rx.try_recv() {
-                    Ok(ev) => handle_core_event(&mut app, ev),
+                    Ok(ev) => drained_events.push(ev),
                     Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
                     Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
                 }
             }
+        }
+        for ev in drained_events {
+            handle_core_event(&mut app, ev);
         }
 
         if app.should_quit {
@@ -578,7 +575,13 @@ fn handle_core_event(app: &mut App, ev: CoreEvent) {
             app.messages.push(format!("[exec] exit {}", exit_code));
         }
         CoreEvent::ApplyPatchApprovalRequest { id, changes, reason } => {
-            let req = ApprovalRequest::Patch { id, changes, reason };
+            // Convert map of path->desc into a vector of display strings
+            let mut items: Vec<String> = changes
+                .into_iter()
+                .map(|(p, v)| format!("{}: {}", p.display(), v))
+                .collect();
+            items.sort();
+            let req = ApprovalRequest::Patch { id, changes: items, reason };
             app.bottom_pane.show_approval_modal(req, AppEventSender::new(()));
         }
         CoreEvent::PatchApplyBegin { .. } => {

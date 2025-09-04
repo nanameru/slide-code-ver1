@@ -6,6 +6,7 @@ use ratatui::{
     text::Line,
     widgets::{Block, Borders, Paragraph, Wrap},
 };
+use ratatui::widgets::WidgetRef;
 
 mod bottom_pane_view;
 pub(crate) use bottom_pane_view::BottomPaneView;
@@ -134,6 +135,7 @@ impl BottomPane {
             return;
         }
         // Composer
+        // ChatComposer implements WidgetRef for &Self
         self.composer.render_ref(content, buf);
     }
 }
