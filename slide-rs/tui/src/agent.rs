@@ -1,6 +1,6 @@
 use anyhow::Result;
 use slide_core::codex::{Codex, CodexSpawnOk, Event as CoreEvent, Op};
-use slide_core::client::{ModelClient, StubClient};
+use slide_core::client::{ModelClient, OpenAiAdapter, StubClient};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -11,7 +11,12 @@ pub struct AgentHandle {
 
 impl AgentHandle {
     pub async fn spawn() -> Result<Self> {
-        let client: Arc<dyn ModelClient + Send + Sync> = Arc::new(StubClient);
+        // Prefer OpenAI if API key present; fallback to stub
+        let client: Arc<dyn ModelClient + Send + Sync> = if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+            Arc::new(OpenAiAdapter::new(key))
+        } else {
+            Arc::new(StubClient)
+        };
         let CodexSpawnOk { codex, .. } = slide_core::codex::Codex::spawn(client).await?;
         // Forward events to a local channel
         let (tx, rx) = mpsc::channel(256);
