@@ -1,0 +1,3 @@
+# Local secret files (do not commit)
+.env.local
+

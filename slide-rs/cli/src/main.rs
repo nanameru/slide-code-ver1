@@ -38,20 +38,22 @@ fn try_load_env_local() {
         std::env::current_dir().ok().and_then(|p| p.parent().and_then(|q| q.parent()).map(|p| p.to_path_buf())),
     ];
     for base in candidates.into_iter().flatten() {
-        let path = base.join("env.local");
-        if path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                for line in content.lines() {
-                    let line = line.trim();
-                    if line.is_empty() || line.starts_with('#') { continue; }
-                    if let Some((k,v)) = parse_env_line(line) {
-                        if std::env::var(&k).is_err() {
-                            std::env::set_var(k, v);
+        for name in ["env.local", ".env.local"] {
+            let path = base.join(name);
+            if path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    for line in content.lines() {
+                        let line = line.trim();
+                        if line.is_empty() || line.starts_with('#') { continue; }
+                        if let Some((k,v)) = parse_env_line(line) {
+                            if std::env::var(&k).is_err() {
+                                std::env::set_var(k, v);
+                            }
                         }
                     }
                 }
+                return;
             }
-            break;
         }
     }
 }
