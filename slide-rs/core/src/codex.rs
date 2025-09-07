@@ -90,6 +90,8 @@ use crate::protocol::Op;
 use crate::protocol::PatchApplyBeginEvent;
 use crate::protocol::PatchApplyEndEvent;
 use crate::protocol::ReviewDecision;
+pub use crate::protocol::{Op, ReviewDecision as PublicReviewDecision};
+pub use crate::protocol::ReviewDecision as PublicReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::StreamErrorEvent;
@@ -250,6 +252,16 @@ impl Codex {
             .await
             .map_err(|_| CodexErr::InternalAgentDied)?;
         Ok(event)
+    }
+
+    /// Convenience helper for frontends to submit an exec approval decision.
+    pub async fn submit_exec_approval(&self, id: String, decision: ReviewDecision) -> CodexResult<String> {
+        self.submit(Op::ExecApproval { id, decision }).await
+    }
+
+    /// Convenience helper for frontends to submit a patch approval decision.
+    pub async fn submit_patch_approval(&self, id: String, decision: ReviewDecision) -> CodexResult<String> {
+        self.submit(Op::PatchApproval { id, decision }).await
     }
 }
 
@@ -954,6 +966,12 @@ async fn submission_loop(
                     );
                     sess.set_task(task);
                 }
+            }
+            Op::ExecApproval { id, decision } => {
+                sess.notify_approval(&id, decision);
+            }
+            Op::PatchApproval { id, decision } => {
+                sess.notify_approval(&id, decision);
             }
             _ => {
                 // Ignore unknown ops; enum is non_exhaustive to allow extensions.

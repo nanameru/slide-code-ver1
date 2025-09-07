@@ -8,7 +8,8 @@ use ratatui::{
     prelude::Widget,
 };
 
-use crate::app_event_sender::AppEventSender;
+use crate::app_event_sender::{AppEvent, AppEventSender};
+use slide_core::codex::ReviewDecision;
 
 #[derive(Clone, Debug)]
 pub enum ApprovalRequest {
@@ -19,17 +20,27 @@ pub enum ApprovalRequest {
 pub struct UserApprovalWidget {
     request: ApprovalRequest,
     complete: bool,
-    _tx: AppEventSender,
+    tx: AppEventSender,
 }
 
 impl UserApprovalWidget {
     pub fn new(request: ApprovalRequest, tx: AppEventSender) -> Self {
-        Self { request, complete: false, _tx: tx }
+        Self { request, complete: false, tx }
     }
     pub fn handle_key_event(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Char('y') | KeyCode::Char('Y') => { self.complete = true; }
-            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => { self.complete = true; }
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                self.emit_decision(ReviewDecision::Approved);
+                self.complete = true;
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                self.emit_decision(ReviewDecision::Denied);
+                self.complete = true;
+            }
+            KeyCode::Esc => {
+                self.emit_decision(ReviewDecision::Abort);
+                self.complete = true;
+            }
             _ => {}
         }
     }
@@ -69,6 +80,15 @@ impl WidgetRef for &UserApprovalWidget {
             Span::styled(" n ", Style::default().add_modifier(Modifier::BOLD)), Span::raw(": deny   "),
             Span::styled(" Esc ", Style::default().add_modifier(Modifier::BOLD)), Span::raw(": close"),
         ])).render(footer, buf);
+    }
+}
+
+impl UserApprovalWidget {
+    fn emit_decision(&self, decision: ReviewDecision) {
+        match &self.request {
+            ApprovalRequest::Exec { id, .. } => self.tx.send(AppEvent::ExecApproval { id: id.clone(), decision }),
+            ApprovalRequest::Patch { id, .. } => self.tx.send(AppEvent::PatchApproval { id: id.clone(), decision }),
+        }
     }
 }
 

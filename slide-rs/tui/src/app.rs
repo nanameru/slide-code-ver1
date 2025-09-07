@@ -24,7 +24,8 @@ use crate::widgets::{
 };
 use crate::agent::AgentHandle;
 use slide_core::codex::Event as CoreEvent;
-use crate::app_event_sender::AppEventSender;
+use slide_core::codex::Op;
+use crate::app_event_sender::{AppEvent, AppEventSender};
 use crate::user_approval_widget::ApprovalRequest;
 use crate::bottom_pane::{BottomPane, BottomPaneParams};
 
@@ -87,6 +88,9 @@ pub struct App {
     agent: Option<AgentHandle>,
     // Bottom pane integration
     bottom_pane: BottomPane,
+    // App event channel
+    app_event_rx: tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    app_event_tx: AppEventSender,
 }
 
 impl App {
@@ -95,6 +99,8 @@ impl App {
     }
 
     pub fn new_with_recents(recent_files: Vec<String>) -> Self {
+        let (app_tx_raw, app_rx) = tokio::sync::mpsc::unbounded_channel();
+        let app_tx = AppEventSender::new(app_tx_raw);
         Self {
             should_quit: false,
             mode: Mode::Normal,
@@ -119,6 +125,8 @@ impl App {
             recent_files,
             agent: None,
             bottom_pane: BottomPane::new(BottomPaneParams{ has_input_focus: true, placeholder_text: "Ask Slide Code to do anything".into()}),
+            app_event_rx: app_rx,
+            app_event_tx: app_tx,
         }
     }
 
@@ -381,6 +389,24 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
     }
 
     loop {
+        // Drain app events from UI widgets
+        while let Ok(ev) = app.app_event_rx.try_recv() {
+            match ev {
+                AppEvent::ExecApproval { id, decision } => {
+                    if let Some(agent) = &app.agent {
+                        let c = agent.codex.clone();
+                        tokio::spawn(async move { let _ = c.submit(Op::ExecApproval { id, decision }).await; });
+                    }
+                }
+                AppEvent::PatchApproval { id, decision } => {
+                    if let Some(agent) = &app.agent {
+                        let c = agent.codex.clone();
+                        tokio::spawn(async move { let _ = c.submit(Op::PatchApproval { id, decision }).await; });
+                    }
+                }
+            }
+        }
+
         // Draw UI
         terminal.draw(|f| ui(f, &app))?;
 
@@ -582,7 +608,7 @@ fn handle_core_event(app: &mut App, ev: CoreEvent) {
                 .collect();
             items.sort();
             let req = ApprovalRequest::Patch { id, changes: items, reason };
-            app.bottom_pane.show_approval_modal(req, AppEventSender::new(()));
+            app.bottom_pane.show_approval_modal(req, app.app_event_tx.clone());
         }
         CoreEvent::PatchApplyBegin { .. } => {
             app.messages.push("[patch] applying...".into());
@@ -603,7 +629,7 @@ fn handle_core_event(app: &mut App, ev: CoreEvent) {
         CoreEvent::ShutdownComplete => {}
         CoreEvent::ExecApprovalRequest { id, command, cwd: _, reason } => {
             let req = ApprovalRequest::Exec { id, command, reason };
-            app.bottom_pane.show_approval_modal(req, AppEventSender::new(()));
+            app.bottom_pane.show_approval_modal(req, app.app_event_tx.clone());
         }
     }
 }

@@ -9,6 +9,9 @@ use crate::client::{ModelClient, ResponseEvent};
 use slide_chatgpt::client::{ChatGptClient, SlideRequest};
 use crate::openai_tools::{ToolsConfig, ToolsConfigParams, render_tools_instructions};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewDecision { Approved, ApprovedForSession, Denied, Abort }
+
 #[derive(Debug, Clone)]
 pub enum Event {
     SessionConfigured {},
@@ -40,6 +43,8 @@ pub enum Event {
 pub enum Op {
     UserInput { text: String },
     Interrupt,
+    ExecApproval { id: String, decision: ReviewDecision },
+    PatchApproval { id: String, decision: ReviewDecision },
     Shutdown,
 }
 
@@ -133,6 +138,12 @@ impl Codex {
                     }
                     Op::Interrupt => {
                         // Minimal implementation: no-op for now
+                    }
+                    Op::ExecApproval { .. } => {
+                        // Minimal placeholder: in full core this would resolve a pending approval
+                    }
+                    Op::PatchApproval { .. } => {
+                        // Minimal placeholder
                     }
                     Op::Shutdown => {
                         let _ = tx_event.send(Event::ShutdownComplete).await;

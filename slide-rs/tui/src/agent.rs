@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 pub struct AgentHandle {
-    codex: Codex,
+    pub codex: Codex,
     pub rx: mpsc::Receiver<CoreEvent>,
 }
 
