@@ -70,6 +70,7 @@ impl OpenAiModelClient {
             .post("https://api.openai.com/v1/chat/completions")
             .bearer_auth(&self.api_key)
             .header("content-type", "application/json")
+            .json(&body)
             .send()
             .await
             .map_err(|e| anyhow!(e))?;
