@@ -23,6 +23,9 @@ pub struct Cli {
     /// Override model (e.g., gpt-5)
     #[clap(long)]
     pub model: Option<String>,
+    /// Approval policy: untrusted | on-failure | on-request | never
+    #[clap(long, value_parser = ["untrusted","on-failure","on-request","never"].into_iter().collect::<Vec<&'static str>>())]
+    pub approval_mode: Option<String>,
 }
 
 pub async fn run_main(cli: Cli, _sandbox_exe: Option<PathBuf>) -> Result<()> {
@@ -31,6 +34,9 @@ pub async fn run_main(cli: Cli, _sandbox_exe: Option<PathBuf>) -> Result<()> {
     }
     if let Some(model) = cli.model.clone() {
         std::env::set_var("SLIDE_MODEL", model);
+    }
+    if let Some(mode) = cli.approval_mode.clone() {
+        std::env::set_var("SLIDE_APPROVAL_MODE", mode);
     }
     
     run_interactive().await

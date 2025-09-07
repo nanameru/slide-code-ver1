@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 
 use crate::client::{ModelClient, ResponseEvent};
 use slide_chatgpt::client::{ChatGptClient, SlideRequest};
+use crate::openai_tools::{ToolsConfig, ToolsConfigParams, render_tools_instructions};
 
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -92,7 +93,18 @@ impl Codex {
                             }
                             continue;
                         }
-                        match client.stream(text).await {
+                        // Prefix prompt with tool instructions so the model can propose edits/execs.
+                        let approval_hint = std::env::var("SLIDE_APPROVAL_MODE").ok();
+                        let tools_cfg = ToolsConfig::new(&ToolsConfigParams {
+                            include_plan_tool: true,
+                            include_apply_patch_tool: true,
+                            include_view_image_tool: false,
+                            include_web_search_request: false,
+                            use_streamable_shell_tool: true,
+                        });
+                        let tool_instructions = render_tools_instructions(&tools_cfg, approval_hint.as_deref());
+                        let composed = format!("{}\n\nUser: {}", tool_instructions, text);
+                        match client.stream(composed).await {
                             Ok(mut rx) => {
                                 while let Some(ev) = rx.recv().await {
                                     match ev {

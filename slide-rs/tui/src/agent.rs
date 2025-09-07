@@ -18,6 +18,8 @@ impl AgentHandle {
         } else {
             Arc::new(StubClient)
         };
+        // Read approval mode for future core wiring
+        let _approval_mode = std::env::var("SLIDE_APPROVAL_MODE").ok();
         let CodexSpawnOk { codex, .. } = slide_core::codex::Codex::spawn(client).await?;
         // Forward events to a local channel
         let (tx, rx) = mpsc::channel(256);

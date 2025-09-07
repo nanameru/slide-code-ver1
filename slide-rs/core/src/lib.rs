@@ -3,4 +3,5 @@
 
 pub mod client;
 pub mod codex2;
+pub mod openai_tools;
 pub use codex2 as codex;
