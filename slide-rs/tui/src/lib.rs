@@ -20,11 +20,17 @@ pub struct Cli {
     /// Enable debug output
     #[clap(long)]
     pub debug: bool,
+    /// Override model (e.g., gpt-5)
+    #[clap(long)]
+    pub model: Option<String>,
 }
 
 pub async fn run_main(cli: Cli, _sandbox_exe: Option<PathBuf>) -> Result<()> {
     if cli.debug {
         println!("Debug mode enabled");
+    }
+    if let Some(model) = cli.model.clone() {
+        std::env::set_var("SLIDE_MODEL", model);
     }
     
     run_interactive().await

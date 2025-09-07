@@ -15,7 +15,7 @@ impl Default for SlideConfig {
     fn default() -> Self {
         Self {
             api_key: None,
-            model: "gpt-4-mini".to_string(),
+            model: "gpt-5".to_string(),
             approval_mode: "suggest".to_string(),
             output_dir: PathBuf::from("slides"),
         }

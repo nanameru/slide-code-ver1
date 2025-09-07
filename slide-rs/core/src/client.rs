@@ -34,6 +34,10 @@ pub struct OpenAiAdapter {
 
 impl OpenAiAdapter {
     pub fn new(api_key: String) -> Self { Self { inner: slide_chatgpt::OpenAiModelClient::new(api_key) } }
+
+    pub fn new_with_model(api_key: String, model: String) -> Self {
+        Self { inner: slide_chatgpt::OpenAiModelClient::new_with_model(api_key, model) }
+    }
 }
 
 #[async_trait]

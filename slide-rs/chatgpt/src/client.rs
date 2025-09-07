@@ -56,7 +56,11 @@ pub struct OpenAiModelClient {
 
 impl OpenAiModelClient {
     pub fn new(api_key: String) -> Self {
-        Self { api_key, model: "gpt-4o-mini".to_string() }
+        Self { api_key, model: "gpt-5".to_string() }
+    }
+
+    pub fn new_with_model(api_key: String, model: String) -> Self {
+        Self { api_key, model }
     }
 
     pub async fn stream_chat(&self, prompt: String) -> Result<mpsc::Receiver<String>> {
