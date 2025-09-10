@@ -35,7 +35,7 @@ use crate::apply_patch::InternalApplyPatchInvocation;
 use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::client::ModelClient;
 use crate::client_common::Prompt;
-use crate::client_common::ResponseEvent;
+use crate::client::ResponseEvent as ClientResponseEvent;
 use crate::config::Config;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::conversation_history::ConversationHistory;
@@ -1283,8 +1283,41 @@ async fn try_run_turn(
     sub_id: &str,
     prompt: &Prompt,
 ) -> CodexResult<Vec<ProcessedResponseItem>> {
-    // Minimal implementation - just return empty for now
-    // This would contain the full implementation from the SLIDE-AGENTs.md spec
+    // Minimal streaming implementation: stream deltas from the client and forward as events.
+    let rendered = prompt.render();
+    let mut rx = turn_context
+        .client
+        .stream(rendered)
+        .await
+        .map_err(|_| CodexErr::InternalAgentDied)?;
+
+    let mut assembled = String::new();
+    while let Some(ev) = rx.recv().await {
+        match ev {
+            ClientResponseEvent::TextDelta(delta) => {
+                assembled.push_str(&delta);
+                let event = Event {
+                    id: sub_id.to_string(),
+                    msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
+                };
+                sess.send_event(event).await;
+            }
+            ClientResponseEvent::Completed => {
+                let event = Event {
+                    id: sub_id.to_string(),
+                    msg: EventMsg::AgentMessage(AgentMessageEvent { message: assembled.clone() }),
+                };
+                sess.send_event(event).await;
+                break;
+            }
+            ClientResponseEvent::Error(message) => {
+                let event = Event { id: sub_id.to_string(), msg: EventMsg::Error(ErrorEvent { message }) };
+                sess.send_event(event).await;
+                break;
+            }
+        }
+    }
+
     Ok(Vec::new())
 }
 
@@ -1294,7 +1327,34 @@ async fn drain_to_completed(
     sub_id: &str,
     prompt: &Prompt,
 ) -> CodexResult<()> {
-    // Minimal implementation for compact tasks
+    let rendered = prompt.render();
+    let mut rx = turn_context
+        .client
+        .stream(rendered)
+        .await
+        .map_err(|_| CodexErr::InternalAgentDied)?;
+
+    let mut assembled = String::new();
+    while let Some(ev) = rx.recv().await {
+        match ev {
+            ClientResponseEvent::TextDelta(delta) => {
+                assembled.push_str(&delta);
+                let event = Event { id: sub_id.to_string(), msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) };
+                sess.send_event(event).await;
+            }
+            ClientResponseEvent::Completed => {
+                let event = Event { id: sub_id.to_string(), msg: EventMsg::AgentMessage(AgentMessageEvent { message: assembled.clone() }) };
+                sess.send_event(event).await;
+                return Ok(());
+            }
+            ClientResponseEvent::Error(message) => {
+                let event = Event { id: sub_id.to_string(), msg: EventMsg::Error(ErrorEvent { message }) };
+                sess.send_event(event).await;
+                return Ok(());
+            }
+        }
+    }
+
     Ok(())
 }
 
