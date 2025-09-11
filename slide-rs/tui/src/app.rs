@@ -13,6 +13,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::{io, path::PathBuf, time::Instant};
+use std::io::Write as _;
 use tokio::time::{sleep, Duration};
 
 use crate::widgets::{
@@ -101,7 +102,7 @@ impl App {
     pub fn new_with_recents(recent_files: Vec<String>) -> Self {
         let (app_tx_raw, app_rx) = tokio::sync::mpsc::unbounded_channel();
         let app_tx = AppEventSender::new(app_tx_raw);
-        Self {
+        let s = Self {
             should_quit: false,
             mode: Mode::Normal,
             status: RunStatus::Idle,
@@ -127,7 +128,10 @@ impl App {
             bottom_pane: BottomPane::new(BottomPaneParams{ has_input_focus: true, placeholder_text: "Ask Slide Code to do anything".into()}),
             app_event_rx: app_rx,
             app_event_tx: app_tx,
-        }
+        };
+        // Write a small banner to the log so the browser viewer has content
+        append_log("[info] Slide TUI session started");
+        s
     }
 
     pub fn quit(&mut self) {
@@ -148,6 +152,7 @@ impl App {
         }
         let text = self.input.trim().to_string();
         self.messages.push(format!("You: {}", text));
+        append_log(&format!("You: {}", text));
         self.input.clear();
         // Simulate agent response
         self.status = RunStatus::Running;
@@ -581,6 +586,7 @@ fn handle_core_event(app: &mut App, ev: CoreEvent) {
         CoreEvent::SessionConfigured { .. } => {}
         CoreEvent::TaskStarted => {
             app.status = RunStatus::Running;
+            append_log("[task] started");
         }
         CoreEvent::AgentMessageDelta { delta } => {
             if let Some(last) = app.messages.last_mut() {
@@ -590,15 +596,19 @@ fn handle_core_event(app: &mut App, ev: CoreEvent) {
                 }
             }
             app.messages.push(format!("Assistant: {}", delta));
+            append_log(&format!("AssistantΔ: {}", delta));
         }
         CoreEvent::AgentMessage { message } => {
             app.messages.push(format!("Assistant: {}", message));
+            append_log(&format!("Assistant: {}", message));
         }
         CoreEvent::ExecCommandBegin { command, .. } => {
             app.messages.push(format!("[exec] $ {}", command.join(" ")));
+            append_log(&format!("[exec] $ {}", command.join(" ")));
         }
         CoreEvent::ExecCommandEnd { exit_code, .. } => {
             app.messages.push(format!("[exec] exit {}", exit_code));
+            append_log(&format!("[exec] exit {}", exit_code));
         }
         CoreEvent::ApplyPatchApprovalRequest { id, changes, reason } => {
             // Convert map of path->desc into a vector of display strings
@@ -609,28 +619,41 @@ fn handle_core_event(app: &mut App, ev: CoreEvent) {
             items.sort();
             let req = ApprovalRequest::Patch { id, changes: items, reason };
             app.bottom_pane.show_approval_modal(req, app.app_event_tx.clone());
+            append_log("[approve] apply_patch requested");
         }
         CoreEvent::PatchApplyBegin { .. } => {
             app.messages.push("[patch] applying...".into());
+            append_log("[patch] applying...");
         }
         CoreEvent::PatchApplyEnd { success, .. } => {
             app.messages.push(format!("[patch] {}", if success { "ok" } else { "failed" }));
+            append_log(&format!("[patch] {}", if success { "ok" } else { "failed" }));
         }
         CoreEvent::TurnDiff { unified_diff } => {
             app.messages.push(format!("[diff]\n{}", unified_diff));
+            append_log("[diff] updated");
         }
         CoreEvent::TaskComplete => {
             app.status = RunStatus::Idle;
+            append_log("[task] complete");
         }
         CoreEvent::Error { message } => {
             app.messages.push(format!("[error] {}", message));
             app.status = RunStatus::Error;
+            append_log(&format!("[error] {}", message));
         }
         CoreEvent::ShutdownComplete => {}
         CoreEvent::ExecApprovalRequest { id, command, cwd: _, reason } => {
             let req = ApprovalRequest::Exec { id, command, reason };
             app.bottom_pane.show_approval_modal(req, app.app_event_tx.clone());
+            append_log("[approve] exec requested");
         }
+    }
+}
+
+fn append_log(line: &str) {
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/slide.log") {
+        let _ = writeln!(f, "{}", line);
     }
 }
 
