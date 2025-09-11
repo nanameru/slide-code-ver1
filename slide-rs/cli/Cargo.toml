@@ -18,3 +18,6 @@ slide-common = { path = "../common" }
 slide-tui = { path = "../tui" }
 slide-core = { path = "../core" }
 slide-arg0 = { path = "../arg0" }
+tiny_http = "0.12"
+webbrowser = "0.8"
+html-escape = "0.2"

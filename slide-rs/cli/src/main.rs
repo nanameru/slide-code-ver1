@@ -1,6 +1,11 @@
 use slide_arg0::arg0_dispatch_or_else;
 use slide_tui::Cli as TuiCli;
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
+
+use tiny_http::{Server, Response};
+use webbrowser;
 
 fn main() -> anyhow::Result<()> {
     // Check if we're in Slide mode via environment variable
@@ -21,6 +26,32 @@ async fn cli_main(slide_linux_sandbox_exe: Option<PathBuf>, is_slide_mode: bool)
         println!("Running in Slide mode");
     }
     
+    // Start a tiny local log viewer HTTP server in background
+    // - serves / to show tail of /tmp/slide.log
+    thread::spawn(|| {
+        let server = match Server::http("127.0.0.1:6060") {
+            Ok(s) => s,
+            Err(_) => return, // port in use; skip
+        };
+        loop {
+            if let Ok(Some(req)) = server.recv_timeout(Duration::from_millis(200)) {
+                let body = std::fs::read_to_string("/tmp/slide.log").unwrap_or_else(|_| "(no log yet)".to_string());
+                let html = format!(
+                    "<html><head><meta charset=\"utf-8\"><title>Slide Logs</title><style>body{{font-family:monospace;white-space:pre-wrap}}</style></head><body>{}</body></html>",
+                    html_escape::encode_text(&body)
+                );
+                let _ = req.respond(Response::from_string(html).with_header(
+                    tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap()
+                ));
+            } else {
+                // idle
+            }
+        }
+    });
+
+    // Open browser to log page (best-effort)
+    let _ = webbrowser::open("http://127.0.0.1:6060/");
+
     // For now, just run the TUI
     let tui_cli = TuiCli::default();
     slide_tui::run_main(tui_cli, slide_linux_sandbox_exe).await?;
