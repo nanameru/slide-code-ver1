@@ -70,10 +70,13 @@ impl OpenAiModelClient {
             "messages": [{"role":"user","content": prompt}],
             "stream": true,
         });
-        let resp = client
+        let mut req = client
             .post("https://api.openai.com/v1/chat/completions")
             .bearer_auth(&self.api_key)
-            .header("content-type", "application/json")
+            .header("content-type", "application/json");
+        if let Ok(project) = std::env::var("OPENAI_PROJECT") { if !project.is_empty() { req = req.header("OpenAI-Project", project); } }
+        if let Ok(org) = std::env::var("OPENAI_ORG") { if !org.is_empty() { req = req.header("OpenAI-Organization", org); } }
+        let resp = req
             .json(&body)
             .send()
             .await
@@ -86,7 +89,7 @@ impl OpenAiModelClient {
         }
 
         let stream = resp.bytes_stream();
-        let (tx, rx) = mpsc::channel::<String>(64);
+        let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
         tokio::spawn(async move {
             use futures_util::StreamExt;
             let mut buf = Vec::new();
