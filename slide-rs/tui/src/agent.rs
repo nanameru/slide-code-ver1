@@ -11,10 +11,16 @@ pub struct AgentHandle {
 
 impl AgentHandle {
     pub async fn spawn() -> Result<Self> {
-        // Prefer OpenAI if API key present; fallback to stub
-        let client: Arc<dyn ModelClient + Send + Sync> = if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-            let model = std::env::var("SLIDE_MODEL").ok();
-            if let Some(m) = model { Arc::new(OpenAiAdapter::new_with_model(key, m)) } else { Arc::new(OpenAiAdapter::new(key)) }
+        // Allow forcing Stub regardless of API key (for offline/dev/demo)
+        let force_stub = std::env::var("SLIDE_FORCE_STUB").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false);
+        // Prefer OpenAI if API key present; fallback to stub (unless forced)
+        let client: Arc<dyn ModelClient + Send + Sync> = if !force_stub {
+            if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+                let model = std::env::var("SLIDE_MODEL").ok();
+                if let Some(m) = model { Arc::new(OpenAiAdapter::new_with_model(key, m)) } else { Arc::new(OpenAiAdapter::new(key)) }
+            } else {
+                Arc::new(StubClient)
+            }
         } else {
             Arc::new(StubClient)
         };
