@@ -14,6 +14,13 @@ pub struct SlideResponse {
     pub markdown: String,
 }
 
+fn append_log(line: &str) {
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/slide.log") {
+        let _ = writeln!(f, "[chatgpt-client] {}", line);
+    }
+}
+
 pub struct ChatGptClient {
     #[allow(dead_code)]
     api_key: String,
@@ -70,26 +77,38 @@ impl OpenAiModelClient {
             "messages": [{"role":"user","content": prompt}],
             "stream": true,
         });
+        append_log(&format!("Request Body: {}", serde_json::to_string_pretty(&body).unwrap_or_default()));
+
         let mut req = client
             .post("https://api.openai.com/v1/chat/completions")
             .bearer_auth(&self.api_key)
             .header("content-type", "application/json");
-        if let Ok(project) = std::env::var("OPENAI_PROJECT") { if !project.is_empty() { req = req.header("OpenAI-Project", project); } }
-        if let Ok(org) = std::env::var("OPENAI_ORG") { if !org.is_empty() { req = req.header("OpenAI-Organization", org); } }
+        if let Ok(project) = std::env::var("OPENAI_PROJECT") { if !project.is_empty() {
+            append_log(&format!("Adding Header OpenAI-Project: {}", &project));
+            req = req.header("OpenAI-Project", project);
+        } }
+        if let Ok(org) = std::env::var("OPENAI_ORG") { if !org.is_empty() {
+            append_log(&format!("Adding Header OpenAI-Organization: {}", &org));
+            req = req.header("OpenAI-Organization", org);
+        } }
         let resp = req
             .json(&body)
             .send()
             .await
             .map_err(|e| anyhow!(e))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
+        let status = resp.status();
+        append_log(&format!("Response Status: {}", status));
+
+        if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(anyhow!(format!("openai http {}: {}", status, text)));
+            let log_msg = format!("openai http {}: {}", status, text);
+            append_log(&log_msg);
+            return Err(anyhow!(log_msg));
         }
 
         let stream = resp.bytes_stream();
-        let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
+        let (tx, rx) = mpsc::channel::<String>(64);
         tokio::spawn(async move {
             use futures_util::StreamExt;
             let mut buf = Vec::new();
@@ -97,6 +116,7 @@ impl OpenAiModelClient {
             while let Some(chunk) = stream.next().await {
                 match chunk {
                     Ok(bytes) => {
+                        append_log(&format!("Received chunk ({} bytes)", bytes.len()));
                         buf.extend_from_slice(&bytes);
                         // Process Server-Sent Events lines split by "\n\n"
                         loop {
@@ -111,6 +131,8 @@ impl OpenAiModelClient {
                                                 if let Some(delta) = v["choices"][0]["delta"]["content"].as_str() {
                                                     if tx.send(delta.to_string()).await.is_err() { return; }
                                                 }
+                                            } else {
+                                                append_log(&format!("SSE JSON parse error on: {}", rest));
                                             }
                                         }
                                     }
@@ -118,9 +140,14 @@ impl OpenAiModelClient {
                             } else { break; }
                         }
                     }
-                    Err(_) => { let _ = tx.send("".into()).await; return; }
+                    Err(e) => {
+                        append_log(&format!("Stream chunk error: {}", e));
+                        let _ = tx.send("".into()).await;
+                        return;
+                    }
                 }
             }
+            append_log("Stream finished");
             let _ = tx.send("".into()).await;
         });
         Ok(rx)
