@@ -63,12 +63,25 @@ fn try_load_env_local() {
     if std::env::var("OPENAI_API_KEY").is_ok() {
         return;
     }
-    let candidates = [
-        std::env::current_dir().ok(),
-        std::env::current_dir().ok().and_then(|p| p.parent().map(|p| p.to_path_buf())),
-        std::env::current_dir().ok().and_then(|p| p.parent().and_then(|q| q.parent()).map(|p| p.to_path_buf())),
-    ];
-    for base in candidates.into_iter().flatten() {
+    // Search for env.local relative to current working directory and the executable location
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        paths.push(cwd.clone());
+        if let Some(p) = cwd.parent() { paths.push(p.to_path_buf()); }
+        if let Some(p) = cwd.parent().and_then(|q| q.parent()) { paths.push(p.to_path_buf()); }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            paths.push(dir.to_path_buf()); // e.g., target/release
+            if let Some(p) = dir.parent() { paths.push(p.to_path_buf()); } // e.g., target
+            if let Some(p) = dir.parent().and_then(|q| q.parent()) { paths.push(p.to_path_buf()); } // e.g., slide-rs
+            if let Some(p) = dir.parent().and_then(|q| q.parent()).and_then(|r| r.parent()) { paths.push(p.to_path_buf()); } // e.g., repo root
+        }
+    }
+    // Deduplicate while preserving order
+    paths.dedup();
+    let candidates: Vec<std::path::PathBuf> = paths;
+    for base in candidates.into_iter() {
         for name in ["env.local", ".env.local"] {
             let path = base.join(name);
             if path.exists() {
