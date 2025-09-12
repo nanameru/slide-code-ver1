@@ -1,0 +1,44 @@
+[workspace]
+members = [
+    "core", 
+    "chatgpt",
+    "cli",
+    "common",
+    "tui",
+    "protocol",
+    "apply-patch",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.lints]
+rust = {}
+
+[workspace.lints.clippy]
+expect_used = "deny"
+uninlined_format_args = "deny" 
+unwrap_used = "deny"
+
+[profile.release]
+lto = "fat"
+strip = "symbols"
+codegen-units = 1
+
+# Main binary
+[package]
+name = "slide"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+slide-core = { path = "./core" }
+slide-tui = { path = "./tui" }
+slide-cli = { path = "./cli" }
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
