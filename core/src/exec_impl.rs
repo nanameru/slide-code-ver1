@@ -1,296 +1,458 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, Result};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::process::Command;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::{Child, Command};
+use tokio::sync::mpsc;
 use tokio::time::timeout;
 
-use crate::bash_parser::{is_safe_bash_command, extract_commands};
-use crate::safety_impl::{SandboxPolicy, assess_command_safety, SafetyCheck};
-use crate::seatbelt::{SandboxConfig, validate_sandbox_tools};
-use slide_common::ApprovalMode;
-use std::collections::HashSet;
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecRequest {
+    pub command: String,
+    pub args: Vec<String>,
+    pub working_directory: Option<String>,
+    pub environment: HashMap<String, String>,
+    pub timeout_seconds: Option<u64>,
+    pub capture_output: bool,
+    pub stream_output: bool,
+}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecResult {
-    pub status: i32,
+    pub exit_code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
-    pub duration: Duration,
+    pub execution_time_ms: u128,
+    pub success: bool,
+    pub timed_out: bool,
+    pub process_id: Option<u32>,
 }
 
-#[derive(Debug, Clone)]
-pub struct ExecConfig {
-    pub working_dir: Option<PathBuf>,
-    pub timeout_secs: u64,
-    pub sandbox: bool,
-    pub network: bool,
-    pub approval_mode: ApprovalMode,
-    pub sandbox_policy: SandboxPolicy,
-    pub environment: HashMap<String, String>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamingExecResult {
+    pub process_id: u32,
+    pub output_channel: String, // stdout or stderr
+    pub line: String,
+    pub line_number: usize,
 }
 
-impl Default for ExecConfig {
+pub struct ExecutionManager {
+    pub working_directory: PathBuf,
+    pub default_timeout: Duration,
+    pub sandbox_mode: bool,
+    pub allowed_commands: Vec<String>,
+}
+
+impl Default for ExecutionManager {
     fn default() -> Self {
         Self {
-            working_dir: None,
-            timeout_secs: 30,
-            sandbox: true,
-            network: false,
-            approval_mode: ApprovalMode::Suggest,
-            sandbox_policy: SandboxPolicy::ReadOnly,
-            environment: HashMap::new(),
+            working_directory: std::env::current_dir().unwrap_or_default(),
+            default_timeout: Duration::from_secs(300), // 5 minutes
+            sandbox_mode: true,
+            allowed_commands: vec![
+                "cargo".to_string(),
+                "rustc".to_string(),
+                "npm".to_string(),
+                "node".to_string(),
+                "python".to_string(),
+                "python3".to_string(),
+                "pip".to_string(),
+                "git".to_string(),
+                "ls".to_string(),
+                "cat".to_string(),
+                "echo".to_string(),
+                "mkdir".to_string(),
+                "cp".to_string(),
+                "mv".to_string(),
+                "grep".to_string(),
+                "find".to_string(),
+                "test".to_string(),
+                "make".to_string(),
+            ],
         }
     }
 }
 
-/// Execute a command with comprehensive safety checks and sandboxing
-pub async fn exec_command_safe(cmd: &str, config: ExecConfig) -> Result<ExecResult> {
-    tracing::info!("Executing command: {}", cmd);
-    
-    // Parse and validate the command
-    if !is_safe_bash_command(cmd) {
-        bail!("Command failed safety analysis: {}", cmd);
+impl ExecutionManager {
+    pub fn new(working_directory: PathBuf) -> Self {
+        Self {
+            working_directory,
+            ..Default::default()
+        }
     }
 
-    let commands = extract_commands(cmd);
-    if commands.is_empty() {
-        bail!("No valid commands found in: {}", cmd);
+    pub fn with_sandbox_mode(mut self, sandbox: bool) -> Self {
+        self.sandbox_mode = sandbox;
+        self
     }
 
-    // Safety assessment for each command
-    let mut approved_commands = HashSet::new();
-    for command in &commands {
-        match assess_command_safety(
-            command,
-            config.approval_mode.clone(),
-            &config.sandbox_policy,
-            &approved_commands,
-            false,
-        ) {
-            SafetyCheck::AutoApprove => {
-                approved_commands.insert(command.clone());
+    pub fn with_allowed_commands(mut self, commands: Vec<String>) -> Self {
+        self.allowed_commands = commands;
+        self
+    }
+
+    pub fn with_default_timeout(mut self, timeout: Duration) -> Self {
+        self.default_timeout = timeout;
+        self
+    }
+
+    pub async fn execute(&self, request: ExecRequest) -> Result<ExecResult> {
+        let start_time = std::time::Instant::now();
+
+        // Security checks in sandbox mode
+        if self.sandbox_mode && !self.is_command_allowed(&request.command) {
+            return Ok(ExecResult {
+                exit_code: Some(-1),
+                stdout: String::new(),
+                stderr: format!("Command '{}' is not allowed in sandbox mode", request.command),
+                execution_time_ms: 0,
+                success: false,
+                timed_out: false,
+                process_id: None,
+            });
+        }
+
+        let timeout_duration = request.timeout_seconds
+            .map(Duration::from_secs)
+            .unwrap_or(self.default_timeout);
+
+        let exec_result = timeout(timeout_duration, self.execute_internal(request)).await;
+
+        let execution_time = start_time.elapsed();
+
+        match exec_result {
+            Ok(result) => {
+                let mut final_result = result?;
+                final_result.execution_time_ms = execution_time.as_millis();
+                Ok(final_result)
+            },
+            Err(_) => Ok(ExecResult {
+                exit_code: None,
+                stdout: String::new(),
+                stderr: "Execution timed out".to_string(),
+                execution_time_ms: execution_time.as_millis(),
+                success: false,
+                timed_out: true,
+                process_id: None,
+            }),
+        }
+    }
+
+    pub async fn execute_streaming(&self, request: ExecRequest) -> Result<mpsc::Receiver<StreamingExecResult>> {
+        if self.sandbox_mode && !self.is_command_allowed(&request.command) {
+            return Err(anyhow!("Command '{}' is not allowed in sandbox mode", request.command));
+        }
+
+        let (tx, rx) = mpsc::channel(100);
+        let working_dir = request.working_directory
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.working_directory.clone());
+
+        let mut cmd = Command::new(&request.command);
+        cmd.args(&request.args);
+        cmd.current_dir(working_dir);
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+
+        // Set environment variables
+        for (key, value) in &request.environment {
+            cmd.env(key, value);
+        }
+
+        let mut child = cmd.spawn()?;
+        let process_id = child.id().unwrap_or(0);
+
+        // Spawn tasks to handle stdout and stderr streaming
+        if let Some(stdout) = child.stdout.take() {
+            let tx_stdout = tx.clone();
+            tokio::spawn(async move {
+                let reader = BufReader::new(stdout);
+                let mut lines = reader.lines();
+                let mut line_number = 1;
+
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let result = StreamingExecResult {
+                        process_id,
+                        output_channel: "stdout".to_string(),
+                        line,
+                        line_number,
+                    };
+
+                    if tx_stdout.send(result).await.is_err() {
+                        break; // Receiver dropped
+                    }
+                    line_number += 1;
+                }
+            });
+        }
+
+        if let Some(stderr) = child.stderr.take() {
+            let tx_stderr = tx.clone();
+            tokio::spawn(async move {
+                let reader = BufReader::new(stderr);
+                let mut lines = reader.lines();
+                let mut line_number = 1;
+
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let result = StreamingExecResult {
+                        process_id,
+                        output_channel: "stderr".to_string(),
+                        line,
+                        line_number,
+                    };
+
+                    if tx_stderr.send(result).await.is_err() {
+                        break; // Receiver dropped
+                    }
+                    line_number += 1;
+                }
+            });
+        }
+
+        // Spawn task to wait for process completion
+        tokio::spawn(async move {
+            let _ = child.wait().await;
+            // Channel will be closed when all senders are dropped
+        });
+
+        Ok(rx)
+    }
+
+    async fn execute_internal(&self, request: ExecRequest) -> Result<ExecResult> {
+        let working_dir = request.working_directory
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.working_directory.clone());
+
+        let mut cmd = Command::new(&request.command);
+        cmd.args(&request.args);
+        cmd.current_dir(working_dir);
+
+        // Configure stdio based on capture_output setting
+        if request.capture_output {
+            cmd.stdout(Stdio::piped());
+            cmd.stderr(Stdio::piped());
+        } else {
+            cmd.stdout(Stdio::inherit());
+            cmd.stderr(Stdio::inherit());
+        }
+
+        // Set environment variables
+        for (key, value) in &request.environment {
+            cmd.env(key, value);
+        }
+
+        let child = cmd.spawn()?;
+        let process_id = child.id();
+
+        let output = child.wait_with_output().await?;
+
+        let stdout = if request.capture_output {
+            String::from_utf8_lossy(&output.stdout).to_string()
+        } else {
+            String::new()
+        };
+
+        let stderr = if request.capture_output {
+            String::from_utf8_lossy(&output.stderr).to_string()
+        } else {
+            String::new()
+        };
+
+        Ok(ExecResult {
+            exit_code: output.status.code(),
+            stdout,
+            stderr,
+            execution_time_ms: 0, // Will be set by caller
+            success: output.status.success(),
+            timed_out: false,
+            process_id,
+        })
+    }
+
+    fn is_command_allowed(&self, command: &str) -> bool {
+        if !self.sandbox_mode {
+            return true;
+        }
+
+        // Extract just the command name (remove path)
+        let command_name = std::path::Path::new(command)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(command);
+
+        self.allowed_commands.iter().any(|allowed| {
+            allowed == command_name || command_name.starts_with(allowed)
+        })
+    }
+
+    pub fn validate_execution_request(&self, request: &ExecRequest) -> Result<()> {
+        if request.command.is_empty() {
+            return Err(anyhow!("Command cannot be empty"));
+        }
+
+        // Check for dangerous command patterns
+        let dangerous_patterns = [
+            "rm -rf", "del /s", "format", "mkfs", "dd if=",
+            "shutdown", "reboot", "halt", "poweroff",
+            "; rm ", "&& rm ", "| rm ", "$(rm", "`rm",
+            "curl", "wget", "nc ", "netcat",
+            "ssh ", "scp ", "sftp ",
+        ];
+
+        let full_command = format!("{} {}", request.command, request.args.join(" "));
+
+        for pattern in &dangerous_patterns {
+            if full_command.contains(pattern) {
+                return Err(anyhow!(
+                    "Command contains dangerous pattern '{}': {}",
+                    pattern,
+                    full_command
+                ));
             }
-            SafetyCheck::AskUser => {
-                // In a real implementation, this would prompt the user
-                tracing::warn!("Command requires approval: {:?}", command);
-                bail!("Command requires user approval: {}", command.join(" "));
+        }
+
+        // Validate working directory is safe
+        if let Some(ref wd) = request.working_directory {
+            let wd_path = PathBuf::from(wd);
+            if wd_path.is_absolute() {
+                let canonical_wd = wd_path.canonicalize().unwrap_or(wd_path);
+                let canonical_workspace = self.working_directory.canonicalize()
+                    .unwrap_or_else(|_| self.working_directory.clone());
+
+                if self.sandbox_mode && !canonical_wd.starts_with(&canonical_workspace) {
+                    return Err(anyhow!(
+                        "Working directory '{}' is outside the workspace",
+                        wd
+                    ));
+                }
             }
-            SafetyCheck::Reject { reason } => {
-                bail!("Command rejected: {} ({})", command.join(" "), reason);
+        }
+
+        Ok(())
+    }
+
+    pub async fn get_system_info(&self) -> HashMap<String, String> {
+        let mut info = HashMap::new();
+
+        // Operating system
+        info.insert("os".to_string(), std::env::consts::OS.to_string());
+        info.insert("arch".to_string(), std::env::consts::ARCH.to_string());
+
+        // Current working directory
+        if let Ok(cwd) = std::env::current_dir() {
+            info.insert("cwd".to_string(), cwd.to_string_lossy().to_string());
+        }
+
+        // Environment variables (safe ones only)
+        let safe_env_vars = ["PATH", "HOME", "USER", "SHELL"];
+        for var in &safe_env_vars {
+            if let Ok(value) = std::env::var(var) {
+                info.insert(format!("env_{}", var.to_lowercase()), value);
             }
         }
-    }
 
-    // Prepare the execution environment
-    let mut final_cmd = prepare_command(cmd, &config).await?;
-    
-    // Execute with timeout
-    let start_time = std::time::Instant::now();
-    let output = timeout(
-        Duration::from_secs(config.timeout_secs),
-        final_cmd.output()
-    )
-    .await
-    .context("Command timed out")?
-    .context("Failed to execute command")?;
+        // Try to get some system commands availability
+        let test_commands = ["cargo", "node", "python", "git"];
+        for cmd in &test_commands {
+            let available = Command::new("which")
+                .arg(cmd)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await
+                .map(|status| status.success())
+                .unwrap_or(false);
 
-    let duration = start_time.elapsed();
-    
-    let result = ExecResult {
-        status: output.status.code().unwrap_or(-1),
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        duration,
-    };
-
-    tracing::info!(
-        "Command completed: status={}, duration={:?}",
-        result.status,
-        result.duration
-    );
-
-    Ok(result)
-}
-
-async fn prepare_command(cmd: &str, config: &ExecConfig) -> Result<Command> {
-    let mut command;
-
-    if config.sandbox {
-        command = prepare_sandboxed_command(cmd, config).await?;
-    } else {
-        // Direct execution
-        command = Command::new("sh");
-        command.arg("-c").arg(cmd);
-    }
-
-    // Set working directory
-    if let Some(ref cwd) = config.working_dir {
-        command.current_dir(cwd);
-    }
-
-    // Set environment variables
-    for (key, value) in &config.environment {
-        command.env(key, value);
-    }
-
-    // Configure stdio
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
-    command.stdin(Stdio::null());
-
-    Ok(command)
-}
-
-async fn prepare_sandboxed_command(cmd: &str, config: &ExecConfig) -> Result<Command> {
-    let sandbox_config = SandboxConfig::new(config.sandbox_policy)
-        .with_workspace(config.working_dir.clone().unwrap_or_else(|| PathBuf::from(".")))
-        .with_network_access(config.network);
-
-    if let Some(sandbox_args) = sandbox_config.build_command() {
-        // Validate sandbox tools are available
-        if let Err(e) = validate_sandbox_tools() {
-            tracing::warn!("Sandbox tools not available: {}, falling back to direct execution", e);
-            let mut command = Command::new("sh");
-            command.arg("-c").arg(cmd);
-            return Ok(command);
+            info.insert(format!("cmd_{}", cmd), available.to_string());
         }
 
-        let mut command = Command::new(&sandbox_args[0]);
-        
-        // Add sandbox arguments
-        for arg in &sandbox_args[1..] {
-            command.arg(arg);
-        }
-        
-        // Add the actual command
-        command.arg("--");
-        command.arg("sh");
-        command.arg("-c");
-        command.arg(cmd);
-
-        Ok(command)
-    } else {
-        // No sandboxing available for this platform/policy
-        let mut command = Command::new("sh");
-        command.arg("-c").arg(cmd);
-        Ok(command)
+        info
     }
-}
-
-/// Execute a single command with streaming output
-pub async fn exec_command_streaming(
-    cmd: &str,
-    config: ExecConfig,
-) -> Result<tokio::process::Child> {
-    tracing::info!("Starting streaming execution: {}", cmd);
-    
-    // Safety checks
-    if !is_safe_bash_command(cmd) {
-        bail!("Command failed safety analysis: {}", cmd);
-    }
-
-    let mut final_cmd = prepare_command(cmd, &config).await?;
-    
-    // Start the process
-    let child = final_cmd
-        .spawn()
-        .context("Failed to spawn command")?;
-
-    Ok(child)
-}
-
-/// Execute multiple commands in sequence
-pub async fn exec_commands_sequence(
-    commands: &[&str],
-    config: ExecConfig,
-) -> Result<Vec<ExecResult>> {
-    let mut results = Vec::new();
-    
-    for cmd in commands {
-        let result = exec_command_safe(cmd, config.clone()).await?;
-        
-        // Stop on failure unless configured otherwise
-        if result.status != 0 {
-            tracing::warn!("Command failed with status {}: {}", result.status, cmd);
-            // In production, might want to make this configurable
-        }
-        
-        results.push(result);
-    }
-    
-    Ok(results)
-}
-
-/// Check if a command would be allowed to execute
-pub fn check_command_permission(cmd: &str, config: &ExecConfig) -> Result<bool> {
-    if !is_safe_bash_command(cmd) {
-        return Ok(false);
-    }
-
-    let commands = extract_commands(cmd);
-    let approved_commands = HashSet::new();
-    
-    for command in commands {
-        match assess_command_safety(
-            &command,
-            config.approval_mode.clone(),
-            &config.sandbox_policy,
-            &approved_commands,
-            false,
-        ) {
-            SafetyCheck::AutoApprove => continue,
-            SafetyCheck::AskUser => return Ok(false), // Would need approval
-            SafetyCheck::Reject { .. } => return Ok(false),
-        }
-    }
-    
-    Ok(true)
-}
-
-/// Create a temporary workspace for command execution
-pub async fn create_temp_workspace() -> Result<tempfile::TempDir> {
-    let temp_dir = tempfile::TempDir::new()
-        .context("Failed to create temporary workspace")?;
-    
-    tracing::info!("Created temporary workspace: {}", temp_dir.path().display());
-    Ok(temp_dir)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio;
+    use tempfile::TempDir;
 
     #[tokio::test]
-    async fn test_simple_command() {
-        let config = ExecConfig::default();
-        let result = exec_command_safe("echo 'hello world'", config).await.unwrap();
-        
-        assert_eq!(result.status, 0);
+    async fn test_simple_command_execution() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = ExecutionManager::new(temp_dir.path().to_path_buf());
+
+        let request = ExecRequest {
+            command: "echo".to_string(),
+            args: vec!["hello world".to_string()],
+            working_directory: None,
+            environment: HashMap::new(),
+            timeout_seconds: Some(10),
+            capture_output: true,
+            stream_output: false,
+        };
+
+        let result = manager.execute(request).await.unwrap();
+
+        assert!(result.success);
         assert!(result.stdout.contains("hello world"));
+        assert!(!result.timed_out);
     }
 
     #[tokio::test]
-    async fn test_dangerous_command_rejection() {
-        let config = ExecConfig::default();
-        let result = exec_command_safe("rm -rf /", config).await;
-        
-        assert!(result.is_err());
+    async fn test_sandbox_command_blocking() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = ExecutionManager::new(temp_dir.path().to_path_buf())
+            .with_sandbox_mode(true);
+
+        let request = ExecRequest {
+            command: "dangerous_command".to_string(),
+            args: vec![],
+            working_directory: None,
+            environment: HashMap::new(),
+            timeout_seconds: Some(10),
+            capture_output: true,
+            stream_output: false,
+        };
+
+        let result = manager.execute(request).await.unwrap();
+
+        assert!(!result.success);
+        assert!(result.stderr.contains("not allowed in sandbox mode"));
     }
 
-    #[tokio::test]
-    async fn test_command_permission_check() {
-        let config = ExecConfig::default();
-        
-        assert!(check_command_permission("ls -la", &config).unwrap());
-        assert!(!check_command_permission("sudo rm -rf /", &config).unwrap());
-    }
+    #[test]
+    fn test_validation() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = ExecutionManager::new(temp_dir.path().to_path_buf());
 
-    #[tokio::test]
-    async fn test_temp_workspace() {
-        let workspace = create_temp_workspace().await.unwrap();
-        assert!(workspace.path().exists());
+        // Valid request
+        let valid_request = ExecRequest {
+            command: "echo".to_string(),
+            args: vec!["hello".to_string()],
+            working_directory: None,
+            environment: HashMap::new(),
+            timeout_seconds: Some(10),
+            capture_output: true,
+            stream_output: false,
+        };
+
+        assert!(manager.validate_execution_request(&valid_request).is_ok());
+
+        // Invalid request - empty command
+        let invalid_request = ExecRequest {
+            command: String::new(),
+            args: vec![],
+            working_directory: None,
+            environment: HashMap::new(),
+            timeout_seconds: Some(10),
+            capture_output: true,
+            stream_output: false,
+        };
+
+        assert!(manager.validate_execution_request(&invalid_request).is_err());
     }
 }

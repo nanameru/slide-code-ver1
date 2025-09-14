@@ -21,6 +21,7 @@ mcp-types = "0.1.1"
 slide-chatgpt = { path = "../chatgpt" }
 slide-common = { path = "../common" }
 slide-apply-patch = { path = "../apply-patch" }
+slide-file-search = { path = "../file-search" }
 tree-sitter = "0.25.8"
 tree-sitter-bash = "0.25.0"
 tempfile = "3.22"
