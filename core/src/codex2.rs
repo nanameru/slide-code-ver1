@@ -6,7 +6,8 @@ use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 
 use crate::client::{ModelClient, ResponseEvent};
-use slide_chatgpt::client::{ChatGptClient, SlideRequest};
+use slide_chatgpt::client::ChatGptClient;
+use slide_common::{SlideRequest, SlideResponse};
 use crate::openai_tools::{ToolsConfig, ToolsConfigParams, render_tools_instructions};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

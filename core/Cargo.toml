@@ -21,3 +21,12 @@ mcp-types = "0.1.1"
 slide-chatgpt = { path = "../chatgpt" }
 slide-common = { path = "../common" }
 slide-apply-patch = { path = "../apply-patch" }
+tree-sitter = "0.25.8"
+tree-sitter-bash = "0.25.0"
+tempfile = "3.22"
+which = "6.0"
+reqwest = { version = "0.11", features = ["json"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["process", "signal"] }

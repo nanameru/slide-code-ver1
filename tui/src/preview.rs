@@ -61,8 +61,9 @@ impl SlidePreview {
     fn draw(&self, f: &mut Frame) {
         let size = f.area();
 
+        let default_content = "No slide content".to_string();
         let current_content = self.slides.get(self.current_slide)
-            .unwrap_or(&"No slide content".to_string());
+            .unwrap_or(&default_content);
 
         let title = format!(
             "Slide Preview ({}/{})",
