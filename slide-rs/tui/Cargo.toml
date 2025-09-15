@@ -16,3 +16,5 @@ clap = { version = "4", features = ["derive"] }
 chrono = "0.4"
 slide-core = { path = "../core" }
 unicode-width = "0.1"
+textwrap = "0.16.2"
+unicode-segmentation = "1.12.0"

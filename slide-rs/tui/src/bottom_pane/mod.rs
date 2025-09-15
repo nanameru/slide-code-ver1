@@ -136,7 +136,7 @@ impl BottomPane {
         }
         // Composer
         // ChatComposer implements WidgetRef for &Self
-        self.composer.render_ref(content, buf);
+        (&self.composer).render_ref(content, buf);
     }
 
     /// Whether there is an active overlay view that should intercept input

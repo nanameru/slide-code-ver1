@@ -8,8 +8,8 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, Paragraph},
+    text::{Line, Span},
+    widgets::{Clear, Paragraph},
     Frame, Terminal,
 };
 use std::{io, path::PathBuf, time::Instant};
@@ -18,10 +18,9 @@ use tokio::time::{sleep, Duration};
 
 use crate::widgets::{
     chat::ChatWidget,
-    composer::ComposerWidget,
-    list_selection::ListSelection,
     modal::Modal,
     status_bar::StatusBar,
+    list_selection::ListSelection,
 };
 use crate::agent::AgentHandle;
 use slide_core::codex::Event as CoreEvent;
@@ -62,16 +61,15 @@ pub struct RunResult {
     pub recent_files: Vec<String>,
 }
 
+/// Codex風に簡略化されたアプリケーション状態
 pub struct App {
     should_quit: bool,
     mode: Mode,
     status: RunStatus,
     last_tick: Instant,
-    // Chat state
+    // Chat state (簡略化)
     messages: Vec<String>,
-    input: String, // legacy; will be phased out
-    prompt_input: String,
-    // Chat scroll state (top line index within rendered message lines)
+    // Chat scroll state
     chat_scroll_top: usize,
     chat_follow_bottom: bool,
     chat_viewport_height: usize,
@@ -92,7 +90,7 @@ pub struct App {
     recent_files: Vec<String>,
     // Agent integration
     agent: Option<AgentHandle>,
-    // Bottom pane integration
+    // Bottom pane integration (Codex風の統合UI)
     bottom_pane: BottomPane,
     // App event channel
     app_event_rx: tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
@@ -100,26 +98,23 @@ pub struct App {
 }
 
 impl App {
-    pub fn new() -> Self {
-        Self::new_with_recents(Vec::new())
-    }
-
     fn clamp_scroll_top(&mut self) {
         let max_top = self.max_scroll_top();
         if self.chat_scroll_top > max_top { self.chat_scroll_top = max_top; }
     }
 
     fn max_scroll_top(&self) -> usize {
-        // total lines include prompt line at the end
         let total_lines = self.total_chat_lines();
         total_lines.saturating_sub(self.chat_viewport_height)
     }
 
     fn follow_bottom_after_change(&mut self) {
-        // ラップ行数を正確に見積もれないため、追従時は大きな値にしてレンダ側でクランプ
-        if self.chat_follow_bottom { self.chat_scroll_top = usize::MAX; }
-        else { self.clamp_scroll_top(); }
+        if self.chat_follow_bottom { self.chat_scroll_top = usize::MAX; } else { self.clamp_scroll_top(); }
     }
+    pub fn new() -> Self {
+        Self::new_with_recents(Vec::new())
+    }
+
 
     fn total_chat_lines(&self) -> usize {
         // messages rendered as: for each message add a blank line after, except last; then prompt line
@@ -142,8 +137,6 @@ impl App {
                 "Type i to start composing, Enter to send.".into(),
                 "Press h for help. Press q to quit.".into(),
             ],
-            input: String::new(),
-            prompt_input: String::new(),
             chat_scroll_top: 0,
             chat_follow_bottom: true,
             chat_viewport_height: 0,
@@ -180,102 +173,64 @@ impl App {
         }
     }
 
-    fn submit(&mut self) {
-        if self.prompt_input.trim().is_empty() {
+    fn submit_message(&mut self, text: String) {
+        if text.trim().is_empty() {
             return;
         }
-        let text = self.prompt_input.trim().to_string();
+
         self.messages.push(format!("You: {}", text));
         append_log(&format!("You: {}", text));
-        self.prompt_input.clear();
-        // Simulate agent response
+
+        if let Some(agent) = &self.agent {
+            agent.submit_text_bg(text);
+        }
+
+        // Simulate agent response for now
         self.status = RunStatus::Running;
         self.last_tick = Instant::now();
-        if let Some(agent) = &self.agent {
-            let to_send = text.clone();
-            agent.submit_text_bg(to_send);
-        }
-        self.follow_bottom_after_change();
     }
 
+    /// Codex風のシンプルなキーイベント処理
     pub fn handle_key_event(&mut self, key: KeyEvent) {
         if key.kind != KeyEventKind::Press {
             return;
         }
 
-        // If popup is active, handle popup interactions first
-        if let Some(kind) = self.active_popup {
-            self.handle_popup_key(kind, key);
-            return;
+        // Global shortcuts
+        match key {
+            KeyEvent { code: KeyCode::Char('q'), modifiers: KeyModifiers::CONTROL, .. }
+            | KeyEvent { code: KeyCode::Esc, .. } => {
+                if self.show_modal {
+                    self.show_modal = false;
+                } else {
+                    self.quit();
+                }
+                return;
+            }
+            KeyEvent { code: KeyCode::Char('h'), modifiers: KeyModifiers::CONTROL, .. } => {
+                self.show_modal = !self.show_modal;
+                return;
+            }
+            KeyEvent { code: KeyCode::Char('c'), modifiers: KeyModifiers::CONTROL, .. } => {
+                self.messages.clear();
+                return;
+            }
+            KeyEvent { code: KeyCode::Char('i'), .. } if self.mode == Mode::Normal => {
+                self.mode = Mode::Insert;
+                return;
+            }
+            _ => {}
         }
 
-        match self.mode {
-            Mode::Insert => match key.code {
-                KeyCode::Esc => self.mode = Mode::Normal,
-                KeyCode::Enter => { self.submit(); self.chat_follow_bottom = true; },
-                KeyCode::Backspace => { self.prompt_input.pop(); },
-                KeyCode::Char(c) => {
-                    if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
-                        self.prompt_input.push(c);
-                    }
+        // Delegate to bottom pane for input handling
+        if let Some(result) = self.bottom_pane.handle_key_event(key) {
+            use crate::bottom_pane::InputResult;
+            match result {
+                InputResult::Submitted(text) => {
+                    self.submit_message(text);
                 }
-                _ => {}
-            },
-            _ => match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => self.quit(),
-                KeyCode::Char('i') => { self.mode = Mode::Insert; self.chat_follow_bottom = true; self.chat_scroll_top = usize::MAX; },
-                KeyCode::Char('h') => {
-                    self.show_modal = !self.show_modal;
-                }
-                KeyCode::Char(':') => {
-                    self.open_command_palette();
-                }
-                KeyCode::Char('/') => {
-                    self.open_file_search();
-                }
-                KeyCode::Char('c') => {
-                    self.messages.clear();
-                    self.chat_scroll_top = 0;
-                    self.chat_follow_bottom = true;
-                }
-                // 履歴スクロール（Normalモード）
-                KeyCode::Up => {
-                    self.chat_scroll_top = self.chat_scroll_top.saturating_sub(1);
-                    self.clamp_scroll_top();
-                    self.chat_follow_bottom = self.chat_scroll_top >= self.max_scroll_top();
-                }
-                KeyCode::Down => {
-                    self.chat_scroll_top = self.chat_scroll_top.saturating_add(1);
-                    self.clamp_scroll_top();
-                    self.chat_follow_bottom = self.chat_scroll_top >= self.max_scroll_top();
-                }
-                KeyCode::PageUp => {
-                    let step = self.chat_viewport_height.max(1);
-                    self.chat_scroll_top = self.chat_scroll_top.saturating_sub(step);
-                    self.clamp_scroll_top();
-                    self.chat_follow_bottom = self.chat_scroll_top >= self.max_scroll_top();
-                }
-                KeyCode::PageDown => {
-                    let step = self.chat_viewport_height.max(1);
-                    self.chat_scroll_top = self.chat_scroll_top.saturating_add(step);
-                    self.clamp_scroll_top();
-                    self.chat_follow_bottom = self.chat_scroll_top >= self.max_scroll_top();
-                }
-                KeyCode::Home => {
-                    self.chat_scroll_top = 0;
-                    self.chat_follow_bottom = false;
-                }
-                KeyCode::End => {
-                    self.chat_scroll_top = usize::MAX; // レンダでクランプして最下部へ
-                    self.chat_follow_bottom = true;
-                }
-                KeyCode::Enter => {
-                    if self.show_modal {
-                        self.show_modal = false;
-                    }
-                }
-                _ => {}
-            },
+                InputResult::None => {}
+            }
         }
     }
 
@@ -294,37 +249,6 @@ impl App {
         self.chat_follow_bottom = self.chat_scroll_top >= self.max_scroll_top();
     }
 
-    fn open_command_palette(&mut self) {
-        self.active_popup = Some(PopupKind::Command);
-        self.popup_title = "Command Palette".into();
-        let mut items = vec![
-            "New Slide from Template".into(),
-            "Open Slide Preview (from file)".into(),
-            "Save Chat to slides/draft.md".into(),
-            "Toggle Help".into(),
-            "Clear Messages".into(),
-            "Quit".into(),
-        ];
-        if !self.recent_files.is_empty() {
-            items.push("— Recent —".into());
-            for f in self.recent_files.iter().take(10) {
-                items.push(format!("Open Recent: {}", f));
-            }
-        }
-        self.popup_items = items;
-        self.popup_filter.clear();
-        self.popup_filtered_indices = (0..self.popup_items.len()).collect();
-        self.popup_selected = 0;
-    }
-
-    fn open_file_search(&mut self) {
-        self.active_popup = Some(PopupKind::FileSearch);
-        self.popup_title = "Search slides/*.md".into();
-        self.popup_items = find_markdown_files();
-        self.popup_filter.clear();
-        self.popup_filtered_indices = (0..self.popup_items.len()).collect();
-        self.popup_selected = 0;
-    }
 
     fn handle_popup_key(&mut self, kind: PopupKind, key: KeyEvent) {
         match key.code {
@@ -403,7 +327,10 @@ impl App {
                 }
             }
             "Open Slide Preview (from file)" => {
-                self.open_file_search();
+                // TODO: Add file search back if needed
+                self.modal_title = "Not Implemented".into();
+                self.modal_body = "File search functionality not yet implemented".into();
+                self.show_modal = true;
             }
             "Save Chat to slides/draft.md" => {
                 match save_chat_as_draft(&self.messages) {
@@ -496,7 +423,7 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
         // Update chat viewport height based on terminal size (header=1, status=1)
         if let Ok(sz) = terminal.size() {
             let h = sz.height.saturating_sub(1 + 1) as usize;
-            app.chat_viewport_height = h.max(1);
+            // Chat height handled by layout
         }
 
         // Draw UI
@@ -519,10 +446,14 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
                     // Recompute viewport height and snap to bottom so latest is visible
                     if let Ok(sz) = terminal.size() {
                         let h = sz.height.saturating_sub(1 + 1) as usize;
-                        app.chat_viewport_height = h.max(1);
+                        // Chat height handled by layout
                     }
-                    // Always keep latest visible on resize per spec
-                    app.chat_scroll_top = usize::MAX; // レンダでクランプ
+                    // Keep latest visible on resize only when follow-bottom is enabled
+                    if app.chat_follow_bottom {
+                        app.chat_scroll_top = usize::MAX; // レンダでクランプ
+                    } else {
+                        app.clamp_scroll_top();
+                    }
                 }
                 _ => {}
             }
@@ -579,32 +510,29 @@ fn ui(f: &mut Frame, app: &App) {
     ]));
     f.render_widget(header, chunks[0]);
 
-    // Body: single full-width chat area (help panel removed)
-    let body = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(100)])
+    // Body: Codex風の統合UI（チャット履歴 + BottomPane）
+    let body_height = chunks[1].height;
+    let bottom_pane_height = app.bottom_pane.desired_height(chunks[1].width);
+    let chat_height = body_height.saturating_sub(bottom_pane_height);
+
+    let body_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(chat_height),
+            Constraint::Length(bottom_pane_height),
+        ])
         .split(chunks[1]);
 
-    let chat_height = body[0].height as usize;
-    let chat_widget = ChatWidget::new(&app.messages)
-        .with_scroll(app.chat_scroll_top, chat_height)
-        .with_prompt(&app.prompt_input);
-    f.render_widget(chat_widget, body[0]);
+    // Chat history (simplified, no custom scrollbar)
+    let chat_widget = ChatWidget::new(&app.messages);
+    f.render_widget(chat_widget, body_layout[0]);
 
-    // Place cursor on prompt line when visible
-    if matches!(app.mode, Mode::Insert) {
-        let total = app.total_chat_lines();
-        let prompt_idx = total.saturating_sub(1);
-        let top = app.chat_scroll_top;
-        if prompt_idx >= top {
-            let rel = prompt_idx - top;
-            if rel < chat_height {
-                // cursor x: start after "> "
-                let x = body[0].x + 2 + app.prompt_input.len() as u16;
-                let y = body[0].y + rel as u16;
-                f.set_cursor_position((x, y));
-            }
-        }
+    // Bottom pane (integrated input)
+    app.bottom_pane.render_ref(body_layout[1], f.buffer_mut());
+
+    // Set cursor position if bottom pane has focus
+    if let Some((x, y)) = app.bottom_pane.cursor_pos(body_layout[1]) {
+        f.set_cursor_position((x, y));
     }
 
     // Status bar
@@ -688,29 +616,24 @@ fn handle_core_event(app: &mut App, ev: CoreEvent) {
             if let Some(last) = app.messages.last_mut() {
                 if last.starts_with("Assistant:") {
                     last.push_str(&delta);
-                    app.follow_bottom_after_change();
-                    return;
+                                return;
                 }
             }
             app.messages.push(format!("Assistant: {}", delta));
             append_log(&format!("AssistantΔ: {}", delta));
-            app.follow_bottom_after_change();
-        }
+            }
         CoreEvent::AgentMessage { message } => {
             app.messages.push(format!("Assistant: {}", message));
             append_log(&format!("Assistant: {}", message));
-            app.follow_bottom_after_change();
-        }
+            }
         CoreEvent::ExecCommandBegin { command, .. } => {
             app.messages.push(format!("[exec] $ {}", command.join(" ")));
             append_log(&format!("[exec] $ {}", command.join(" ")));
-            app.follow_bottom_after_change();
-        }
+            }
         CoreEvent::ExecCommandEnd { exit_code, .. } => {
             app.messages.push(format!("[exec] exit {}", exit_code));
             append_log(&format!("[exec] exit {}", exit_code));
-            app.follow_bottom_after_change();
-        }
+            }
         CoreEvent::ApplyPatchApprovalRequest { id, changes, reason } => {
             // Convert map of path->desc into a vector of display strings
             let mut items: Vec<String> = changes
@@ -725,18 +648,15 @@ fn handle_core_event(app: &mut App, ev: CoreEvent) {
         CoreEvent::PatchApplyBegin { .. } => {
             app.messages.push("[patch] applying...".into());
             append_log("[patch] applying...");
-            app.follow_bottom_after_change();
-        }
+            }
         CoreEvent::PatchApplyEnd { success, .. } => {
             app.messages.push(format!("[patch] {}", if success { "ok" } else { "failed" }));
             append_log(&format!("[patch] {}", if success { "ok" } else { "failed" }));
-            app.follow_bottom_after_change();
-        }
+            }
         CoreEvent::TurnDiff { unified_diff } => {
             app.messages.push(format!("[diff]\n{}", unified_diff));
             append_log("[diff] updated");
-            app.follow_bottom_after_change();
-        }
+            }
         CoreEvent::TaskComplete => {
             app.status = RunStatus::Idle;
             append_log("[task] complete");
@@ -745,8 +665,7 @@ fn handle_core_event(app: &mut App, ev: CoreEvent) {
             app.messages.push(format!("[error] {}", message));
             app.status = RunStatus::Error;
             append_log(&format!("[error] {}", message));
-            app.follow_bottom_after_change();
-        }
+            }
         CoreEvent::ShutdownComplete => {}
         CoreEvent::ExecApprovalRequest { id, command, cwd: _, reason } => {
             let req = ApprovalRequest::Exec { id, command, reason };
