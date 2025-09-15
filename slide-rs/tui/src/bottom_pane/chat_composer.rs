@@ -254,13 +254,8 @@ impl WidgetRef for &ChatComposer {
         ])
         .areas(area);
 
-        // Left border
-        let border_style = if self.has_focus {
-            // Use orange for focused input border
-            Style::default().fg(Color::Rgb(255, 165, 0))
-        } else {
-            Style::default().add_modifier(Modifier::DIM)
-        };
+        // Left border: always orange regardless of focus
+        let border_style = Style::default().fg(Color::Rgb(255, 165, 0));
 
         Block::default()
             .borders(Borders::LEFT)
