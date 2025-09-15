@@ -509,8 +509,7 @@ fn ui(f: &mut Frame, app: &App) {
     let header = Paragraph::new(Line::from(vec![
         Span::styled("Slide TUI ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
         Span::raw("— Interactive Mode"),
-    ]))
-    .block(Block::default().borders(Borders::ALL));
+    ]));
     f.render_widget(header, chunks[0]);
 
     // Body split: chat | help
@@ -525,18 +524,16 @@ fn ui(f: &mut Frame, app: &App) {
 
     // Right panel with quick hints
     let help_text = Text::from(vec![
-        Line::from("Keys:"),
-        Line::from(" i: insert (compose)"),
-        Line::from(" h: toggle help"),
-        Line::from(" : (colon): command palette"),
-        Line::from(" /: file search"),
-        Line::from(" c: clear messages"),
-        Line::from(" q: quit"),
+        Line::from("Mode: NORMAL — Scroll chat"),
+        Line::from("  ↑/k, ↓/j — move; PgUp/PgDn — page; Home/g, End/G — jump"),
         Line::from(""),
-        Line::from("Enter to send in insert mode"),
+        Line::from("Mode: INSERT — Type and send"),
+        Line::from("  Enter — send, Esc — back to NORMAL"),
+        Line::from(""),
+        Line::from("Other:"),
+        Line::from("  : — command palette, / — file search, c — clear, q — quit"),
     ]);
-    let help = Paragraph::new(help_text)
-        .block(Block::default().borders(Borders::ALL).title("Hints"));
+    let help = Paragraph::new(help_text);
     f.render_widget(help, body[1]);
 
     // Composer/bottom pane area

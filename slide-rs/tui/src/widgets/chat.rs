@@ -51,8 +51,8 @@ impl<'a> ratatui::widgets::Widget for ChatWidget<'a> {
         let bottom = (top + vp).min(total);
         let view = &lines[top..bottom];
         let text = Text::from(view.to_vec());
+        // Codex風: 枠線なし・タイトル無し
         let widget = Paragraph::new(text)
-            .block(Block::default().borders(Borders::ALL).title("Chat"))
             .wrap(Wrap { trim: true })
             .alignment(Alignment::Left);
         widget.render(area, buf);
