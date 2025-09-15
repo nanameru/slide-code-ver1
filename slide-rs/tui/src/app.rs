@@ -307,6 +307,15 @@ impl App {
         self.popup_selected = 0;
     }
 
+    fn open_file_search(&mut self) {
+        self.active_popup = Some(PopupKind::FileSearch);
+        self.popup_title = "Search slides/*.md".into();
+        self.popup_items = find_markdown_files();
+        self.popup_filter.clear();
+        self.popup_filtered_indices = (0..self.popup_items.len()).collect();
+        self.popup_selected = 0;
+    }
+
     fn exec_command_palette(&mut self, idx: usize) {
         let cmd = &self.popup_items[idx];
         self.active_popup = None;
