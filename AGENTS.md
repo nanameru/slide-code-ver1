@@ -1,5 +1,7 @@
 # Repository Guidelines
 
+## 編集前
+Serena MCPを積極的に使います。
 ## 編集後
 編集したファイルをすべてコミットアンドプッシュします。
 

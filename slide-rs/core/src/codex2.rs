@@ -56,6 +56,8 @@ pub struct Codex {
 struct Inner {
     tx_submit: mpsc::Sender<Op>,
     rx_event: Mutex<mpsc::Receiver<Event>>,
+    /// Minimal in-session conversation memory: sequence of (role, text)
+    conversation: Mutex<Vec<(String, String)>>,
 }
 
 pub struct CodexSpawnOk {
@@ -74,6 +76,8 @@ impl Codex {
         tokio::spawn(async move {
             let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
             let slide_client = ChatGptClient::new(api_key);
+            // Keep recent conversation messages (role, text). Oldest first.
+            let mut convo: Vec<(String, String)> = Vec::new();
             while let Some(op) = rx_submit.recv().await {
                 match op {
                     Op::UserInput { text } => {
@@ -108,17 +112,47 @@ impl Codex {
                             use_streamable_shell_tool: true,
                         });
                         let tool_instructions = render_tools_instructions(&tools_cfg, approval_hint.as_deref());
-                        let composed = format!("{}\n\nUser: {}", tool_instructions, text);
+                        // Append user message to conversation memory
+                        convo.push(("user".to_string(), text.clone()));
+                        // Cap memory to recent N entries to fit token budget
+                        const MAX_HISTORY_MESSAGES: usize = 12; // messages, not turns
+                        if convo.len() > MAX_HISTORY_MESSAGES {
+                            let drop = convo.len() - MAX_HISTORY_MESSAGES;
+                            convo.drain(0..drop);
+                        }
+                        // Render recent conversation as plain lines
+                        let mut history_block = String::new();
+                        if !convo.is_empty() {
+                            history_block.push_str("\n\nConversation so far:\n");
+                            for (role, msg) in &convo {
+                                let tag = if role == "assistant" { "Assistant" } else { "User" };
+                                history_block.push_str(tag);
+                                history_block.push_str(": ");
+                                history_block.push_str(msg);
+                                if !msg.ends_with('\n') { history_block.push('\n'); }
+                            }
+                        }
+                        let composed = format!("{}{}\n\nUser: {}", tool_instructions, history_block, text);
                         match client.stream(composed).await {
                             Ok(mut rx) => {
+                                let mut assembled_resp = String::new();
                                 while let Some(ev) = rx.recv().await {
                                     match ev {
                                         ResponseEvent::TextDelta(delta) => {
+                                            assembled_resp.push_str(&delta);
                                             let _ = tx_event
                                                 .send(Event::AgentMessageDelta { delta })
                                                 .await;
                                         }
                                         ResponseEvent::Completed => {
+                                            // Store assistant message into conversation
+                                            if !assembled_resp.is_empty() {
+                                                convo.push(("assistant".to_string(), assembled_resp.clone()));
+                                                if convo.len() > MAX_HISTORY_MESSAGES {
+                                                    let drop = convo.len() - MAX_HISTORY_MESSAGES;
+                                                    convo.drain(0..drop);
+                                                }
+                                            }
                                             let _ = tx_event.send(Event::TaskComplete).await;
                                             break;
                                         }
@@ -153,7 +187,7 @@ impl Codex {
             }
         });
 
-        let inner = Arc::new(Inner { tx_submit, rx_event: Mutex::new(rx_event) });
+        let inner = Arc::new(Inner { tx_submit, rx_event: Mutex::new(rx_event), conversation: Mutex::new(Vec::new()) });
         Ok(CodexSpawnOk { codex: Codex { inner } })
     }
 
@@ -170,5 +204,3 @@ impl Codex {
         rx.recv().await
     }
 }
-
-
