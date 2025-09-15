@@ -256,7 +256,8 @@ impl WidgetRef for &ChatComposer {
 
         // Left border
         let border_style = if self.has_focus {
-            Style::default().fg(Color::Cyan)
+            // Use orange for focused input border
+            Style::default().fg(Color::Rgb(255, 165, 0))
         } else {
             Style::default().add_modifier(Modifier::DIM)
         };
