@@ -457,8 +457,10 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
 
         // No need for pending history lines - messages now insert directly
 
-        // Draw only input area (bottom) - no full screen
-        draw_input_area_only(&mut terminal, &mut app)?;
+        // Draw full-screen UI so chat messages and input are both visible
+        terminal.draw(|f| {
+            _ui_fullscreen(f, &mut app);
+        })?;
 
         // Handle events with timeout
         if event::poll(Duration::from_millis(100))? {
