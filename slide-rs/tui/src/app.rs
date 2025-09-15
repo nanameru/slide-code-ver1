@@ -96,7 +96,7 @@ pub struct App {
     app_event_rx: tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
     app_event_tx: AppEventSender,
     // Inline viewport history (pending lines to insert above)
-    pending_history_lines: Vec<Line<'static>>,
+    // pending_history_lines removed - messages now insert directly
 }
 
 impl App {
@@ -157,7 +157,7 @@ impl App {
             bottom_pane: BottomPane::new(BottomPaneParams{ has_input_focus: true, placeholder_text: "Ask Slide Code to do anything".into()}),
             app_event_rx: app_rx,
             app_event_tx: app_tx,
-            pending_history_lines: Vec::new(),
+            // pending_history_lines removed
         };
         // Write a small banner to the log so the browser viewer has content
         append_log("[info] Slide TUI session started");
@@ -176,7 +176,10 @@ impl App {
         }
     }
 
-    fn submit_message(&mut self, text: String) {
+    fn submit_message<B>(&mut self, text: String, terminal: &mut Terminal<B>)
+    where
+        B: ratatui::backend::Backend,
+    {
         if text.trim().is_empty() {
             return;
         }
@@ -188,8 +191,8 @@ impl App {
             Span::raw(text.clone()),
         ]);
 
-        // Add to pending history for viewport insertion
-        self.pending_history_lines.push(user_line);
+        // Insert user message directly to terminal
+        insert_history_lines(terminal, vec![user_line]);
 
         // Keep in messages for compatibility
         self.messages.push(format!("You: {}", text));
@@ -205,7 +208,10 @@ impl App {
     }
 
     /// Codex風のシンプルなキーイベント処理
-    pub fn handle_key_event(&mut self, key: KeyEvent) {
+    pub fn handle_key_event<B>(&mut self, key: KeyEvent, terminal: &mut Terminal<B>)
+    where
+        B: ratatui::backend::Backend,
+    {
         if key.kind != KeyEventKind::Press {
             return;
         }
@@ -241,7 +247,7 @@ impl App {
             use crate::bottom_pane::InputResult;
             match result {
                 InputResult::Submitted(text) => {
-                    self.submit_message(text);
+                    self.submit_message(text, terminal);
                 }
                 InputResult::None => {}
             }
@@ -448,15 +454,10 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
             // Chat height handled by layout
         }
 
-        // Insert pending history lines above viewport (Codex-style)
-        if !app.pending_history_lines.is_empty() {
-            insert_history_lines(&mut terminal, app.pending_history_lines.clone());
-            // Clear pending lines after insertion
-            app.pending_history_lines.clear();
-        }
+        // No need for pending history lines - messages now insert directly
 
-        // Draw UI
-        terminal.draw(|f| ui(f, &mut app))?;
+        // Draw only input area (bottom) - no full screen
+        draw_input_area_only(&mut terminal, &mut app)?;
 
         // Handle events with timeout
         if event::poll(Duration::from_millis(100))? {
@@ -469,7 +470,7 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
                     }
                 }
                 Event::Key(key) => {
-                    app.handle_key_event(key);
+                    app.handle_key_event(key, &mut terminal);
                 }
                 Event::Resize(_, _) => {
                     // Recompute viewport height and snap to bottom so latest is visible
@@ -500,7 +501,7 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
             }
         }
         for ev in drained_events {
-            handle_core_event(&mut app, ev);
+            handle_core_event(&mut app, ev, &mut terminal);
         }
 
         if app.should_quit {
@@ -520,7 +521,56 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
     Ok(RunResult { exit, recent_files: app.recent_files })
 }
 
-fn ui(f: &mut Frame, app: &mut App) {
+fn draw_input_area_only<B>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()>
+where
+    B: ratatui::backend::Backend,
+{
+    let size = terminal.size()?;
+    let input_height = 3; // Status bar + input area
+    let input_area = Rect {
+        x: 0,
+        y: size.height.saturating_sub(input_height),
+        width: size.width,
+        height: input_height,
+    };
+
+    terminal.draw(|f| {
+        draw_input_ui(f, app, input_area);
+    })?;
+
+    Ok(())
+}
+
+fn draw_input_ui(f: &mut Frame, app: &mut App, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .split(area);
+
+    // Status bar
+    let status = match app.status {
+        RunStatus::Idle => "Idle",
+        RunStatus::Running => "Running…",
+        RunStatus::Error => "Error",
+    };
+    let mode = match app.mode {
+        Mode::Normal => "NORMAL",
+        Mode::Insert => "INSERT",
+        Mode::Help => "HELP",
+    };
+    let status_bar = StatusBar::new(mode, status, "i:insert  q:quit");
+    f.render_widget(status_bar, chunks[0]);
+
+    // Bottom pane (input area) using render_ref
+    app.bottom_pane.render_ref(chunks[1], f.buffer_mut());
+
+    if let Some((x, y)) = app.bottom_pane.cursor_pos(chunks[1]) {
+        f.set_cursor_position((x, y));
+    }
+}
+
+// Old full-screen UI function (kept for reference)
+fn _ui_fullscreen(f: &mut Frame, app: &mut App) {
     // Layout: header | body | status
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -633,7 +683,10 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     horizontal[1]
 }
 
-fn handle_core_event(app: &mut App, ev: CoreEvent) {
+fn handle_core_event<B>(app: &mut App, ev: CoreEvent, terminal: &mut Terminal<B>)
+where
+    B: ratatui::backend::Backend,
+{
     match ev {
         CoreEvent::SessionConfigured { .. } => {}
         CoreEvent::TaskStarted => {
@@ -648,25 +701,25 @@ fn handle_core_event(app: &mut App, ev: CoreEvent) {
                 }
             }
 
-            // Create a styled line for assistant message
+            // Create a styled line for assistant message and insert directly
             let assistant_line = Line::from(vec![
                 Span::styled("Assistant", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
                 Span::raw(": "),
                 Span::raw(delta.clone()),
             ]);
-            app.pending_history_lines.push(assistant_line);
+            insert_history_lines(terminal, vec![assistant_line]);
 
             app.messages.push(format!("Assistant: {}", delta));
             append_log(&format!("AssistantΔ: {}", delta));
         }
         CoreEvent::AgentMessage { message } => {
-            // Create a styled line for assistant message
+            // Create a styled line for assistant message and insert directly
             let assistant_line = Line::from(vec![
                 Span::styled("Assistant", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
                 Span::raw(": "),
                 Span::raw(message.clone()),
             ]);
-            app.pending_history_lines.push(assistant_line);
+            insert_history_lines(terminal, vec![assistant_line]);
 
             app.messages.push(format!("Assistant: {}", message));
             append_log(&format!("Assistant: {}", message));
