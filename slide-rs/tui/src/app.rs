@@ -28,6 +28,7 @@ use crate::app_event_sender::{AppEvent, AppEventSender};
 use crate::user_approval_widget::ApprovalRequest;
 use crate::bottom_pane::{BottomPane, BottomPaneParams};
 use crate::insert_history::insert_history_lines;
+use crate::streaming::AnswerStreamState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -97,6 +98,8 @@ pub struct App {
     app_event_tx: AppEventSender,
     // Inline viewport history (pending lines to insert above)
     // pending_history_lines removed - messages now insert directly
+    // Assistant応答の行単位ストリーミング状態
+    answer_stream: AnswerStreamState,
 }
 
 impl App {
@@ -158,6 +161,7 @@ impl App {
             app_event_rx: app_rx,
             app_event_tx: app_tx,
             // pending_history_lines removed
+            answer_stream: AnswerStreamState::new(),
         };
         // Write a small banner to the log so the browser viewer has content
         append_log("[info] Slide TUI session started");
@@ -695,33 +699,35 @@ where
             append_log("[task] started");
         }
         CoreEvent::AgentMessageDelta { delta } => {
+            // デルタをストリーミング状態に反映し、完成行のみ履歴へ積む
+            let lines = app.answer_stream.push_delta(&delta);
+            if !lines.is_empty() {
+                insert_history_lines(terminal, lines);
+            }
+            // 互換目的でメモリ上のメッセージも更新
             if let Some(last) = app.messages.last_mut() {
                 if last.starts_with("Assistant:") {
                     last.push_str(&delta);
-                    return;
+                } else {
+                    app.messages.push(format!("Assistant: {}", delta));
                 }
+            } else {
+                app.messages.push(format!("Assistant: {}", delta));
             }
-
-            // アシスタントのメッセージを履歴行として挿入
-            let assistant_line = Line::from(vec![
-                Span::styled("Assistant", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::raw(": "),
-                Span::raw(delta.clone()),
-            ]);
-            insert_history_lines(terminal, vec![assistant_line]);
-
-            app.messages.push(format!("Assistant: {}", delta));
             append_log(&format!("AssistantΔ: {}", delta));
         }
         CoreEvent::AgentMessage { message } => {
-            // アシスタントのメッセージを履歴行として挿入
-            let assistant_line = Line::from(vec![
-                Span::styled("Assistant", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::raw(": "),
-                Span::raw(message.clone()),
-            ]);
-            insert_history_lines(terminal, vec![assistant_line]);
-
+            // 受信済みデルタがあれば残りをflush。なければ全文を1回で表示。
+            let mut pending = Vec::new();
+            if !message.is_empty() {
+                // 末尾改行がなければ push → finalize で1行にする
+                pending.extend(app.answer_stream.push_delta(&message));
+            }
+            let mut tail = app.answer_stream.finalize();
+            pending.append(&mut tail);
+            if !pending.is_empty() {
+                insert_history_lines(terminal, pending);
+            }
             app.messages.push(format!("Assistant: {}", message));
             append_log(&format!("Assistant: {}", message));
         }
@@ -758,6 +764,9 @@ where
             }
         CoreEvent::TaskComplete => {
             app.status = RunStatus::Idle;
+            // 念のため残りをフラッシュ
+            let tail = app.answer_stream.finalize();
+            if !tail.is_empty() { insert_history_lines(terminal, tail); }
             append_log("[task] complete");
         }
         CoreEvent::Error { message } => {

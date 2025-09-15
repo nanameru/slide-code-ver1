@@ -10,6 +10,7 @@ pub mod user_approval_widget;
 pub mod widgets;
 pub mod insert_history;
 pub mod custom_terminal;
+pub mod streaming;
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
