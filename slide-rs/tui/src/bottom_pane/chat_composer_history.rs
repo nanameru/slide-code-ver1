@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use crate::history_store::HistoryStore;
 
 /// シェル風の履歴ナビゲーションを扱う簡易実装
 pub(crate) struct ChatComposerHistory {
@@ -8,10 +9,13 @@ pub(crate) struct ChatComposerHistory {
     fetched_history: HashMap<usize, String>,
     history_cursor: Option<isize>,
     last_history_text: Option<String>,
+    store: HistoryStore,
 }
 
 impl ChatComposerHistory {
     pub fn new() -> Self {
+        let store = HistoryStore::default();
+        let (log_id, count) = store.metadata();
         Self {
             history_log_id: None,
             history_entry_count: 0,
@@ -19,7 +23,17 @@ impl ChatComposerHistory {
             fetched_history: HashMap::new(),
             history_cursor: None,
             last_history_text: None,
+            store,
         }
+        .with_metadata(log_id, count)
+    }
+
+    fn with_metadata(mut self, log_id: u64, count: usize) -> Self {
+        if count > 0 {
+            self.history_log_id = Some(log_id);
+            self.history_entry_count = count;
+        }
+        self
     }
 
     pub fn set_metadata(&mut self, log_id: u64, entry_count: usize) {
@@ -34,6 +48,9 @@ impl ChatComposerHistory {
     pub fn record_local_submission(&mut self, text: &str) {
         if text.is_empty() { return; }
         if self.local_history.last().is_some_and(|p| p == text) { return; }
+        // Best-effort: append to persistent store (ignore errors)
+        let _ = self.store.append(text);
+        // local echo for this UI session
         self.local_history.push(text.to_string());
         self.history_cursor = None;
         self.last_history_text = None;
@@ -69,11 +86,18 @@ impl ChatComposerHistory {
             self.last_history_text = Some(text.clone());
             Some(text)
         } else {
-            // 簡易化: フェッチ済みがあればそれを返す。
             if let Some(text) = self.fetched_history.get(&idx).cloned() {
                 self.last_history_text = Some(text.clone());
                 Some(text)
             } else {
+                // lazy fetch from persistent store
+                if let Some(id) = self.history_log_id {
+                    if let Some(text) = self.store.lookup(id, idx) {
+                        self.fetched_history.insert(idx, text.clone());
+                        self.last_history_text = Some(text.clone());
+                        return Some(text);
+                    }
+                }
                 None
             }
         }
@@ -90,4 +114,3 @@ impl ChatComposerHistory {
         None
     }
 }
-

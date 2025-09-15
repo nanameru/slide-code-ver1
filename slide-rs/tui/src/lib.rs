@@ -11,6 +11,7 @@ pub mod widgets;
 pub mod insert_history;
 pub mod custom_terminal;
 pub mod streaming;
+pub mod history_store;
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
