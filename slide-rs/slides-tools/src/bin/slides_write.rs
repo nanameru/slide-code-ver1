@@ -1,12 +1,11 @@
 use anyhow::{anyhow, Context, Result};
-use clap::{ArgEnum, Parser};
+use clap::{Parser, ValueEnum};
 use path_absolutize::Absolutize;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Copy, Debug, ArgEnum)]
-#[clap(rename_all = "kebab-case")]
+#[derive(Clone, Copy, Debug, ValueEnum)]
 enum Mode {
     Create,
     Overwrite,
@@ -39,10 +38,11 @@ fn ensure_slides_path(root: &Path, rel: &str) -> Result<PathBuf> {
         return Err(anyhow!("path must be relative to workspace root"));
     }
     let full = root.join(p);
-    let abs = full.absolutize().map_err(|e| anyhow!(e.to_string()))?;
-    let abs = PathBuf::from(abs.as_ref());
-    let slides_root = root.join("slides").absolutize().map_err(|e| anyhow!(e.to_string()))?;
-    let slides_root = PathBuf::from(slides_root.as_ref());
+    let abs_tmp = full.absolutize().map_err(|e| anyhow!(e.to_string()))?;
+    let abs = PathBuf::from(abs_tmp.as_ref());
+    let slides_join = root.join("slides");
+    let slides_root_tmp = slides_join.absolutize().map_err(|e| anyhow!(e.to_string()))?;
+    let slides_root = PathBuf::from(slides_root_tmp.as_ref());
     if !abs.starts_with(&slides_root) {
         return Err(anyhow!("path must be under slides/"));
     }
@@ -101,4 +101,3 @@ fn main() -> Result<()> {
     println!("[slides_write] ok: {}", target.display());
     Ok(())
 }
-

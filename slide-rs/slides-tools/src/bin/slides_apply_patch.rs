@@ -5,10 +5,12 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 fn ensure_under_slides(root: &Path, path: &Path) -> Result<()> {
-    let abs = root.join(path).absolutize().map_err(|e| anyhow!(e.to_string()))?;
-    let abs = PathBuf::from(abs.as_ref());
-    let slides_root = root.join("slides").absolutize().map_err(|e| anyhow!(e.to_string()))?;
-    let slides_root = PathBuf::from(slides_root.as_ref());
+    let joined = root.join(path);
+    let abs_tmp = joined.absolutize().map_err(|e| anyhow!(e.to_string()))?;
+    let abs = PathBuf::from(abs_tmp.as_ref());
+    let slides_join = root.join("slides");
+    let slides_root_tmp = slides_join.absolutize().map_err(|e| anyhow!(e.to_string()))?;
+    let slides_root = PathBuf::from(slides_root_tmp.as_ref());
     if !abs.starts_with(&slides_root) {
         return Err(anyhow!(format!("path outside slides/: {}", path.display())));
     }
@@ -39,9 +41,10 @@ fn main() -> Result<()> {
     // Verify parse and gather affected files
     let verified = maybe_parse_apply_patch_verified(&["apply_patch".to_string(), payload.clone()], &cwd);
     let action = match verified {
-        slide_apply_patch::MaybeApplyPatchVerified::Yes { action, .. } => action,
-        slide_apply_patch::MaybeApplyPatchVerified::No => return Err(anyhow!("not an apply_patch payload")),
-        slide_apply_patch::MaybeApplyPatchVerified::Invalid { reason } => return Err(anyhow!(format!("invalid apply_patch payload: {reason}"))),
+        slide_apply_patch::MaybeApplyPatchVerified::Body(action) => action,
+        slide_apply_patch::MaybeApplyPatchVerified::NotApplyPatch => return Err(anyhow!("not an apply_patch payload")),
+        slide_apply_patch::MaybeApplyPatchVerified::CorrectnessError(reason) => return Err(anyhow!(format!("invalid apply_patch payload: {reason}"))),
+        slide_apply_patch::MaybeApplyPatchVerified::ShellParseError(reason) => return Err(anyhow!(format!("invalid apply_patch payload: {:?}", reason))),
     };
 
     // Enforce slides/ policy on all paths
@@ -57,4 +60,3 @@ fn main() -> Result<()> {
     eprint!("{}", String::from_utf8_lossy(&stderr));
     Ok(())
 }
-
