@@ -27,7 +27,7 @@ impl Default for Config {
             user_instructions: None,
             project_doc_max_bytes: 32 * 1024,
             disable_response_storage: false,
-            model: "gpt-4".to_string(),
+            model: "gpt-5".to_string(),
             model_provider: "openai".to_string(),
         }
     }

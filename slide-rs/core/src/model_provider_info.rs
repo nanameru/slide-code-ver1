@@ -36,6 +36,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
             base_url: "https://api.openai.com/v1".to_string(),
             api_key_env_var: Some("OPENAI_API_KEY".to_string()),
             supported_models: vec![
+                "gpt-5".to_string(),
                 "gpt-4".to_string(),
                 "gpt-4-turbo".to_string(),
                 "gpt-3.5-turbo".to_string(),
