@@ -69,7 +69,8 @@ pub struct App {
     last_tick: Instant,
     // Chat state
     messages: Vec<String>,
-    input: String,
+    input: String, // legacy; will be phased out
+    prompt_input: String,
     // Chat scroll state (top line index within rendered message lines)
     chat_scroll_top: usize,
     chat_follow_bottom: bool,
@@ -109,13 +110,23 @@ impl App {
     }
 
     fn max_scroll_top(&self) -> usize {
-        let total_lines = if self.messages.is_empty() { 1 } else { self.messages.len() * 2 - 1 };
+        // total lines include prompt line at the end
+        let total_lines = self.total_chat_lines();
         total_lines.saturating_sub(self.chat_viewport_height)
     }
 
     fn follow_bottom_after_change(&mut self) {
-        if self.chat_follow_bottom { self.chat_scroll_top = self.max_scroll_top(); }
+        // ラップ行数を正確に見積もれないため、追従時は大きな値にしてレンダ側でクランプ
+        if self.chat_follow_bottom { self.chat_scroll_top = usize::MAX; }
         else { self.clamp_scroll_top(); }
+    }
+
+    fn total_chat_lines(&self) -> usize {
+        // messages rendered as: for each message add a blank line after, except last; then prompt line
+        // number of lines from messages = if empty 0 else messages*2 - 1
+        let msg_lines = if self.messages.is_empty() { 0 } else { self.messages.len() * 2 - 1 };
+        // plus one prompt line always
+        msg_lines + 1
     }
 
     pub fn new_with_recents(recent_files: Vec<String>) -> Self {
@@ -132,6 +143,7 @@ impl App {
                 "Press h for help. Press q to quit.".into(),
             ],
             input: String::new(),
+            prompt_input: String::new(),
             chat_scroll_top: 0,
             chat_follow_bottom: true,
             chat_viewport_height: 0,
@@ -169,13 +181,13 @@ impl App {
     }
 
     fn submit(&mut self) {
-        if self.input.trim().is_empty() {
+        if self.prompt_input.trim().is_empty() {
             return;
         }
-        let text = self.input.trim().to_string();
+        let text = self.prompt_input.trim().to_string();
         self.messages.push(format!("You: {}", text));
         append_log(&format!("You: {}", text));
-        self.input.clear();
+        self.prompt_input.clear();
         // Simulate agent response
         self.status = RunStatus::Running;
         self.last_tick = Instant::now();
@@ -200,20 +212,18 @@ impl App {
         match self.mode {
             Mode::Insert => match key.code {
                 KeyCode::Esc => self.mode = Mode::Normal,
-                KeyCode::Enter => self.submit(),
-                KeyCode::Backspace => {
-                    self.input.pop();
-                }
+                KeyCode::Enter => { self.submit(); self.chat_follow_bottom = true; },
+                KeyCode::Backspace => { self.prompt_input.pop(); },
                 KeyCode::Char(c) => {
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
-                        self.input.push(c);
+                        self.prompt_input.push(c);
                     }
                 }
                 _ => {}
             },
             _ => match key.code {
                 KeyCode::Char('q') | KeyCode::Esc => self.quit(),
-                KeyCode::Char('i') => self.mode = Mode::Insert,
+                KeyCode::Char('i') => { self.mode = Mode::Insert; self.chat_follow_bottom = true; self.chat_scroll_top = usize::MAX; },
                 KeyCode::Char('h') => {
                     self.show_modal = !self.show_modal;
                 }
@@ -226,6 +236,37 @@ impl App {
                 KeyCode::Char('c') => {
                     self.messages.clear();
                     self.chat_scroll_top = 0;
+                    self.chat_follow_bottom = true;
+                }
+                // 履歴スクロール（Normalモード）
+                KeyCode::Up => {
+                    self.chat_scroll_top = self.chat_scroll_top.saturating_sub(1);
+                    self.clamp_scroll_top();
+                    self.chat_follow_bottom = self.chat_scroll_top >= self.max_scroll_top();
+                }
+                KeyCode::Down => {
+                    self.chat_scroll_top = self.chat_scroll_top.saturating_add(1);
+                    self.clamp_scroll_top();
+                    self.chat_follow_bottom = self.chat_scroll_top >= self.max_scroll_top();
+                }
+                KeyCode::PageUp => {
+                    let step = self.chat_viewport_height.max(1);
+                    self.chat_scroll_top = self.chat_scroll_top.saturating_sub(step);
+                    self.clamp_scroll_top();
+                    self.chat_follow_bottom = self.chat_scroll_top >= self.max_scroll_top();
+                }
+                KeyCode::PageDown => {
+                    let step = self.chat_viewport_height.max(1);
+                    self.chat_scroll_top = self.chat_scroll_top.saturating_add(step);
+                    self.clamp_scroll_top();
+                    self.chat_follow_bottom = self.chat_scroll_top >= self.max_scroll_top();
+                }
+                KeyCode::Home => {
+                    self.chat_scroll_top = 0;
+                    self.chat_follow_bottom = false;
+                }
+                KeyCode::End => {
+                    self.chat_scroll_top = usize::MAX; // レンダでクランプして最下部へ
                     self.chat_follow_bottom = true;
                 }
                 KeyCode::Enter => {
@@ -452,8 +493,11 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
             }
         }
 
-        // Update chat viewport height based on terminal size (header=1, composer=3, status=1)
-        if let Ok(sz) = terminal.size() { app.chat_viewport_height = sz.height.saturating_sub(1 + 3 + 1) as usize; }
+        // Update chat viewport height based on terminal size (header=1, status=1)
+        if let Ok(sz) = terminal.size() {
+            let h = sz.height.saturating_sub(1 + 1) as usize;
+            app.chat_viewport_height = h.max(1);
+        }
 
         // Draw UI
         terminal.draw(|f| ui(f, &app))?;
@@ -469,20 +513,16 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
                     }
                 }
                 Event::Key(key) => {
-                    // If bottom pane has an active view, let it intercept first
-                    if app.bottom_pane.is_intercepting_input() || matches!(app.mode, Mode::Insert) {
-                        if let Some(res) = app.bottom_pane.handle_key_event(key) {
-                            if let crate::bottom_pane::InputResult::Submitted(text) = res {
-                                if !text.is_empty() { app.messages.push(format!("You: {}", text)); }
-                                if let Some(agent) = &app.agent {
-                                    let to_send = text.clone();
-                                    agent.submit_text_bg(to_send);
-                                }
-                            }
-                        }
-                    } else {
-                        app.handle_key_event(key);
+                    app.handle_key_event(key);
+                }
+                Event::Resize(_, _) => {
+                    // Recompute viewport height and snap to bottom so latest is visible
+                    if let Ok(sz) = terminal.size() {
+                        let h = sz.height.saturating_sub(1 + 1) as usize;
+                        app.chat_viewport_height = h.max(1);
                     }
+                    // Always keep latest visible on resize per spec
+                    app.chat_scroll_top = usize::MAX; // レンダでクランプ
                 }
                 _ => {}
             }
@@ -522,13 +562,12 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
 }
 
 fn ui(f: &mut Frame, app: &App) {
-    // Layout: header | body | composer | status
+    // Layout: header | body | status
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Min(0),
-            Constraint::Length(3),
             Constraint::Length(1),
         ])
         .split(f.area());
@@ -547,15 +586,26 @@ fn ui(f: &mut Frame, app: &App) {
         .split(chunks[1]);
 
     let chat_height = body[0].height as usize;
-    // store viewport height to compute max scroll top & follow-bottom updates
-    let mut app_ref = unsafe { (app as *const App as *mut App).as_mut().unwrap() };
-    app_ref.chat_viewport_height = chat_height;
-    let chat_widget = ChatWidget::new(&app.messages).with_scroll(app.chat_scroll_top, chat_height);
+    let chat_widget = ChatWidget::new(&app.messages)
+        .with_scroll(app.chat_scroll_top, chat_height)
+        .with_prompt(&app.prompt_input);
     f.render_widget(chat_widget, body[0]);
 
-    // Composer/bottom pane area
-    // Render bottom pane regardless of mode; focusは modeに応じて将来切替
-    app.bottom_pane.render_ref(chunks[2], f.buffer_mut());
+    // Place cursor on prompt line when visible
+    if matches!(app.mode, Mode::Insert) {
+        let total = app.total_chat_lines();
+        let prompt_idx = total.saturating_sub(1);
+        let top = app.chat_scroll_top;
+        if prompt_idx >= top {
+            let rel = prompt_idx - top;
+            if rel < chat_height {
+                // cursor x: start after "> "
+                let x = body[0].x + 2 + app.prompt_input.len() as u16;
+                let y = body[0].y + rel as u16;
+                f.set_cursor_position((x, y));
+            }
+        }
+    }
 
     // Status bar
     let status = match app.status {
@@ -568,8 +618,8 @@ fn ui(f: &mut Frame, app: &App) {
         Mode::Insert => "INSERT",
         Mode::Help => "HELP",
     };
-    let status_bar = StatusBar::new(mode, status, "h:help  i:insert  q:quit");
-    f.render_widget(status_bar, chunks[3]);
+    let status_bar = StatusBar::new(mode, status, "i:insert  q:quit");
+    f.render_widget(status_bar, chunks[2]);
 
     // Modal overlay
     if app.show_modal {
@@ -579,23 +629,29 @@ fn ui(f: &mut Frame, app: &App) {
         f.render_widget(modal, area);
     }
 
-    // Popups
+    // Popups (render only if there is enough space to avoid stray borders at the bottom)
     if let Some(_kind) = app.active_popup {
-        let area = centered_rect(70, 70, f.area());
-        // Build filtered view
-        let items: Vec<String> = app
-            .popup_filtered_indices
-            .iter()
-            .map(|&i| app.popup_items[i].clone())
-            .collect();
-        let widget = ListSelection::new(
-            &app.popup_title,
-            &app.popup_filter,
-            &items,
-            app.popup_selected,
-            "Type to filter • Esc: close • Enter: select • ↑/↓: move",
-        );
-        widget.render(f, area);
+        let screen = f.area();
+        let area = centered_rect(70, 70, screen);
+        // Require a minimum height and full containment within the screen
+        let fits_vertically = area.height >= 6 && area.y + area.height <= screen.y + screen.height;
+        let fits_horizontally = area.width >= 10 && area.x + area.width <= screen.x + screen.width;
+        if fits_vertically && fits_horizontally {
+            // Build filtered view
+            let items: Vec<String> = app
+                .popup_filtered_indices
+                .iter()
+                .map(|&i| app.popup_items[i].clone())
+                .collect();
+            let widget = ListSelection::new(
+                &app.popup_title,
+                &app.popup_filter,
+                &items,
+                app.popup_selected,
+                "Type to filter • Esc: close • Enter: select • ↑/↓: move",
+            );
+            widget.render(f, area);
+        }
     }
 }
 
