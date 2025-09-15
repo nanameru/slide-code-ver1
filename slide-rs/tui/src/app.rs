@@ -188,18 +188,20 @@ impl App {
             return;
         }
 
-        // Create a styled line for the user message
-        let user_line = Line::from(vec![
-            Span::styled("You", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::raw(": "),
-            Span::raw(text.clone()),
-        ]);
-
-        // 履歴行として端末のスクロールバックに積む（画面は下部だけ描画）
-        insert_history_lines(terminal, vec![user_line]);
+        // 見出し + 本文（接頭辞なし）で履歴へ
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "You",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )));
+        for l in text.lines() {
+            lines.push(Line::from(l.to_string()));
+        }
+        insert_history_lines(terminal, lines);
 
         // Keep in messages for compatibility
-        self.messages.push(format!("You: {}", text));
+        self.messages.push(text.clone());
         append_log(&format!("You: {}", text));
 
         if let Some(agent) = &self.agent {

@@ -3,7 +3,7 @@ use ratatui::text::{Line, Span};
 
 /// シンプルな行単位ストリーミング制御。
 /// - デルタをバッファに貯め、改行が来たら“完成した行”だけを返す。
-/// - 最初の行にだけ "Assistant: " のヘッダを付ける。
+/// - 先頭で見出し行（空行 + ラベル）を一度だけ挿入し、その後は本文のみを流す。
 /// - finalize() で残りの未完テキストを1行として返す。
 #[derive(Default, Debug)]
 pub struct AnswerStreamState {
@@ -28,16 +28,15 @@ impl AnswerStreamState {
             let mut parts: Vec<&str> = owned.split('\n').collect();
             // 最後の要素は未完テキスト（終端が\nなら空文字）
             let tail = parts.pop().unwrap_or("");
-            for (idx, line) in parts.into_iter().enumerate() {
+            for line in parts.into_iter() {
                 let line = line.strip_suffix('\r').unwrap_or(line);
                 if !self.header_emitted {
-                    out.push(self.with_header(line));
+                    // 空行 + 見出し
+                    out.push(Line::from(""));
+                    out.push(self.header_line());
                     self.header_emitted = true;
-                } else {
-                    out.push(Line::from(String::from(line)));
                 }
-                // 2行目以降はヘッダ無し
-                let _ = idx; // silence unused warning when optimized
+                out.push(Line::from(String::from(line)));
             }
             self.buffer.push_str(tail);
         }
@@ -50,10 +49,11 @@ impl AnswerStreamState {
         if !self.buffer.is_empty() {
             let tail = self.buffer.trim_end_matches('\r');
             if !self.header_emitted {
-                out.push(self.with_header(tail));
-            } else {
-                out.push(Line::from(String::from(tail)));
+                out.push(Line::from(""));
+                out.push(self.header_line());
+                self.header_emitted = true;
             }
+            out.push(Line::from(String::from(tail)));
         }
         self.buffer.clear();
         self.header_emitted = false;
@@ -61,14 +61,14 @@ impl AnswerStreamState {
         out
     }
 
-    fn with_header(&self, text: &str) -> Line<'static> {
-        Line::from(vec![
+    fn header_line(&self) -> Line<'static> {
+        Line::from(
             Span::styled(
-                "Assistant",
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                "slide",
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(": "),
-            Span::raw(String::from(text)),
-        ])
+        )
     }
 }
