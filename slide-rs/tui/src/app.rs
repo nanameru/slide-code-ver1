@@ -70,6 +70,8 @@ pub struct App {
     // Chat state
     messages: Vec<String>,
     input: String,
+    // Chat scroll state (top line index within rendered message lines)
+    chat_scroll_top: usize,
     // UI state
     show_modal: bool,
     modal_title: String,
@@ -113,6 +115,7 @@ impl App {
                 "Press h for help. Press q to quit.".into(),
             ],
             input: String::new(),
+            chat_scroll_top: 0,
             show_modal: false,
             modal_title: "Help".into(),
             modal_body: "Keybindings:\n- i: Insert (compose)\n- Esc: Normal\n- Enter: Send message\n- h: Toggle help modal\n- c: Clear messages\n- q: Quit".into(),
@@ -194,6 +197,27 @@ impl App {
                 KeyCode::Char('h') => {
                     self.show_modal = !self.show_modal;
                 }
+                // Chat scroll bindings
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.chat_scroll_top = self.chat_scroll_top.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.chat_scroll_top = self.chat_scroll_top.saturating_add(1);
+                }
+                KeyCode::PageUp => {
+                    // step will be clamped on render based on viewport height
+                    self.chat_scroll_top = self.chat_scroll_top.saturating_sub(10);
+                }
+                KeyCode::PageDown => {
+                    self.chat_scroll_top = self.chat_scroll_top.saturating_add(10);
+                }
+                KeyCode::Home | KeyCode::Char('g') if key.modifiers.is_empty() => {
+                    self.chat_scroll_top = 0;
+                }
+                KeyCode::End | KeyCode::Char('G') => {
+                    // clamp to end during render; here just make it large
+                    self.chat_scroll_top = usize::MAX / 2;
+                }
                 KeyCode::Char(':') => {
                     self.open_command_palette();
                 }
@@ -202,6 +226,7 @@ impl App {
                 }
                 KeyCode::Char('c') => {
                     self.messages.clear();
+                    self.chat_scroll_top = 0;
                 }
                 KeyCode::Enter => {
                     if self.show_modal {
@@ -494,7 +519,8 @@ fn ui(f: &mut Frame, app: &App) {
         .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
         .split(chunks[1]);
 
-    let chat_widget = ChatWidget::new(&app.messages);
+    let chat_height = body[0].height.saturating_sub(2); // minus borders
+    let chat_widget = ChatWidget::new(&app.messages).with_scroll(app.chat_scroll_top, chat_height as usize);
     f.render_widget(chat_widget, body[0]);
 
     // Right panel with quick hints

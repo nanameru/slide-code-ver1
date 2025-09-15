@@ -7,17 +7,25 @@ use ratatui::{
 
 pub struct ChatWidget<'a> {
     messages: &'a [String],
+    scroll_top: usize,
+    viewport_height: usize,
 }
 
 impl<'a> ChatWidget<'a> {
     pub fn new(messages: &'a [String]) -> Self {
-        Self { messages }
+        Self { messages, scroll_top: 0, viewport_height: 0 }
+    }
+
+    pub fn with_scroll(mut self, scroll_top: usize, viewport_height: usize) -> Self {
+        self.scroll_top = scroll_top;
+        self.viewport_height = viewport_height;
+        self
     }
 }
 
 impl<'a> ratatui::widgets::Widget for ChatWidget<'a> {
     fn render(self, area: ratatui::layout::Rect, buf: &mut ratatui::buffer::Buffer) {
-        let mut lines: Vec<Line> = Vec::with_capacity(self.messages.len());
+        let mut lines: Vec<Line> = Vec::with_capacity(self.messages.len() * 2);
         for (i, m) in self.messages.iter().enumerate() {
             let prefix = if m.starts_with("You:") {
                 Span::styled("You", Style::default().fg(Color::Yellow))
@@ -35,7 +43,14 @@ impl<'a> ratatui::widgets::Widget for ChatWidget<'a> {
                 Style::default().fg(Color::DarkGray),
             )));
         }
-        let text = Text::from(lines);
+        // Compute slice based on scroll_top and viewport_height (excluding borders handled by caller)
+        let total = lines.len();
+        let vp = if self.viewport_height == 0 { area.height.saturating_sub(2) as usize } else { self.viewport_height };
+        let max_top = total.saturating_sub(vp);
+        let top = self.scroll_top.min(max_top);
+        let bottom = (top + vp).min(total);
+        let view = &lines[top..bottom];
+        let text = Text::from(view.to_vec());
         let widget = Paragraph::new(text)
             .block(Block::default().borders(Borders::ALL).title("Chat"))
             .wrap(Wrap { trim: true })
