@@ -3,8 +3,8 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
-    Frame,
 };
+use crate::custom_terminal::Frame;
 
 pub struct ListSelection<'a> {
     pub title: &'a str,

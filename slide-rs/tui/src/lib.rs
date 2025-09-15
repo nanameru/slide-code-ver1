@@ -1,3 +1,5 @@
+#![deny(clippy::print_stdout, clippy::print_stderr)]
+
 pub mod app;
 pub mod preview;
 pub mod interactive;
@@ -31,9 +33,7 @@ pub struct Cli {
 }
 
 pub async fn run_main(cli: Cli, _sandbox_exe: Option<PathBuf>) -> Result<()> {
-    if cli.debug {
-        println!("Debug mode enabled");
-    }
+    // Avoid直接の標準出力。デバッグはログや履歴行で扱う方針。
     if let Some(model) = cli.model.clone() {
         std::env::set_var("SLIDE_MODEL", model);
     }
