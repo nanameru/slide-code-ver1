@@ -1,0 +1,361 @@
+use std::fmt;
+use std::io;
+use std::io::Write;
+
+use crossterm::Command;
+use crossterm::cursor::MoveTo;
+use crossterm::queue;
+use crossterm::style::Color as CColor;
+use crossterm::style::Colors;
+use crossterm::style::Print;
+use crossterm::style::SetAttribute;
+use crossterm::style::SetBackgroundColor;
+use crossterm::style::SetColors;
+use crossterm::style::SetForegroundColor;
+use ratatui::layout::Size;
+use ratatui::style::Color;
+use ratatui::style::Modifier;
+use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::Terminal;
+use ratatui::backend::Backend;
+use textwrap::Options as TwOptions;
+use textwrap::WordSplitter;
+
+/// Insert `lines` above the current viewport using inline viewport technique.
+/// This allows history to be preserved in terminal scrollback.
+pub(crate) fn insert_history_lines<B>(terminal: &mut Terminal<B>, lines: Vec<Line>)
+where
+    B: Backend,
+{
+    let mut out = std::io::stdout();
+    insert_history_lines_to_writer(terminal, &mut out, lines);
+}
+
+/// Like `insert_history_lines`, but writes ANSI to the provided writer.
+pub fn insert_history_lines_to_writer<B, W>(
+    terminal: &mut Terminal<B>,
+    writer: &mut W,
+    lines: Vec<Line>,
+) where
+    B: Backend,
+    W: Write,
+{
+    let screen_size = terminal.backend().size().unwrap_or(Size::new(80, 24));
+    let area = terminal.get_frame().area();
+
+    // Pre-wrap lines using word-aware wrapping so terminal scrollback sees the same
+    // formatting as the TUI. This avoids character-level hard wrapping by the terminal.
+    let wrapped = word_wrap_lines(&lines, area.width.max(1));
+    let wrapped_lines = wrapped.len() as u16;
+
+    // Calculate where to place the cursor for insertion
+    let cursor_top = area.y.saturating_sub(1);
+
+    // Limit the scroll region to the lines from the top of the screen to the
+    // top of the viewport. With this in place, when we add lines inside this
+    // area, only the lines in this area will be scrolled.
+    if area.y > 0 {
+        queue!(writer, SetScrollRegion(1..area.y)).ok();
+    }
+
+    // Move cursor to insertion point
+    queue!(writer, MoveTo(0, cursor_top)).ok();
+
+    // Insert each wrapped line
+    for line in wrapped {
+        queue!(writer, Print("\r\n")).ok();
+        write_spans(writer, line.iter()).ok();
+    }
+
+    // Reset scroll region back to full screen
+    queue!(writer, ResetScrollRegion).ok();
+
+    // Flush the writer to ensure commands are executed
+    writer.flush().ok();
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetScrollRegion(pub std::ops::Range<u16>);
+
+impl Command for SetScrollRegion {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        write!(f, "\x1b[{};{}r", self.0.start, self.0.end)
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> std::io::Result<()> {
+        Err(std::io::Error::other(
+            "SetScrollRegion not supported on Windows via WinAPI; use ANSI instead",
+        ))
+    }
+
+    #[cfg(windows)]
+    fn is_ansi_code_supported(&self) -> bool {
+        true
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResetScrollRegion;
+
+impl Command for ResetScrollRegion {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        write!(f, "\x1b[r")
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> std::io::Result<()> {
+        Err(std::io::Error::other(
+            "ResetScrollRegion not supported on Windows via WinAPI; use ANSI instead",
+        ))
+    }
+
+    #[cfg(windows)]
+    fn is_ansi_code_supported(&self) -> bool {
+        true
+    }
+}
+
+struct ModifierDiff {
+    pub from: Modifier,
+    pub to: Modifier,
+}
+
+impl ModifierDiff {
+    fn queue<W>(self, mut w: W) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        use crossterm::style::Attribute as CAttribute;
+        let removed = self.from - self.to;
+        if removed.contains(Modifier::REVERSED) {
+            queue!(w, SetAttribute(CAttribute::NoReverse))?;
+        }
+        if removed.contains(Modifier::BOLD) {
+            queue!(w, SetAttribute(CAttribute::NormalIntensity))?;
+            if self.to.contains(Modifier::DIM) {
+                queue!(w, SetAttribute(CAttribute::Dim))?;
+            }
+        }
+        if removed.contains(Modifier::ITALIC) {
+            queue!(w, SetAttribute(CAttribute::NoItalic))?;
+        }
+        if removed.contains(Modifier::UNDERLINED) {
+            queue!(w, SetAttribute(CAttribute::NoUnderline))?;
+        }
+        if removed.contains(Modifier::DIM) {
+            queue!(w, SetAttribute(CAttribute::NormalIntensity))?;
+        }
+        if removed.contains(Modifier::CROSSED_OUT) {
+            queue!(w, SetAttribute(CAttribute::NotCrossedOut))?;
+        }
+        if removed.contains(Modifier::SLOW_BLINK) || removed.contains(Modifier::RAPID_BLINK) {
+            queue!(w, SetAttribute(CAttribute::NoBlink))?;
+        }
+
+        let added = self.to - self.from;
+        if added.contains(Modifier::REVERSED) {
+            queue!(w, SetAttribute(CAttribute::Reverse))?;
+        }
+        if added.contains(Modifier::BOLD) {
+            queue!(w, SetAttribute(CAttribute::Bold))?;
+        }
+        if added.contains(Modifier::ITALIC) {
+            queue!(w, SetAttribute(CAttribute::Italic))?;
+        }
+        if added.contains(Modifier::UNDERLINED) {
+            queue!(w, SetAttribute(CAttribute::Underlined))?;
+        }
+        if added.contains(Modifier::DIM) {
+            queue!(w, SetAttribute(CAttribute::Dim))?;
+        }
+        if added.contains(Modifier::CROSSED_OUT) {
+            queue!(w, SetAttribute(CAttribute::CrossedOut))?;
+        }
+        if added.contains(Modifier::SLOW_BLINK) {
+            queue!(w, SetAttribute(CAttribute::SlowBlink))?;
+        }
+        if added.contains(Modifier::RAPID_BLINK) {
+            queue!(w, SetAttribute(CAttribute::RapidBlink))?;
+        }
+
+        Ok(())
+    }
+}
+
+fn write_spans<'a, I>(mut writer: &mut impl Write, content: I) -> io::Result<()>
+where
+    I: Iterator<Item = &'a Span<'a>>,
+{
+    let mut fg = Color::Reset;
+    let mut bg = Color::Reset;
+    let mut last_modifier = Modifier::empty();
+
+    for span in content {
+        let mut modifier = Modifier::empty();
+        modifier.insert(span.style.add_modifier);
+        modifier.remove(span.style.sub_modifier);
+
+        if modifier != last_modifier {
+            let diff = ModifierDiff {
+                from: last_modifier,
+                to: modifier,
+            };
+            diff.queue(&mut writer)?;
+            last_modifier = modifier;
+        }
+
+        let next_fg = span.style.fg.unwrap_or(Color::Reset);
+        let next_bg = span.style.bg.unwrap_or(Color::Reset);
+
+        if next_fg != fg || next_bg != bg {
+            queue!(
+                writer,
+                SetColors(Colors::new(next_fg.into(), next_bg.into()))
+            )?;
+            fg = next_fg;
+            bg = next_bg;
+        }
+
+        queue!(writer, Print(span.content.clone()))?;
+    }
+
+    queue!(
+        writer,
+        SetForegroundColor(CColor::Reset),
+        SetBackgroundColor(CColor::Reset),
+        SetAttribute(crossterm::style::Attribute::Reset),
+    )?;
+
+    Ok(())
+}
+
+/// Word-aware wrapping for a list of `Line`s preserving styles.
+pub(crate) fn word_wrap_lines(lines: &[Line], width: u16) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    let w = width.max(1) as usize;
+    for line in lines {
+        out.extend(word_wrap_line(line, w));
+    }
+    out
+}
+
+fn word_wrap_line(line: &Line, width: usize) -> Vec<Line<'static>> {
+    if width == 0 {
+        return vec![to_owned_line(line)];
+    }
+
+    // Concatenate content and keep span boundaries for later re-slicing.
+    let mut flat = String::new();
+    let mut span_bounds = Vec::new(); // (start_byte, end_byte, style)
+    let mut cursor = 0usize;
+
+    for s in &line.spans {
+        let text = s.content.as_ref();
+        let start = cursor;
+        flat.push_str(text);
+        cursor += text.len();
+        span_bounds.push((start, cursor, s.style));
+    }
+
+    // Use textwrap for robust word-aware wrapping; no hyphenation, no breaking words.
+    let opts = TwOptions::new(width)
+        .break_words(false)
+        .word_splitter(WordSplitter::NoHyphenation);
+    let wrapped = textwrap::wrap(&flat, &opts);
+
+    if wrapped.len() <= 1 {
+        return vec![to_owned_line(line)];
+    }
+
+    // Map wrapped pieces back to byte ranges in `flat` sequentially.
+    let mut start_cursor = 0usize;
+    let mut out: Vec<Line<'static>> = Vec::with_capacity(wrapped.len());
+
+    for piece in wrapped {
+        let piece_str: &str = &piece;
+        if piece_str.is_empty() {
+            out.push(Line {
+                style: line.style,
+                alignment: line.alignment,
+                spans: Vec::new(),
+            });
+            continue;
+        }
+
+        // Find the next occurrence of piece_str at or after start_cursor.
+        if let Some(rel) = flat[start_cursor..].find(piece_str) {
+            let s = start_cursor + rel;
+            let e = s + piece_str.len();
+            out.push(slice_line_spans(line, &span_bounds, s, e));
+            start_cursor = e;
+        } else {
+            // Fallback: slice by length from cursor.
+            let s = start_cursor;
+            let e = (start_cursor + piece_str.len()).min(flat.len());
+            out.push(slice_line_spans(line, &span_bounds, s, e));
+            start_cursor = e;
+        }
+    }
+
+    out
+}
+
+fn to_owned_line(l: &Line<'_>) -> Line<'static> {
+    Line {
+        style: l.style,
+        alignment: l.alignment,
+        spans: l
+            .spans
+            .iter()
+            .map(|s| Span {
+                style: s.style,
+                content: std::borrow::Cow::Owned(s.content.to_string()),
+            })
+            .collect(),
+    }
+}
+
+fn slice_line_spans(
+    original: &Line<'_>,
+    span_bounds: &[(usize, usize, ratatui::style::Style)],
+    start_byte: usize,
+    end_byte: usize,
+) -> Line<'static> {
+    let mut acc: Vec<Span<'static>> = Vec::new();
+
+    for (i, (s, e, style)) in span_bounds.iter().enumerate() {
+        if *e <= start_byte {
+            continue;
+        }
+        if *s >= end_byte {
+            break;
+        }
+
+        let seg_start = start_byte.max(*s);
+        let seg_end = end_byte.min(*e);
+
+        if seg_end > seg_start {
+            let local_start = seg_start - *s;
+            let local_end = seg_end - *s;
+            let content = original.spans[i].content.as_ref();
+            let slice = &content[local_start..local_end];
+
+            acc.push(Span {
+                style: *style,
+                content: std::borrow::Cow::Owned(slice.to_string()),
+            });
+        }
+
+        if *e >= end_byte {
+            break;
+        }
+    }
+
+    Line {
+        style: original.style,
+        alignment: original.alignment,
+        spans: acc,
+    }
+}

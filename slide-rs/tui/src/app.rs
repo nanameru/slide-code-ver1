@@ -1,8 +1,7 @@
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind},
+    terminal::{disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
     backend::CrosstermBackend,
@@ -28,6 +27,7 @@ use slide_core::codex::Op;
 use crate::app_event_sender::{AppEvent, AppEventSender};
 use crate::user_approval_widget::ApprovalRequest;
 use crate::bottom_pane::{BottomPane, BottomPaneParams};
+use crate::insert_history::insert_history_lines;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -95,6 +95,8 @@ pub struct App {
     // App event channel
     app_event_rx: tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
     app_event_tx: AppEventSender,
+    // Inline viewport history (pending lines to insert above)
+    pending_history_lines: Vec<Line<'static>>,
 }
 
 impl App {
@@ -155,6 +157,7 @@ impl App {
             bottom_pane: BottomPane::new(BottomPaneParams{ has_input_focus: true, placeholder_text: "Ask Slide Code to do anything".into()}),
             app_event_rx: app_rx,
             app_event_tx: app_tx,
+            pending_history_lines: Vec::new(),
         };
         // Write a small banner to the log so the browser viewer has content
         append_log("[info] Slide TUI session started");
@@ -178,6 +181,17 @@ impl App {
             return;
         }
 
+        // Create a styled line for the user message
+        let user_line = Line::from(vec![
+            Span::styled("You", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(": "),
+            Span::raw(text.clone()),
+        ]);
+
+        // Add to pending history for viewport insertion
+        self.pending_history_lines.push(user_line);
+
+        // Keep in messages for compatibility
         self.messages.push(format!("You: {}", text));
         append_log(&format!("You: {}", text));
 
@@ -394,10 +408,9 @@ impl App {
 }
 
 pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
-    // Setup terminal
+    // Setup terminal for inline viewport (no alternate screen)
     enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let stdout = io::stdout();
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -435,8 +448,15 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
             // Chat height handled by layout
         }
 
+        // Insert pending history lines above viewport (Codex-style)
+        if !app.pending_history_lines.is_empty() {
+            insert_history_lines(&mut terminal, app.pending_history_lines.clone());
+            // Clear pending lines after insertion
+            app.pending_history_lines.clear();
+        }
+
         // Draw UI
-        terminal.draw(|f| ui(f, &app))?;
+        terminal.draw(|f| ui(f, &mut app))?;
 
         // Handle events with timeout
         if event::poll(Duration::from_millis(100))? {
@@ -492,16 +512,15 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
         sleep(Duration::from_millis(16)).await;
     }
 
-    // Cleanup terminal
+    // Cleanup terminal (inline viewport)
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), DisableMouseCapture, LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
     let exit = if let Some(path) = app.preview_path { AppExit::Preview(path) } else { AppExit::Quit };
     Ok(RunResult { exit, recent_files: app.recent_files })
 }
 
-fn ui(f: &mut Frame, app: &App) {
+fn ui(f: &mut Frame, app: &mut App) {
     // Layout: header | body | status
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -625,16 +644,33 @@ fn handle_core_event(app: &mut App, ev: CoreEvent) {
             if let Some(last) = app.messages.last_mut() {
                 if last.starts_with("Assistant:") {
                     last.push_str(&delta);
-                                return;
+                    return;
                 }
             }
+
+            // Create a styled line for assistant message
+            let assistant_line = Line::from(vec![
+                Span::styled("Assistant", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::raw(": "),
+                Span::raw(delta.clone()),
+            ]);
+            app.pending_history_lines.push(assistant_line);
+
             app.messages.push(format!("Assistant: {}", delta));
             append_log(&format!("AssistantΔ: {}", delta));
-            }
+        }
         CoreEvent::AgentMessage { message } => {
+            // Create a styled line for assistant message
+            let assistant_line = Line::from(vec![
+                Span::styled("Assistant", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::raw(": "),
+                Span::raw(message.clone()),
+            ]);
+            app.pending_history_lines.push(assistant_line);
+
             app.messages.push(format!("Assistant: {}", message));
             append_log(&format!("Assistant: {}", message));
-            }
+        }
         CoreEvent::ExecCommandBegin { command, .. } => {
             app.messages.push(format!("[exec] $ {}", command.join(" ")));
             append_log(&format!("[exec] $ {}", command.join(" ")));
