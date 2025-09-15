@@ -110,6 +110,7 @@ impl Codex {
                             include_view_image_tool: false,
                             include_web_search_request: false,
                             use_streamable_shell_tool: true,
+                            include_slides_tools: true,
                         });
                         let tool_instructions = render_tools_instructions(&tools_cfg, approval_hint.as_deref());
                         // Append user message to conversation memory

@@ -8,6 +8,7 @@ pub struct ToolsConfig {
     pub include_view_image_tool: bool,
     pub include_web_search_request: bool,
     pub use_streamable_shell_tool: bool,
+    pub include_slides_tools: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -17,6 +18,7 @@ pub struct ToolsConfigParams {
     pub include_view_image_tool: bool,
     pub include_web_search_request: bool,
     pub use_streamable_shell_tool: bool,
+    pub include_slides_tools: bool,
 }
 
 impl ToolsConfig {
@@ -27,6 +29,7 @@ impl ToolsConfig {
             include_view_image_tool: p.include_view_image_tool,
             include_web_search_request: p.include_web_search_request,
             use_streamable_shell_tool: p.use_streamable_shell_tool,
+            include_slides_tools: p.include_slides_tools,
         }
     }
 }
@@ -36,6 +39,10 @@ pub fn get_openai_tools(cfg: &ToolsConfig, _mcp_tools: Option<Vec<String>>) -> V
     if cfg.use_streamable_shell_tool { tools.push("exec_command".to_string()); }
     else { tools.push("shell".to_string()); }
     if cfg.include_apply_patch_tool { tools.push("apply_patch".to_string()); }
+    if cfg.include_slides_tools {
+        tools.push("slides_write".to_string());
+        tools.push("slides_apply_patch".to_string());
+    }
     if cfg.include_plan_tool { tools.push("update_plan".to_string()); }
     if cfg.include_view_image_tool { tools.push("view_image".to_string()); }
     if cfg.include_web_search_request { tools.push("web_search_request".to_string()); }
@@ -54,6 +61,10 @@ pub fn render_tools_instructions(cfg: &ToolsConfig, approval_mode_hint: Option<&
     }
     if cfg.include_apply_patch_tool {
         lines.push("- apply_patch: propose a unified diff to edit files. Keep edits minimal and correct.".to_string());
+    }
+    if cfg.include_slides_tools {
+        lines.push("- slides_write: write slide files under slides/ (create/overwrite/append).".to_string());
+        lines.push("- slides_apply_patch: apply a restricted apply_patch affecting only slides/ files.".to_string());
     }
     if cfg.include_plan_tool { lines.push("- update_plan: refine your task plan concisely.".to_string()); }
     if cfg.include_view_image_tool { lines.push("- view_image: request to view an image by path.".to_string()); }

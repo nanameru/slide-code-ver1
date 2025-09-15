@@ -9,6 +9,7 @@ members = [
     "core", "protocol",
     "file-search",
     "tui",
+    "slides-tools",
 ]
 resolver = "2"
 
