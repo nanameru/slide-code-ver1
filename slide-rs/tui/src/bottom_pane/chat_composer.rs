@@ -254,8 +254,9 @@ impl WidgetRef for &ChatComposer {
         ])
         .areas(area);
 
-        // Left border: always orange regardless of focus
-        let border_style = Style::default().fg(Color::Rgb(255, 165, 0));
+        // Left border: always light green regardless of focus
+        // Using RGB for a soft light‑green tone.
+        let border_style = Style::default().fg(Color::Rgb(144, 238, 144));
 
         Block::default()
             .borders(Borders::LEFT)
