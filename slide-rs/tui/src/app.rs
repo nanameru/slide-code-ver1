@@ -11,6 +11,7 @@ use ratatui::{
     widgets::{Clear, Paragraph},
     Frame, Terminal,
 };
+// use crate::custom_terminal::Terminal;
 use std::{io, path::PathBuf, time::Instant};
 use std::io::Write as _;
 use tokio::time::{sleep, Duration};
@@ -192,7 +193,7 @@ impl App {
         ]);
 
         // Insert user message directly to terminal
-        insert_history_lines(terminal, vec![user_line]);
+        // insert_history_lines(terminal, vec![user_line]); // Disabled for now
 
         // Keep in messages for compatibility
         self.messages.push(format!("You: {}", text));
@@ -414,11 +415,11 @@ impl App {
 }
 
 pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
-    // Setup terminal for inline viewport (no alternate screen)
+    // Setup terminal with standard Terminal (no alternate screen mode)
     enable_raw_mode()?;
     let stdout = io::stdout();
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    let mut terminal = ratatui::Terminal::new(backend)?;
 
     let mut app = App::new_with_recents(init_recent_files);
     // Spawn core agent
@@ -533,6 +534,9 @@ where
         width: size.width,
         height: input_height,
     };
+
+    // Update viewport area to match current terminal size
+    // terminal.set_viewport_area(input_area); // Disabled for now
 
     terminal.draw(|f| {
         draw_input_ui(f, app, input_area);
@@ -707,7 +711,7 @@ where
                 Span::raw(": "),
                 Span::raw(delta.clone()),
             ]);
-            insert_history_lines(terminal, vec![assistant_line]);
+            // insert_history_lines(terminal, vec![assistant_line]); // Disabled for now
 
             app.messages.push(format!("Assistant: {}", delta));
             append_log(&format!("AssistantΔ: {}", delta));
@@ -719,7 +723,7 @@ where
                 Span::raw(": "),
                 Span::raw(message.clone()),
             ]);
-            insert_history_lines(terminal, vec![assistant_line]);
+            // insert_history_lines(terminal, vec![assistant_line]); // Disabled for now
 
             app.messages.push(format!("Assistant: {}", message));
             append_log(&format!("Assistant: {}", message));

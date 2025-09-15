@@ -7,6 +7,7 @@ pub mod app_event_sender;
 pub mod user_approval_widget;
 pub mod widgets;
 pub mod insert_history;
+pub mod custom_terminal;
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
