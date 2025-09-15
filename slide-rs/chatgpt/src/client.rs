@@ -128,8 +128,21 @@ impl OpenAiModelClient {
                                         if let Some(rest) = line.strip_prefix("data: ") {
                                             if rest == "[DONE]" { let _ = tx.send(String::new()).await; return; }
                                             if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) {
-                                                if let Some(delta) = v["choices"][0]["delta"]["content"].as_str() {
-                                                    if tx.send(delta.to_string()).await.is_err() { return; }
+                                                // Try Chat Completions: choices.0.delta.content as string
+                                                if let Some(s) = v["choices"][0]["delta"]["content"].as_str() {
+                                                    if !s.is_empty() { if tx.send(s.to_string()).await.is_err() { return; } }
+                                                } else {
+                                                    // Try Responses-like: choices.0.delta.content as array of blocks
+                                                    if let Some(arr) = v["choices"][0]["delta"]["content"].as_array() {
+                                                        for item in arr {
+                                                            let t = item["text"].as_str().or_else(|| item["content"].as_str());
+                                                            if let Some(text) = t { if !text.is_empty() { if tx.send(text.to_string()).await.is_err() { return; } } }
+                                                        }
+                                                    }
+                                                    // Minimal surfacing for tool_calls (show that a tool was requested)
+                                                    if v["choices"][0]["delta"]["tool_calls"].is_array() {
+                                                        let _ = tx.send("[tool_call] model proposed a tool operation".to_string()).await;
+                                                    }
                                                 }
                                             } else {
                                                 append_log(&format!("SSE JSON parse error on: {}", rest));

@@ -1,0 +1,11 @@
+/Users/kimurataiyou/slide-code-test/target/release/deps/socket2-88b03cf0e288a813.d: /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.0/src/lib.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.0/src/sockaddr.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.0/src/socket.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.0/src/sockref.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.0/src/sys/unix.rs
+
+/Users/kimurataiyou/slide-code-test/target/release/deps/libsocket2-88b03cf0e288a813.rlib: /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.0/src/lib.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.0/src/sockaddr.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.0/src/socket.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.0/src/sockref.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.0/src/sys/unix.rs
+
+/Users/kimurataiyou/slide-code-test/target/release/deps/libsocket2-88b03cf0e288a813.rmeta: /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.0/src/lib.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.0/src/sockaddr.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.0/src/socket.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.0/src/sockref.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.0/src/sys/unix.rs
+
+/Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.0/src/lib.rs:
+/Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.0/src/sockaddr.rs:
+/Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.0/src/socket.rs:
+/Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.0/src/sockref.rs:
+/Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.0/src/sys/unix.rs:

@@ -1,0 +1,9 @@
+/Users/kimurataiyou/slide-code-test/target/debug/deps/tree_sitter_bash-f2508ef6283d45e6.d: /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-bash-0.25.0/bindings/rust/lib.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-bash-0.25.0/bindings/rust/../../src/node-types.json /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-bash-0.25.0/bindings/rust/../../queries/highlights.scm
+
+/Users/kimurataiyou/slide-code-test/target/debug/deps/libtree_sitter_bash-f2508ef6283d45e6.rlib: /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-bash-0.25.0/bindings/rust/lib.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-bash-0.25.0/bindings/rust/../../src/node-types.json /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-bash-0.25.0/bindings/rust/../../queries/highlights.scm
+
+/Users/kimurataiyou/slide-code-test/target/debug/deps/libtree_sitter_bash-f2508ef6283d45e6.rmeta: /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-bash-0.25.0/bindings/rust/lib.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-bash-0.25.0/bindings/rust/../../src/node-types.json /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-bash-0.25.0/bindings/rust/../../queries/highlights.scm
+
+/Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-bash-0.25.0/bindings/rust/lib.rs:
+/Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-bash-0.25.0/bindings/rust/../../src/node-types.json:
+/Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-bash-0.25.0/bindings/rust/../../queries/highlights.scm:

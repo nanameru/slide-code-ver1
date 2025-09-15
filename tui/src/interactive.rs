@@ -18,6 +18,8 @@ pub struct InteractiveApp {
     input: String,
     messages: Vec<String>,
     codex: Option<Codex>,
+    // Buffer for streaming assistant message
+    assistant_streaming: bool,
 }
 
 impl InteractiveApp {
@@ -27,6 +29,7 @@ impl InteractiveApp {
             input: String::new(),
             messages: Vec::new(),
             codex: None,
+            assistant_streaming: false,
         }
     }
 
@@ -48,45 +51,42 @@ impl InteractiveApp {
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
-        // Start event processing
-        let codex_clone = self.codex.clone();
-        tokio::spawn(async move {
-            if let Some(codex) = codex_clone {
-                while let Some(event) = codex.next_event().await {
-                    match event {
-                        slide_core::codex2::Event::AgentMessageDelta { delta } => {
-                            // Handle streaming response
-                        }
-                        slide_core::codex2::Event::TaskComplete => {
-                            // Task completed
-                        }
-                        slide_core::codex2::Event::Error { message } => {
-                            eprintln!("Error: {}", message);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        });
-
         while self.running {
             terminal.draw(|f| self.draw(f))?;
 
-            if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        self.running = false;
+            // Prefer non-blocking, responsive multiplexing of input and codex events
+            tokio::select! {
+                // Handle model events if codex is available
+                maybe_ev = async {
+                    if let Some(c) = self.codex.clone() { c.next_event().await } else { None }
+                }, if self.codex.is_some() => {
+                    if let Some(ev) = maybe_ev {
+                        self.handle_event(ev);
                     }
-                    KeyCode::Enter => {
-                        self.submit_input().await;
+                }
+                // Handle terminal key events (non-blocking poll in blocking thread)
+                event_result = tokio::task::spawn_blocking(|| event::poll(std::time::Duration::from_millis(0))) => {
+                    if let Ok(Ok(true)) = event_result {
+                        if let Ok(ev) = event::read() {
+                            if let Event::Key(key) = ev {
+                                match key.code {
+                                    KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                        self.running = false;
+                                    }
+                                    KeyCode::Enter => {
+                                        self.submit_input().await;
+                                    }
+                                    KeyCode::Char(c) => {
+                                        self.input.push(c);
+                                    }
+                                    KeyCode::Backspace => {
+                                        self.input.pop();
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
                     }
-                    KeyCode::Char(c) => {
-                        self.input.push(c);
-                    }
-                    KeyCode::Backspace => {
-                        self.input.pop();
-                    }
-                    _ => {}
                 }
             }
         }
@@ -109,6 +109,33 @@ impl InteractiveApp {
                     text: input_text 
                 }).await;
             }
+        }
+    }
+
+    fn handle_event(&mut self, ev: slide_core::codex2::Event) {
+        match ev {
+            slide_core::codex2::Event::AgentMessageDelta { delta } => {
+                if !self.assistant_streaming {
+                    self.messages.push("Assistant: ".to_string());
+                    self.assistant_streaming = true;
+                }
+                if let Some(last) = self.messages.last_mut() {
+                    last.push_str(&delta);
+                }
+            }
+            slide_core::codex2::Event::AgentMessage { message } => {
+                self.messages.push(format!("Assistant: {}", message));
+                self.assistant_streaming = false;
+            }
+            slide_core::codex2::Event::TaskComplete => {
+                // Close streaming message if any
+                self.assistant_streaming = false;
+            }
+            slide_core::codex2::Event::Error { message } => {
+                self.messages.push(format!("Error: {}", message));
+                self.assistant_streaming = false;
+            }
+            _ => {}
         }
     }
 
