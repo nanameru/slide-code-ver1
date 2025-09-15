@@ -45,7 +45,7 @@ impl<'a> ratatui::widgets::Widget for ChatWidget<'a> {
         }
         // Compute slice based on scroll_top and viewport_height (excluding borders handled by caller)
         let total = lines.len();
-        let vp = if self.viewport_height == 0 { area.height.saturating_sub(2) as usize } else { self.viewport_height };
+        let vp = if self.viewport_height == 0 { area.height as usize } else { self.viewport_height };
         let max_top = total.saturating_sub(vp);
         let top = self.scroll_top.min(max_top);
         let bottom = (top + vp).min(total);

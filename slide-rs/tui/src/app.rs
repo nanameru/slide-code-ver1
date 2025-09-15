@@ -1,6 +1,6 @@
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -72,6 +72,8 @@ pub struct App {
     input: String,
     // Chat scroll state (top line index within rendered message lines)
     chat_scroll_top: usize,
+    chat_follow_bottom: bool,
+    chat_viewport_height: usize,
     // UI state
     show_modal: bool,
     modal_title: String,
@@ -101,6 +103,21 @@ impl App {
         Self::new_with_recents(Vec::new())
     }
 
+    fn clamp_scroll_top(&mut self) {
+        let max_top = self.max_scroll_top();
+        if self.chat_scroll_top > max_top { self.chat_scroll_top = max_top; }
+    }
+
+    fn max_scroll_top(&self) -> usize {
+        let total_lines = if self.messages.is_empty() { 1 } else { self.messages.len() * 2 - 1 };
+        total_lines.saturating_sub(self.chat_viewport_height)
+    }
+
+    fn follow_bottom_after_change(&mut self) {
+        if self.chat_follow_bottom { self.chat_scroll_top = self.max_scroll_top(); }
+        else { self.clamp_scroll_top(); }
+    }
+
     pub fn new_with_recents(recent_files: Vec<String>) -> Self {
         let (app_tx_raw, app_rx) = tokio::sync::mpsc::unbounded_channel();
         let app_tx = AppEventSender::new(app_tx_raw);
@@ -116,6 +133,8 @@ impl App {
             ],
             input: String::new(),
             chat_scroll_top: 0,
+            chat_follow_bottom: true,
+            chat_viewport_height: 0,
             show_modal: false,
             modal_title: "Help".into(),
             modal_body: "Keybindings:\n- i: Insert (compose)\n- Esc: Normal\n- Enter: Send message\n- h: Toggle help modal\n- c: Clear messages\n- q: Quit".into(),
@@ -164,6 +183,7 @@ impl App {
             let to_send = text.clone();
             agent.submit_text_bg(to_send);
         }
+        self.follow_bottom_after_change();
     }
 
     pub fn handle_key_event(&mut self, key: KeyEvent) {
@@ -197,27 +217,6 @@ impl App {
                 KeyCode::Char('h') => {
                     self.show_modal = !self.show_modal;
                 }
-                // Chat scroll bindings
-                KeyCode::Up | KeyCode::Char('k') => {
-                    self.chat_scroll_top = self.chat_scroll_top.saturating_sub(1);
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    self.chat_scroll_top = self.chat_scroll_top.saturating_add(1);
-                }
-                KeyCode::PageUp => {
-                    // step will be clamped on render based on viewport height
-                    self.chat_scroll_top = self.chat_scroll_top.saturating_sub(10);
-                }
-                KeyCode::PageDown => {
-                    self.chat_scroll_top = self.chat_scroll_top.saturating_add(10);
-                }
-                KeyCode::Home | KeyCode::Char('g') if key.modifiers.is_empty() => {
-                    self.chat_scroll_top = 0;
-                }
-                KeyCode::End | KeyCode::Char('G') => {
-                    // clamp to end during render; here just make it large
-                    self.chat_scroll_top = usize::MAX / 2;
-                }
                 KeyCode::Char(':') => {
                     self.open_command_palette();
                 }
@@ -227,6 +226,7 @@ impl App {
                 KeyCode::Char('c') => {
                     self.messages.clear();
                     self.chat_scroll_top = 0;
+                    self.chat_follow_bottom = true;
                 }
                 KeyCode::Enter => {
                     if self.show_modal {
@@ -236,6 +236,21 @@ impl App {
                 _ => {}
             },
         }
+    }
+
+    fn on_mouse_wheel(&mut self, delta_lines: isize) {
+        // Mouse scroll controls chat history only; disable follow-to-bottom on user scroll
+        if delta_lines == 0 { return; }
+        if delta_lines < 0 {
+            // scroll down (towards bottom)
+            self.chat_scroll_top = self.chat_scroll_top.saturating_add(delta_lines.unsigned_abs() as usize);
+        } else {
+            // scroll up (towards top)
+            let dec = delta_lines as usize;
+            self.chat_scroll_top = self.chat_scroll_top.saturating_sub(dec);
+        }
+        self.clamp_scroll_top();
+        self.chat_follow_bottom = self.chat_scroll_top >= self.max_scroll_top();
     }
 
     fn open_command_palette(&mut self) {
@@ -405,7 +420,7 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -437,26 +452,39 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
             }
         }
 
+        // Update chat viewport height based on terminal size (header=1, composer=3, status=1)
+        if let Ok(sz) = terminal.size() { app.chat_viewport_height = sz.height.saturating_sub(1 + 3 + 1) as usize; }
+
         // Draw UI
         terminal.draw(|f| ui(f, &app))?;
 
         // Handle events with timeout
         if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                // If bottom pane has an active view, let it intercept first
-                if app.bottom_pane.is_intercepting_input() || matches!(app.mode, Mode::Insert) {
-                    if let Some(res) = app.bottom_pane.handle_key_event(key) {
-                        if let crate::bottom_pane::InputResult::Submitted(text) = res {
-                            if !text.is_empty() { app.messages.push(format!("You: {}", text)); }
-                            if let Some(agent) = &app.agent {
-                                let to_send = text.clone();
-                                agent.submit_text_bg(to_send);
+            match event::read()? {
+                Event::Mouse(mev) => {
+                    match mev.kind {
+                        MouseEventKind::ScrollUp => app.on_mouse_wheel(3),
+                        MouseEventKind::ScrollDown => app.on_mouse_wheel(-3),
+                        _ => {}
+                    }
+                }
+                Event::Key(key) => {
+                    // If bottom pane has an active view, let it intercept first
+                    if app.bottom_pane.is_intercepting_input() || matches!(app.mode, Mode::Insert) {
+                        if let Some(res) = app.bottom_pane.handle_key_event(key) {
+                            if let crate::bottom_pane::InputResult::Submitted(text) = res {
+                                if !text.is_empty() { app.messages.push(format!("You: {}", text)); }
+                                if let Some(agent) = &app.agent {
+                                    let to_send = text.clone();
+                                    agent.submit_text_bg(to_send);
+                                }
                             }
                         }
+                    } else {
+                        app.handle_key_event(key);
                     }
-                } else {
-                    app.handle_key_event(key);
                 }
+                _ => {}
             }
         }
 
@@ -486,7 +514,7 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
 
     // Cleanup terminal
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), DisableMouseCapture, LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
     let exit = if let Some(path) = app.preview_path { AppExit::Preview(path) } else { AppExit::Quit };
@@ -512,29 +540,18 @@ fn ui(f: &mut Frame, app: &App) {
     ]));
     f.render_widget(header, chunks[0]);
 
-    // Body split: chat | help
+    // Body: single full-width chat area (help panel removed)
     let body = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+        .constraints([Constraint::Percentage(100)])
         .split(chunks[1]);
 
-    let chat_height = body[0].height.saturating_sub(2); // minus borders
-    let chat_widget = ChatWidget::new(&app.messages).with_scroll(app.chat_scroll_top, chat_height as usize);
+    let chat_height = body[0].height as usize;
+    // store viewport height to compute max scroll top & follow-bottom updates
+    let mut app_ref = unsafe { (app as *const App as *mut App).as_mut().unwrap() };
+    app_ref.chat_viewport_height = chat_height;
+    let chat_widget = ChatWidget::new(&app.messages).with_scroll(app.chat_scroll_top, chat_height);
     f.render_widget(chat_widget, body[0]);
-
-    // Right panel with quick hints
-    let help_text = Text::from(vec![
-        Line::from("Mode: NORMAL — Scroll chat"),
-        Line::from("  ↑/k, ↓/j — move; PgUp/PgDn — page; Home/g, End/G — jump"),
-        Line::from(""),
-        Line::from("Mode: INSERT — Type and send"),
-        Line::from("  Enter — send, Esc — back to NORMAL"),
-        Line::from(""),
-        Line::from("Other:"),
-        Line::from("  : — command palette, / — file search, c — clear, q — quit"),
-    ]);
-    let help = Paragraph::new(help_text);
-    f.render_widget(help, body[1]);
 
     // Composer/bottom pane area
     // Render bottom pane regardless of mode; focusは modeに応じて将来切替
@@ -615,23 +632,28 @@ fn handle_core_event(app: &mut App, ev: CoreEvent) {
             if let Some(last) = app.messages.last_mut() {
                 if last.starts_with("Assistant:") {
                     last.push_str(&delta);
+                    app.follow_bottom_after_change();
                     return;
                 }
             }
             app.messages.push(format!("Assistant: {}", delta));
             append_log(&format!("AssistantΔ: {}", delta));
+            app.follow_bottom_after_change();
         }
         CoreEvent::AgentMessage { message } => {
             app.messages.push(format!("Assistant: {}", message));
             append_log(&format!("Assistant: {}", message));
+            app.follow_bottom_after_change();
         }
         CoreEvent::ExecCommandBegin { command, .. } => {
             app.messages.push(format!("[exec] $ {}", command.join(" ")));
             append_log(&format!("[exec] $ {}", command.join(" ")));
+            app.follow_bottom_after_change();
         }
         CoreEvent::ExecCommandEnd { exit_code, .. } => {
             app.messages.push(format!("[exec] exit {}", exit_code));
             append_log(&format!("[exec] exit {}", exit_code));
+            app.follow_bottom_after_change();
         }
         CoreEvent::ApplyPatchApprovalRequest { id, changes, reason } => {
             // Convert map of path->desc into a vector of display strings
@@ -647,14 +669,17 @@ fn handle_core_event(app: &mut App, ev: CoreEvent) {
         CoreEvent::PatchApplyBegin { .. } => {
             app.messages.push("[patch] applying...".into());
             append_log("[patch] applying...");
+            app.follow_bottom_after_change();
         }
         CoreEvent::PatchApplyEnd { success, .. } => {
             app.messages.push(format!("[patch] {}", if success { "ok" } else { "failed" }));
             append_log(&format!("[patch] {}", if success { "ok" } else { "failed" }));
+            app.follow_bottom_after_change();
         }
         CoreEvent::TurnDiff { unified_diff } => {
             app.messages.push(format!("[diff]\n{}", unified_diff));
             append_log("[diff] updated");
+            app.follow_bottom_after_change();
         }
         CoreEvent::TaskComplete => {
             app.status = RunStatus::Idle;
@@ -664,6 +689,7 @@ fn handle_core_event(app: &mut App, ev: CoreEvent) {
             app.messages.push(format!("[error] {}", message));
             app.status = RunStatus::Error;
             append_log(&format!("[error] {}", message));
+            app.follow_bottom_after_change();
         }
         CoreEvent::ShutdownComplete => {}
         CoreEvent::ExecApprovalRequest { id, command, cwd: _, reason } => {
