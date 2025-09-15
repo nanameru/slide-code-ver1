@@ -138,6 +138,11 @@ impl BottomPane {
         // ChatComposer implements WidgetRef for &Self
         self.composer.render_ref(content, buf);
     }
+
+    /// Whether there is an active overlay view that should intercept input
+    pub fn is_intercepting_input(&self) -> bool {
+        self.active_view.is_some()
+    }
 }
 
 impl BottomPane {

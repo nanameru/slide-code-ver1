@@ -443,8 +443,8 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
         // Handle events with timeout
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
-                // Forward to bottom pane in insert mode first
-                if matches!(app.mode, Mode::Insert) {
+                // If bottom pane has an active view, let it intercept first
+                if app.bottom_pane.is_intercepting_input() || matches!(app.mode, Mode::Insert) {
                     if let Some(res) = app.bottom_pane.handle_key_event(key) {
                         if let crate::bottom_pane::InputResult::Submitted(text) = res {
                             if !text.is_empty() { app.messages.push(format!("You: {}", text)); }
