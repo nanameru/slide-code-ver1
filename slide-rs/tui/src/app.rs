@@ -16,7 +16,7 @@ use std::io::Write as _;
 use tokio::time::{sleep, Duration};
 
 use crate::widgets::{
-    banner::banner_message,
+    banner::{banner_history_lines, banner_message},
     chat::ChatWidget,
     modal::Modal,
     status_bar::StatusBar,
@@ -436,6 +436,10 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
             app.messages.push("(failed to start agent; using local demo)".into());
         }
     }
+
+    // Prepare inline viewport and emit startup banner into scrollback
+    draw_input_area_only(&mut terminal, &mut app)?;
+    insert_history_lines(&mut terminal, banner_history_lines());
 
     loop {
         // Drain app events from UI widgets
