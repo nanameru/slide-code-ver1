@@ -1,3 +1,4 @@
+pub mod banner;
 pub mod chat;
 pub mod composer;
 pub mod status_bar;

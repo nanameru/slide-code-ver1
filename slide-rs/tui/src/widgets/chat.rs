@@ -1,3 +1,4 @@
+use crate::widgets::banner::MESSAGE_PREFIX as BANNER_PREFIX;
 use ratatui::{
     layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
@@ -35,28 +36,39 @@ impl<'a> ChatWidget<'a> {
         let mut lines: Vec<Line> = Vec::with_capacity(self.messages.len() * 2);
 
         for (i, message) in self.messages.iter().enumerate() {
-            // メッセージの種別によってスタイルを変更
-            if message.starts_with("You:") {
-                let content = message.strip_prefix("You:").unwrap_or(message).trim();
-                lines.push(Line::from(vec![
-                    Span::styled("You", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                    Span::raw(": "),
-                    Span::raw(content),
-                ]));
-            } else if message.starts_with("Assistant:") || message.starts_with("AI:") {
-                let content = message
-                    .strip_prefix("Assistant:")
-                    .or_else(|| message.strip_prefix("AI:"))
-                    .unwrap_or(message)
-                    .trim();
-                lines.push(Line::from(vec![
-                    Span::styled("Assistant", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                    Span::raw(": "),
-                    Span::raw(content),
-                ]));
-            } else {
-                // Generic message
-                lines.push(Line::from(Span::raw(message.as_str())));
+            let mut handled = false;
+            if message.starts_with(BANNER_PREFIX) {
+                let art = message[BANNER_PREFIX.len()..].trim_matches('\n');
+                for line in art.lines() {
+                    lines.push(Line::from(Span::raw(line)));
+                }
+                handled = true;
+            }
+
+            if !handled {
+                // メッセージの種別によってスタイルを変更
+                if message.starts_with("You:") {
+                    let content = message.strip_prefix("You:").unwrap_or(message).trim();
+                    lines.push(Line::from(vec![
+                        Span::styled("You", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                        Span::raw(": "),
+                        Span::raw(content),
+                    ]));
+                } else if message.starts_with("Assistant:") || message.starts_with("AI:") {
+                    let content = message
+                        .strip_prefix("Assistant:")
+                        .or_else(|| message.strip_prefix("AI:"))
+                        .unwrap_or(message)
+                        .trim();
+                    lines.push(Line::from(vec![
+                        Span::styled("Assistant", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                        Span::raw(": "),
+                        Span::raw(content),
+                    ]));
+                } else {
+                    // Generic message
+                    lines.push(Line::from(Span::raw(message.as_str())));
+                }
             }
 
             // Add spacing between messages (except for the last one)

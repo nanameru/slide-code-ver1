@@ -16,6 +16,7 @@ use std::io::Write as _;
 use tokio::time::{sleep, Duration};
 
 use crate::widgets::{
+    banner::banner_message,
     chat::ChatWidget,
     modal::Modal,
     status_bar::StatusBar,
@@ -138,6 +139,7 @@ impl App {
             status: RunStatus::Idle,
             last_tick: Instant::now(),
             messages: vec![
+                banner_message(),
                 "Welcome to Slide TUI!".into(),
                 "Type i to start composing, Enter to send.".into(),
                 "Press h for help. Press q to quit.".into(),
