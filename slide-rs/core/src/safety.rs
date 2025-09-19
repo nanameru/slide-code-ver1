@@ -1,4 +1,5 @@
 use crate::seatbelt::SandboxPolicy;
+use crate::approval_manager::ApprovalManager;
 use slide_common::ApprovalMode;
 use std::collections::HashSet;
 use std::path::Path;
@@ -13,8 +14,8 @@ pub enum SafetyCheck {
 pub fn assess_patch_safety(
     patch_content: &str,
     policy: ApprovalMode,
-    sandbox_policy: &SandboxPolicy,
-    cwd: &Path,
+    _sandbox_policy: &SandboxPolicy,
+    _cwd: &Path,
 ) -> SafetyCheck {
     if patch_content.trim().is_empty() {
         return SafetyCheck::Reject {
@@ -37,9 +38,9 @@ pub fn assess_patch_safety(
 pub fn assess_command_safety(
     command: &[String],
     approval_policy: ApprovalMode,
-    sandbox_policy: &SandboxPolicy,
+    _sandbox_policy: &SandboxPolicy,
     approved: &HashSet<Vec<String>>,
-    with_escalated_permissions: bool,
+    _with_escalated_permissions: bool,
 ) -> SafetyCheck {
     if command.is_empty() {
         return SafetyCheck::Reject {
@@ -63,6 +64,61 @@ pub fn assess_command_safety(
     }
 }
 
+/// New improved command safety assessment with full codex-style approval system
+pub fn assess_command_safety_v2(
+    command: &[String],
+    approval_manager: &ApprovalManager,
+    sandbox_policy: &SandboxPolicy,
+    with_escalated_permissions: bool,
+) -> SafetyCheck {
+    if command.is_empty() {
+        return SafetyCheck::Reject {
+            reason: "empty command".to_string(),
+        };
+    }
+
+    // Check for dangerous commands regardless of approval policy
+    if is_dangerous_command(command) && with_escalated_permissions {
+        match sandbox_policy {
+            SandboxPolicy::DangerFullAccess => {
+                // Even in danger mode, ask for confirmation on destructive commands
+                SafetyCheck::AskUser
+            }
+            _ => SafetyCheck::AskUser,
+        }
+    } else if approval_manager.needs_approval(command, with_escalated_permissions) {
+        SafetyCheck::AskUser
+    } else {
+        SafetyCheck::AutoApprove
+    }
+}
+
+fn is_dangerous_command(command: &[String]) -> bool {
+    if command.is_empty() {
+        return false;
+    }
+
+    let cmd = &command[0];
+    let dangerous_commands = [
+        "rm", "rmdir", "mv", "cp", "dd", "mkfs", "fdisk",
+        "sudo", "su", "chmod", "chown", "kill", "killall",
+        "halt", "reboot", "shutdown", "systemctl", "service",
+        "mount", "umount", "format", "del", "erase"
+    ];
+
+    if dangerous_commands.contains(&cmd.as_str()) {
+        return true;
+    }
+
+    // Check for dangerous patterns in the full command
+    let full_command = command.join(" ");
+    full_command.contains("rm -rf") ||
+    full_command.contains("--force") ||
+    full_command.contains("--recursive") ||
+    full_command.contains(">/dev/") ||
+    full_command.contains("2>/dev/null") && full_command.contains("rm")
+}
+
 fn is_known_safe_command(command: &[String]) -> bool {
     if command.is_empty() {
         return false;
@@ -75,8 +131,12 @@ fn is_known_safe_command(command: &[String]) -> bool {
     )
 }
 
-// Legacy compatibility
-use crate::apply_patch::SafetyDecision;
+// Legacy compatibility - define our own SafetyDecision for now
+#[derive(Debug, Clone, PartialEq)]
+pub enum SafetyDecision {
+    AutoApprove,
+    AskUser,
+}
 
 pub fn decide_command_safety(command: &str, network_allowed: bool) -> SafetyDecision {
     let cmd = command.trim();

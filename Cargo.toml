@@ -6,7 +6,6 @@ members = [
     "common",
     "tui",
     "protocol",
-    "apply-patch",
     "file-search",
 ]
 resolver = "2"

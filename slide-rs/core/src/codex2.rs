@@ -111,6 +111,8 @@ impl Codex {
                             include_web_search_request: false,
                             use_streamable_shell_tool: true,
                             include_slides_tools: true,
+                            approval_policy: crate::approval_manager::AskForApproval::default(),
+                            sandbox_policy: crate::seatbelt::SandboxPolicy::default(),
                         });
                         let tool_instructions = render_tools_instructions(&tools_cfg, approval_hint.as_deref());
                         // Append user message to conversation memory
