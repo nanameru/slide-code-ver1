@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 use crate::client::{ModelClient, ResponseEvent};
 use slide_chatgpt::client::{ChatGptClient, SlideRequest};
 use crate::openai_tools::{ToolsConfig, ToolsConfigParams, render_tools_instructions};
+use crate::tool_executor::ToolExecutor;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReviewDecision { Approved, ApprovedForSession, Denied, Abort }
@@ -136,6 +137,16 @@ impl Codex {
                             }
                         }
                         let composed = format!("{}{}\n\nUser: {}", tool_instructions, history_block, text);
+                        // ツール実行エンジンを作成（ToolsConfigParamsから設定を取得）
+                        let approval_policy = crate::approval_manager::AskForApproval::default();
+                        let sandbox_policy = crate::seatbelt::SandboxPolicy::default();
+                        let mut tool_executor = ToolExecutor::new(
+                            approval_policy,
+                            sandbox_policy,
+                            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                            crate::config_types::ShellEnvironmentPolicy::default(),
+                        );
+
                         match client.stream(composed).await {
                             Ok(mut rx) => {
                                 let mut assembled_resp = String::new();
@@ -148,12 +159,39 @@ impl Codex {
                                                 .await;
                                         }
                                         ResponseEvent::Completed => {
-                                            // Store assistant message into conversation
-                                            if !assembled_resp.is_empty() {
-                                                convo.push(("assistant".to_string(), assembled_resp.clone()));
-                                                if convo.len() > MAX_HISTORY_MESSAGES {
-                                                    let drop = convo.len() - MAX_HISTORY_MESSAGES;
-                                                    convo.drain(0..drop);
+                                            // AIレスポンス完了時にツール実行を処理
+                                            match tool_executor.process_response(&assembled_resp).await {
+                                                Ok(processed_response) => {
+                                                    // ツール実行結果があれば追加送信
+                                                    if processed_response != assembled_resp {
+                                                        let tool_output = &processed_response[assembled_resp.len()..];
+                                                        let _ = tx_event
+                                                            .send(Event::AgentMessageDelta { delta: tool_output.to_string() })
+                                                            .await;
+                                                    }
+
+                                                    // Store complete response (including tool results) into conversation
+                                                    if !processed_response.is_empty() {
+                                                        convo.push(("assistant".to_string(), processed_response));
+                                                        if convo.len() > MAX_HISTORY_MESSAGES {
+                                                            let drop = convo.len() - MAX_HISTORY_MESSAGES;
+                                                            convo.drain(0..drop);
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    let _ = tx_event.send(Event::Error {
+                                                        message: format!("Tool execution failed: {}", e)
+                                                    }).await;
+
+                                                    // Store original response on error
+                                                    if !assembled_resp.is_empty() {
+                                                        convo.push(("assistant".to_string(), assembled_resp.clone()));
+                                                        if convo.len() > MAX_HISTORY_MESSAGES {
+                                                            let drop = convo.len() - MAX_HISTORY_MESSAGES;
+                                                            convo.drain(0..drop);
+                                                        }
+                                                    }
                                                 }
                                             }
                                             let _ = tx_event.send(Event::TaskComplete).await;

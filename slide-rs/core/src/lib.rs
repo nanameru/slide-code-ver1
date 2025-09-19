@@ -10,4 +10,6 @@ pub mod exec_sandboxed;
 pub mod openai_tools;
 pub mod safety;
 pub mod seatbelt;
+pub mod tool_executor;
+pub mod parse_command;
 pub use codex2 as codex;

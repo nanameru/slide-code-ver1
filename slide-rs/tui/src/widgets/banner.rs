@@ -13,14 +13,9 @@ pub const STARTUP_BANNER: &str = r"  _____    _         _____    _____     _____
 |_____/  |______|  |_____|  |_____/   |______|         \_____|   \____/   |_____/   |______|  
 ";
 
-const BANNER_COLORS: &[Color] = &[
-    Color::Rgb(255, 105, 180), // hot pink
-    Color::Rgb(255, 140, 105), // coral
-    Color::Rgb(255, 204, 92),  // amber
-    Color::Rgb(134, 214, 128), // mint
-    Color::Rgb(102, 204, 255), // sky blue
-    Color::Rgb(171, 148, 255), // lavender
-];
+const GRADIENT_START: Color = Color::Rgb(102, 204, 255); // sky blue
+const GRADIENT_MID: Color = Color::Rgb(128, 224, 176); // aqua mint
+const GRADIENT_END: Color = Color::Rgb(171, 148, 255); // lavender
 
 /// Build the banner message that can be pushed into the chat history list.
 pub fn banner_message() -> String {
@@ -29,16 +24,34 @@ pub fn banner_message() -> String {
 
 /// Lines rendered into the terminal scrollback at startup.
 pub fn banner_history_lines() -> Vec<Line<'static>> {
+    let max_width = STARTUP_BANNER
+        .lines()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(1);
+
     let mut lines: Vec<Line> = STARTUP_BANNER
         .lines()
-        .enumerate()
-        .map(|(idx, line)| {
-            let color = BANNER_COLORS
-                .get(idx)
-                .copied()
-                .unwrap_or(Color::Rgb(144, 202, 249));
-            let style = Style::default().fg(color).add_modifier(Modifier::BOLD);
-            Line::from(vec![Span::styled(line.to_string(), style)])
+        .map(|line| {
+            let spans: Vec<Span> = line
+                .chars()
+                .enumerate()
+                .map(|(col, ch)| {
+                    if ch == ' ' {
+                        return Span::raw(" ");
+                    }
+                    let ratio = col as f32 / (max_width as f32 - 1.0);
+                    let color = if ratio < 0.5 {
+                        lerp_color(GRADIENT_START, GRADIENT_MID, ratio * 2.0)
+                    } else {
+                        lerp_color(GRADIENT_MID, GRADIENT_END, (ratio - 0.5) * 2.0)
+                    };
+                    let style = Style::default().fg(color).add_modifier(Modifier::BOLD);
+                    Span::styled(ch.to_string(), style)
+                })
+                .collect();
+            Line::from(spans)
         })
         .collect();
 
@@ -64,4 +77,17 @@ pub fn banner_history_lines() -> Vec<Line<'static>> {
     )]));
 
     lines
+}
+
+fn lerp(a: u8, b: u8, t: f32) -> u8 {
+    ((a as f32 + (b as f32 - a as f32) * t).round().clamp(0.0, 255.0)) as u8
+}
+
+fn lerp_color(start: Color, end: Color, t: f32) -> Color {
+    if let Color::Rgb(sr, sg, sb) = start {
+        if let Color::Rgb(er, eg, eb) = end {
+            return Color::Rgb(lerp(sr, er, t), lerp(sg, eg, t), lerp(sb, eb, t));
+        }
+    }
+    end
 }
