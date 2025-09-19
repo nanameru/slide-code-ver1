@@ -80,7 +80,9 @@ pub fn banner_history_lines() -> Vec<Line<'static>> {
 }
 
 fn lerp(a: u8, b: u8, t: f32) -> u8 {
-    ((a as f32 + (b as f32 - a as f32) * t).round().clamp(0.0, 255.0)) as u8
+    ((a as f32 + (b as f32 - a as f32) * t)
+        .round()
+        .clamp(0.0, 255.0)) as u8
 }
 
 fn lerp_color(start: Color, end: Color, t: f32) -> Color {
