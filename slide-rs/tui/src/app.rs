@@ -1,4 +1,3 @@
-use crate::custom_terminal::{Frame, Terminal};
 use anyhow::Result;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind},
@@ -11,25 +10,26 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Clear, Paragraph},
 };
-use std::io::Write as _;
+use crate::custom_terminal::{Terminal, Frame};
 use std::{io, path::PathBuf, time::Instant};
+use std::io::Write as _;
 use tokio::time::{sleep, Duration};
 
-use crate::agent::AgentHandle;
-use crate::app_event_sender::{AppEvent, AppEventSender};
-use crate::bottom_pane::{BottomPane, BottomPaneParams};
-use crate::insert_history::insert_history_lines;
-use crate::streaming::AnswerStreamState;
-use crate::user_approval_widget::ApprovalRequest;
 use crate::widgets::{
     banner::{banner_history_lines, banner_message},
     chat::ChatWidget,
-    list_selection::ListSelection,
     modal::Modal,
     status_bar::StatusBar,
+    list_selection::ListSelection,
 };
+use crate::agent::AgentHandle;
 use slide_core::codex::Event as CoreEvent;
 use slide_core::codex::Op;
+use crate::app_event_sender::{AppEvent, AppEventSender};
+use crate::user_approval_widget::ApprovalRequest;
+use crate::bottom_pane::{BottomPane, BottomPaneParams};
+use crate::insert_history::insert_history_lines;
+use crate::streaming::AnswerStreamState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -106,9 +106,7 @@ pub struct App {
 impl App {
     fn clamp_scroll_top(&mut self) {
         let max_top = self.max_scroll_top();
-        if self.chat_scroll_top > max_top {
-            self.chat_scroll_top = max_top;
-        }
+        if self.chat_scroll_top > max_top { self.chat_scroll_top = max_top; }
     }
 
     fn max_scroll_top(&self) -> usize {
@@ -117,24 +115,17 @@ impl App {
     }
 
     fn follow_bottom_after_change(&mut self) {
-        if self.chat_follow_bottom {
-            self.chat_scroll_top = usize::MAX;
-        } else {
-            self.clamp_scroll_top();
-        }
+        if self.chat_follow_bottom { self.chat_scroll_top = usize::MAX; } else { self.clamp_scroll_top(); }
     }
     pub fn new() -> Self {
         Self::new_with_recents(Vec::new())
     }
 
+
     fn total_chat_lines(&self) -> usize {
         // messages rendered as: for each message add a blank line after, except last; then prompt line
         // number of lines from messages = if empty 0 else messages*2 - 1
-        let msg_lines = if self.messages.is_empty() {
-            0
-        } else {
-            self.messages.len() * 2 - 1
-        };
+        let msg_lines = if self.messages.is_empty() { 0 } else { self.messages.len() * 2 - 1 };
         // plus one prompt line always
         msg_lines + 1
     }
@@ -185,8 +176,7 @@ impl App {
 
     fn on_tick(&mut self) {
         // Simulate finishing a running task after 1.5s
-        if self.status == RunStatus::Running
-            && self.last_tick.elapsed() > Duration::from_millis(1500)
+        if self.status == RunStatus::Running && self.last_tick.elapsed() > Duration::from_millis(1500)
         {
             self.status = RunStatus::Idle;
         }
@@ -205,9 +195,7 @@ impl App {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "You",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         )));
         for l in text.lines() {
             lines.push(Line::from(l.to_string()));
@@ -238,14 +226,8 @@ impl App {
 
         // Global shortcuts
         match key {
-            KeyEvent {
-                code: KeyCode::Char('q'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Esc, ..
-            } => {
+            KeyEvent { code: KeyCode::Char('q'), modifiers: KeyModifiers::CONTROL, .. }
+            | KeyEvent { code: KeyCode::Esc, .. } => {
                 if self.show_modal {
                     self.show_modal = false;
                 } else {
@@ -253,26 +235,15 @@ impl App {
                 }
                 return;
             }
-            KeyEvent {
-                code: KeyCode::Char('h'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
+            KeyEvent { code: KeyCode::Char('h'), modifiers: KeyModifiers::CONTROL, .. } => {
                 self.show_modal = !self.show_modal;
                 return;
             }
-            KeyEvent {
-                code: KeyCode::Char('c'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
+            KeyEvent { code: KeyCode::Char('c'), modifiers: KeyModifiers::CONTROL, .. } => {
                 self.messages.clear();
                 return;
             }
-            KeyEvent {
-                code: KeyCode::Char('i'),
-                ..
-            } if self.mode == Mode::Normal => {
+            KeyEvent { code: KeyCode::Char('i'), .. } if self.mode == Mode::Normal => {
                 self.mode = Mode::Insert;
                 return;
             }
@@ -293,14 +264,10 @@ impl App {
 
     fn on_mouse_wheel(&mut self, delta_lines: isize) {
         // Mouse scroll controls chat history only; disable follow-to-bottom on user scroll
-        if delta_lines == 0 {
-            return;
-        }
+        if delta_lines == 0 { return; }
         if delta_lines < 0 {
             // scroll down (towards bottom)
-            self.chat_scroll_top = self
-                .chat_scroll_top
-                .saturating_add(delta_lines.unsigned_abs() as usize);
+            self.chat_scroll_top = self.chat_scroll_top.saturating_add(delta_lines.unsigned_abs() as usize);
         } else {
             // scroll up (towards top)
             let dec = delta_lines as usize;
@@ -310,6 +277,7 @@ impl App {
         self.chat_follow_bottom = self.chat_scroll_top >= self.max_scroll_top();
     }
 
+
     fn handle_popup_key(&mut self, kind: PopupKind, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => {
@@ -317,8 +285,7 @@ impl App {
             }
             KeyCode::Down => {
                 if !self.popup_filtered_indices.is_empty() {
-                    self.popup_selected = (self.popup_selected + 1)
-                        .min(self.popup_filtered_indices.len().saturating_sub(1));
+                    self.popup_selected = (self.popup_selected + 1).min(self.popup_filtered_indices.len().saturating_sub(1));
                 }
             }
             KeyCode::Up => {
@@ -345,11 +312,7 @@ impl App {
                 }
             }
             KeyCode::Enter => {
-                if let Some(idx) = self
-                    .popup_filtered_indices
-                    .get(self.popup_selected)
-                    .copied()
-                {
+                if let Some(idx) = self.popup_filtered_indices.get(self.popup_selected).copied() {
                     match kind {
                         PopupKind::Command => self.exec_command_palette(idx),
                         PopupKind::FileSearch => self.exec_file_open(idx),
@@ -385,38 +348,42 @@ impl App {
         let cmd = &self.popup_items[idx];
         self.active_popup = None;
         match cmd.as_str() {
-            "New Slide from Template" => match create_slide_from_template() {
-                Ok(path) => {
-                    self.modal_title = "Created".into();
-                    self.modal_body = format!("Created new slide: {}", path);
-                    self.show_modal = true;
-                    self.mru_add(path);
+            "New Slide from Template" => {
+                match create_slide_from_template() {
+                    Ok(path) => {
+                        self.modal_title = "Created".into();
+                        self.modal_body = format!("Created new slide: {}", path);
+                        self.show_modal = true;
+                        self.mru_add(path);
+                    }
+                    Err(e) => {
+                        self.modal_title = "Error".into();
+                        self.modal_body = format!("Failed to create slide: {}", e);
+                        self.show_modal = true;
+                    }
                 }
-                Err(e) => {
-                    self.modal_title = "Error".into();
-                    self.modal_body = format!("Failed to create slide: {}", e);
-                    self.show_modal = true;
-                }
-            },
+            }
             "Open Slide Preview (from file)" => {
                 // TODO: Add file search back if needed
                 self.modal_title = "Not Implemented".into();
                 self.modal_body = "File search functionality not yet implemented".into();
                 self.show_modal = true;
             }
-            "Save Chat to slides/draft.md" => match save_chat_as_draft(&self.messages) {
-                Ok(path) => {
-                    self.modal_title = "Saved".into();
-                    self.modal_body = format!("Saved to {}", path);
-                    self.show_modal = true;
-                    self.mru_add(path);
+            "Save Chat to slides/draft.md" => {
+                match save_chat_as_draft(&self.messages) {
+                    Ok(path) => {
+                        self.modal_title = "Saved".into();
+                        self.modal_body = format!("Saved to {}", path);
+                        self.show_modal = true;
+                        self.mru_add(path);
+                    }
+                    Err(e) => {
+                        self.modal_title = "Error".into();
+                        self.modal_body = format!("Failed to save draft: {}", e);
+                        self.show_modal = true;
+                    }
                 }
-                Err(e) => {
-                    self.modal_title = "Error".into();
-                    self.modal_body = format!("Failed to save draft: {}", e);
-                    self.show_modal = true;
-                }
-            },
+            }
             "Toggle Help" => {
                 self.show_modal = !self.show_modal;
             }
@@ -455,7 +422,7 @@ impl App {
 }
 
 pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
-    // 端末全体にチャットと入力欄を描画する全画面モード
+    // 通常スクリーン＋インラインビューポート（下部だけ描画）
     enable_raw_mode()?;
     let stdout = io::stdout();
     let backend = CrosstermBackend::new(stdout);
@@ -466,13 +433,12 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
     match crate::agent::AgentHandle::spawn().await {
         Ok(agent) => app.agent = Some(agent),
         Err(_e) => {
-            app.messages
-                .push("(failed to start agent; using local demo)".into());
+            app.messages.push("(failed to start agent; using local demo)".into());
         }
     }
 
-    // 初回の全画面描画。メモリ内チャット履歴（ASCII バナー含む）を表示する。
-    draw_full_app(&mut terminal, &mut app)?;
+    // Prepare inline viewport and emit startup banner into scrollback
+    draw_input_area_only(&mut terminal, &mut app)?;
     insert_history_lines(&mut terminal, banner_history_lines());
 
     loop {
@@ -482,41 +448,52 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
                 AppEvent::ExecApproval { id, decision } => {
                     if let Some(agent) = &app.agent {
                         let c = agent.codex.clone();
-                        tokio::spawn(async move {
-                            let _ = c.submit(Op::ExecApproval { id, decision }).await;
-                        });
+                        tokio::spawn(async move { let _ = c.submit(Op::ExecApproval { id, decision }).await; });
                     }
                 }
                 AppEvent::PatchApproval { id, decision } => {
                     if let Some(agent) = &app.agent {
                         let c = agent.codex.clone();
-                        tokio::spawn(async move {
-                            let _ = c.submit(Op::PatchApproval { id, decision }).await;
-                        });
+                        tokio::spawn(async move { let _ = c.submit(Op::PatchApproval { id, decision }).await; });
                     }
                 }
             }
         }
 
+        // Update chat viewport height based on terminal size (header=1, status=1)
+        if let Ok(sz) = terminal.size() {
+            let h = sz.height.saturating_sub(1 + 1) as usize;
+            // Chat height handled by layout
+        }
+
+        // 下部の入力エリアのみ描画（履歴はスクロールバックに積む）
+        draw_input_area_only(&mut terminal, &mut app)?;
+
         // Handle events with timeout
         if event::poll(Duration::from_millis(100))? {
             match event::read()? {
-                Event::Mouse(mev) => match mev.kind {
-                    MouseEventKind::ScrollUp => app.on_mouse_wheel(3),
-                    MouseEventKind::ScrollDown => app.on_mouse_wheel(-3),
-                    _ => {}
-                },
+                Event::Mouse(mev) => {
+                    match mev.kind {
+                        MouseEventKind::ScrollUp => app.on_mouse_wheel(3),
+                        MouseEventKind::ScrollDown => app.on_mouse_wheel(-3),
+                        _ => {}
+                    }
+                }
                 Event::Key(key) => {
                     app.handle_key_event(key, &mut terminal);
                 }
                 Event::Resize(_, _) => {
-                    // サイズ変更後も自動追従する
+                    // Recompute viewport height and snap to bottom so latest is visible
+                    if let Ok(sz) = terminal.size() {
+                        let h = sz.height.saturating_sub(1 + 1) as usize;
+                        // Chat height handled by layout
+                    }
+                    // Keep latest visible on resize only when follow-bottom is enabled
                     if app.chat_follow_bottom {
                         app.chat_scroll_top = usize::MAX; // レンダでクランプ
                     } else {
                         app.clamp_scroll_top();
                     }
-                    // Keep latest visible on resize only when follow-bottom is enabled
                 }
                 _ => {}
             }
@@ -541,9 +518,6 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
             break;
         }
 
-        // 最新状態を全画面で描画
-        draw_full_app(&mut terminal, &mut app)?;
-
         // Tick and sleep
         app.on_tick();
         sleep(Duration::from_millis(16)).await;
@@ -553,39 +527,63 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
     disable_raw_mode()?;
     terminal.show_cursor()?;
 
-    let exit = if let Some(path) = app.preview_path {
-        AppExit::Preview(path)
-    } else {
-        AppExit::Quit
-    };
-    Ok(RunResult {
-        exit,
-        recent_files: app.recent_files,
-    })
+    let exit = if let Some(path) = app.preview_path { AppExit::Preview(path) } else { AppExit::Quit };
+    Ok(RunResult { exit, recent_files: app.recent_files })
 }
 
-fn draw_full_app<B>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()>
+fn draw_input_area_only<B>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()>
 where
     B: ratatui::backend::Backend,
 {
-    if let Ok(size) = terminal.size() {
-        let full_area = Rect {
-            x: 0,
-            y: 0,
-            width: size.width,
-            height: size.height,
-        };
-        terminal.set_viewport_area(full_area);
-    }
+    let size = terminal.size()?;
+    let input_height = 3; // Status bar + input area
+    let input_area = Rect {
+        x: 0,
+        y: size.height.saturating_sub(input_height),
+        width: size.width,
+        height: input_height,
+    };
+
+    // Update viewport area to match current terminal size
+    terminal.set_viewport_area(input_area);
 
     terminal.draw(|f| {
-        render_full_ui(f, app);
+        draw_input_ui(f, app, input_area);
     })?;
 
     Ok(())
 }
 
-fn render_full_ui(f: &mut Frame, app: &mut App) {
+fn draw_input_ui(f: &mut Frame, app: &mut App, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .split(area);
+
+    // Status bar
+    let status = match app.status {
+        RunStatus::Idle => "Idle",
+        RunStatus::Running => "Running…",
+        RunStatus::Error => "Error",
+    };
+    let mode = match app.mode {
+        Mode::Normal => "NORMAL",
+        Mode::Insert => "INSERT",
+        Mode::Help => "HELP",
+    };
+    let status_bar = StatusBar::new(mode, status, "i:insert  q:quit");
+    f.render_widget(status_bar, chunks[0]);
+
+    // Bottom pane (input area) using render_ref
+    app.bottom_pane.render_ref(chunks[1], f.buffer_mut());
+
+    if let Some((x, y)) = app.bottom_pane.cursor_pos(chunks[1]) {
+        f.set_cursor_position((x, y));
+    }
+}
+
+// Old full-screen UI function (kept for reference)
+fn _ui_fullscreen(f: &mut Frame, app: &mut App) {
     // Layout: header | body | status
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -598,12 +596,7 @@ fn render_full_ui(f: &mut Frame, app: &mut App) {
 
     // Header
     let header = Paragraph::new(Line::from(vec![
-        Span::styled(
-            "Slide TUI ",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled("Slide TUI ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
         Span::raw("— Interactive Mode"),
     ]));
     f.render_widget(header, chunks[0]);
@@ -620,8 +613,6 @@ fn render_full_ui(f: &mut Frame, app: &mut App) {
             Constraint::Length(bottom_pane_height),
         ])
         .split(chunks[1]);
-
-    app.chat_viewport_height = body_layout[0].height as usize;
 
     // Chat history (simplified, no custom scrollbar)
     let chat_widget = ChatWidget::new(&app.messages);
@@ -751,86 +742,57 @@ where
         CoreEvent::ExecCommandBegin { command, .. } => {
             app.messages.push(format!("[exec] $ {}", command.join(" ")));
             append_log(&format!("[exec] $ {}", command.join(" ")));
-        }
+            }
         CoreEvent::ExecCommandEnd { exit_code, .. } => {
             app.messages.push(format!("[exec] exit {}", exit_code));
             append_log(&format!("[exec] exit {}", exit_code));
-        }
-        CoreEvent::ApplyPatchApprovalRequest {
-            id,
-            changes,
-            reason,
-        } => {
+            }
+        CoreEvent::ApplyPatchApprovalRequest { id, changes, reason } => {
             // Convert map of path->desc into a vector of display strings
             let mut items: Vec<String> = changes
                 .into_iter()
                 .map(|(p, v)| format!("{}: {}", p.display(), v))
                 .collect();
             items.sort();
-            let req = ApprovalRequest::Patch {
-                id,
-                changes: items,
-                reason,
-            };
-            app.bottom_pane
-                .show_approval_modal(req, app.app_event_tx.clone());
+            let req = ApprovalRequest::Patch { id, changes: items, reason };
+            app.bottom_pane.show_approval_modal(req, app.app_event_tx.clone());
             append_log("[approve] apply_patch requested");
         }
         CoreEvent::PatchApplyBegin { .. } => {
             app.messages.push("[patch] applying...".into());
             append_log("[patch] applying...");
-        }
+            }
         CoreEvent::PatchApplyEnd { success, .. } => {
-            app.messages
-                .push(format!("[patch] {}", if success { "ok" } else { "failed" }));
-            append_log(&format!(
-                "[patch] {}",
-                if success { "ok" } else { "failed" }
-            ));
-        }
+            app.messages.push(format!("[patch] {}", if success { "ok" } else { "failed" }));
+            append_log(&format!("[patch] {}", if success { "ok" } else { "failed" }));
+            }
         CoreEvent::TurnDiff { unified_diff } => {
             app.messages.push(format!("[diff]\n{}", unified_diff));
             append_log("[diff] updated");
-        }
+            }
         CoreEvent::TaskComplete => {
             app.status = RunStatus::Idle;
             // 念のため残りをフラッシュ
             let tail = app.answer_stream.finalize();
-            if !tail.is_empty() {
-                insert_history_lines(terminal, tail);
-            }
+            if !tail.is_empty() { insert_history_lines(terminal, tail); }
             append_log("[task] complete");
         }
         CoreEvent::Error { message } => {
             app.messages.push(format!("[error] {}", message));
             app.status = RunStatus::Error;
             append_log(&format!("[error] {}", message));
-        }
+            }
         CoreEvent::ShutdownComplete => {}
-        CoreEvent::ExecApprovalRequest {
-            id,
-            command,
-            cwd: _,
-            reason,
-        } => {
-            let req = ApprovalRequest::Exec {
-                id,
-                command,
-                reason,
-            };
-            app.bottom_pane
-                .show_approval_modal(req, app.app_event_tx.clone());
+        CoreEvent::ExecApprovalRequest { id, command, cwd: _, reason } => {
+            let req = ApprovalRequest::Exec { id, command, reason };
+            app.bottom_pane.show_approval_modal(req, app.app_event_tx.clone());
             append_log("[approve] exec requested");
         }
     }
 }
 
 fn append_log(line: &str) {
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/slide.log")
-    {
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/slide.log") {
         let _ = writeln!(f, "{}", line);
     }
 }
@@ -838,8 +800,8 @@ fn append_log(line: &str) {
 fn find_markdown_files() -> Vec<String> {
     let mut result = Vec::new();
     let roots = ["slides"];
-    for root in roots {
-        if let Ok(meta) = std::fs::metadata(root) {
+    for root in roots { 
+        if let Ok(meta) = std::fs::metadata(root) { 
             if meta.is_dir() {
                 walk_md(root, &mut result);
             }
