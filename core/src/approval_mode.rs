@@ -1,1 +1,0 @@
-pub use slide_common::ApprovalMode;

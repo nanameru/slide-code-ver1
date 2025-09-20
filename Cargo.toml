@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "core",
     "chatgpt",
     "common",
     "tui",
