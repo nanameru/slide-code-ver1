@@ -266,7 +266,7 @@ impl WidgetRef for &ChatComposer {
 
         Block::default()
             .borders(Borders::LEFT)
-            .border_type(BorderType::QuadrantOutside)
+            .border_type(BorderType::Plain)
             .border_style(border_style)
             .render_ref(
                 Rect::new(textarea_rect.x, textarea_rect.y, 1, textarea_rect.height),

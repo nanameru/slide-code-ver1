@@ -94,7 +94,12 @@ impl Default for Config {
         });
 
         Self {
-            sandbox_policy: SandboxPolicy::default(),
+            sandbox_policy: SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![],
+                network_access: false,
+                exclude_tmpdir_env_var: false,
+                exclude_system_tmp: false,
+            },
             approval_policy: AskForApproval::default(),
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             include_view_image_tool: false,

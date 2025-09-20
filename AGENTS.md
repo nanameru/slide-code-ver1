@@ -1,7 +1,8 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-slide-rs/ anchors the Rust workspace. cli/ wires the compiled crates into the command-line entrypoint, tui/ renders the ratatui terminal UI, core/ owns session orchestration, tool dispatch, and safety constraints, common/ centralizes config IO helpers, and chatgpt/ wraps the HTTP client. slide-cli/ is the Node launcher for distributing the compiled binary. Generated outputs live under slides/, while docs/ stores architectural notes and RFCs. Use slide.sh for local end-to-end runs; keep crate-level features isolated when adding new modules.
+slide-rs/ anchors th
+e Rust workspace. cli/ wires the compiled crates into the command-line entrypoint, tui/ renders the ratatui terminal UI, core/ owns session orchestration, tool dispatch, and safety constraints, common/ centralizes config IO helpers, and chatgpt/ wraps the HTTP client. slide-cli/ is the Node launcher for distributing the compiled binary. Generated outputs live under slides/, while docs/ stores architectural notes and RFCs. Use slide.sh for local end-to-end runs; keep crate-level features isolated when adding new modules.
 
 ## Build, Test, and Development Commands
 - `npm run dev` – builds the Rust workspace and hot-reloads the CLI.

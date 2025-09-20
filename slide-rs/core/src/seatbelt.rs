@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
+const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl");
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -99,49 +102,66 @@ impl SandboxPolicy {
     }
 }
 
-pub fn build_seatbelt_policy(policy: SandboxPolicy) -> String {
+pub fn build_seatbelt_policy(policy: SandboxPolicy, workspace_root: Option<&Path>) -> String {
     match policy {
         SandboxPolicy::DangerFullAccess => {
             // No restrictions
             "(version 1)\n(allow default)".to_string()
         }
         SandboxPolicy::ReadOnly => {
-            // Read-only access
-            format!(
-                r#"(version 1)
-(deny default)
-(allow file-read*)
-(allow process-info*)
-(allow sysctl-read)
-(allow mach-lookup)
-"#
-            )
+            let mut policy = String::from(MACOS_SEATBELT_BASE_POLICY);
+            policy.push_str(
+                "\n; allow read-only file operations\n(allow file-read*)\n(allow process-info*)\n(allow system-info)\n(allow mach-lookup)\n",
+            );
+            policy
         }
         SandboxPolicy::WorkspaceWrite {
             writable_roots,
             network_access,
-            ..
+            exclude_tmpdir_env_var,
+            exclude_system_tmp,
         } => {
-            let mut policy = format!(
-                r#"(version 1)
-(deny default)
-(allow file-read*)
-(allow process-info*)
-(allow sysctl-read)
-(allow mach-lookup)
-"#
+            let mut policy = String::from(MACOS_SEATBELT_BASE_POLICY);
+            policy.push_str(
+                "\n; allow read/write operations within workspace roots\n(allow file-read*)\n(allow process-info*)\n(allow system-info)\n(allow mach-lookup)\n",
             );
 
-            // Add write access to workspace and writable roots
-            for root in writable_roots {
-                policy.push_str(&format!(
-                    "(allow file-write* (subpath \"{}\"))\n",
-                    root.display()
-                ));
+            let mut roots: Vec<PathBuf> = Vec::new();
+            if let Some(root) = workspace_root {
+                roots.push(root.to_path_buf());
+            }
+            roots.extend(writable_roots.clone());
+
+            if !exclude_system_tmp {
+                let tmp = PathBuf::from("/tmp");
+                if tmp.is_dir() {
+                    roots.push(tmp);
+                }
+            }
+
+            if !exclude_tmpdir_env_var {
+                if let Some(tmpdir) = std::env::var_os("TMPDIR") {
+                    if !tmpdir.is_empty() {
+                        roots.push(PathBuf::from(tmpdir));
+                    }
+                }
+            }
+
+            let mut seen = HashSet::new();
+            for root in roots {
+                let canonical_root = root.canonicalize().unwrap_or_else(|_| root.clone());
+                if seen.insert(canonical_root.clone()) {
+                    policy.push_str(&format!(
+                        "(allow file-write* (subpath \"{}\"))\n",
+                        canonical_root.display()
+                    ));
+                }
             }
 
             if network_access {
-                policy.push_str("(allow network*)\n");
+                policy.push_str(
+                    "(allow network-outbound)\n(allow network-inbound)\n(allow system-socket)\n",
+                );
             }
 
             policy

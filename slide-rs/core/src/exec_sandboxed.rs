@@ -366,7 +366,7 @@ impl SandboxedExecutor {
         timeout_ms: Option<u64>,
         sandbox_policy: &SandboxPolicy,
     ) -> Result<BasicExecResult, ExecError> {
-        let policy = build_seatbelt_policy(sandbox_policy.clone());
+        let policy = build_seatbelt_policy(sandbox_policy.clone(), Some(working_dir));
 
         // Create a temporary policy file
         let policy_file =

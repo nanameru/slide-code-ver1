@@ -2,7 +2,7 @@ use ratatui::{
     layout::Alignment,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 
 pub struct StatusBar<'a> {
@@ -40,7 +40,6 @@ impl<'a> ratatui::widgets::Widget for StatusBar<'a> {
             Span::styled(self.hints, Style::default().fg(Color::Gray)),
         ]);
         let widget = Paragraph::new(line)
-            .block(Block::default().borders(Borders::ALL))
             .alignment(Alignment::Left);
         widget.render(area, buf);
     }

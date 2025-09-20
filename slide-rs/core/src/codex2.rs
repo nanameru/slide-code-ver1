@@ -9,6 +9,7 @@ use crate::client::{ModelClient, ResponseEvent};
 use crate::openai_tools::{render_tools_instructions, ToolsConfig, ToolsConfigParams};
 use crate::tool_executor::ToolExecutor;
 use slide_chatgpt::client::{ChatGptClient, SlideRequest};
+use tracing::info;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReviewDecision {
@@ -244,57 +245,80 @@ impl Codex {
                                                         let mut appended = String::new();
 
                                                         for tool_call in tool_calls {
+                                                            // 入力詳細を生成
+                                                            let input_details = match &tool_call {
+                                                                crate::tool_executor::ToolCall::Shell { command, working_dir, with_escalated_permissions, justification, timeout_ms } => {
+                                                                    format!(
+                                                                        "tool=shell\ncommand={}\ncwd={}\nescalated={}\njustification={}\ntimeout_ms={}",
+                                                                        command.join(" "),
+                                                                        working_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "(default)".to_string()),
+                                                                        with_escalated_permissions,
+                                                                        justification.clone().unwrap_or_default(),
+                                                                        timeout_ms.map(|v| v.to_string()).unwrap_or_else(|| "(none)".to_string()),
+                                                                    )
+                                                                }
+                                                                crate::tool_executor::ToolCall::ReadFile { path } => {
+                                                                    format!("tool=read_file\npath={}", path.display())
+                                                                }
+                                                                crate::tool_executor::ToolCall::WriteFile { path, content } => {
+                                                                    format!("tool=write_file\npath={}\ncontent_bytes={}", path.display(), content.len())
+                                                                }
+                                                                crate::tool_executor::ToolCall::ApplyPatch { input } => {
+                                                                    format!("tool=apply_patch\npatch_bytes={}", input.len())
+                                                                }
+                                                                crate::tool_executor::ToolCall::ListFiles { path } => {
+                                                                    format!("tool=list_files\npath={}", path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| ".".to_string()))
+                                                                }
+                                                                crate::tool_executor::ToolCall::SearchFiles { query, path } => {
+                                                                    format!("tool=search_files\nquery='{}'\npath={}", query, path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| ".".to_string()))
+                                                                }
+                                                            };
+
                                                             let announce = format!(
-                                                                "\n\n[Tool Execution]\n▶ {}",
-                                                                tool_call.summary()
+                                                                "\n\n[Tool Execution]\n▶ {}\n\n[Tool Input]\n{}",
+                                                                tool_call.summary(),
+                                                                input_details
                                                             );
+                                                            // 画面表示
                                                             let _ = tx_event
                                                                 .send(Event::AgentMessageDelta {
                                                                     delta: announce.clone(),
                                                                 })
                                                                 .await;
                                                             appended.push_str(&announce);
+                                                            // ファイルログ
+                                                            info!(target: "slide.tools", input = %input_details, summary = %tool_call.summary(), "tool execution begin");
 
                                                             match tool_executor
                                                                 .execute_tool_call(tool_call)
                                                                 .await
                                                             {
                                                                 Ok(exec_output) => {
+                                                                    // 画面表示
                                                                     let block = format!(
-                                                                        "\n\n[Tool Execution Result]\n{}",
+                                                                        "\n\n[Tool Output]\n{}",
                                                                         exec_output
                                                                     );
                                                                     let _ = tx_event
-                                                                        .send(
-                                                                            Event::AgentMessageDelta {
-                                                                                delta: block.clone(),
-                                                                            },
-                                                                        )
+                                                                        .send(Event::AgentMessageDelta { delta: block.clone() })
                                                                         .await;
                                                                     appended.push_str(&block);
+                                                                    // ファイルログ
+                                                                    info!(target: "slide.tools", output = %exec_output, "tool execution end (ok)");
                                                                 }
                                                                 Err(err) => {
                                                                     let err_text = err.to_string();
-                                                                    let block = format!(
-                                                                        "\n\n[Tool Execution Result]\nFailed: {}",
-                                                                        err_text
-                                                                    );
+                                                                    // 画面表示
+                                                                    let block = format!("\n\n[Tool Output]\nFailed: {}", err_text);
                                                                     let _ = tx_event
-                                                                        .send(
-                                                                            Event::AgentMessageDelta {
-                                                                                delta: block.clone(),
-                                                                            },
-                                                                        )
+                                                                        .send(Event::AgentMessageDelta { delta: block.clone() })
                                                                         .await;
                                                                     let _ = tx_event
-                                                                        .send(Event::Error {
-                                                                            message: format!(
-                                                                                "Tool execution failed: {}",
-                                                                                err_text
-                                                                            ),
-                                                                        })
+                                                                        .send(Event::Error { message: format!("Tool execution failed: {}", err_text) })
                                                                         .await;
                                                                     appended.push_str(&block);
+                                                                    // ファイルログ
+                                                                    info!(target: "slide.tools", error = %err_text, "tool execution end (error)");
                                                                     break;
                                                                 }
                                                             }
