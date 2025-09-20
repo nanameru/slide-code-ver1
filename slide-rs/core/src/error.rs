@@ -105,25 +105,16 @@ pub enum ToolError {
     InvalidArguments { reason: String },
 
     #[error("Tool execution failed: {tool_name}, reason: {reason}")]
-    ExecutionFailed {
-        tool_name: String,
-        reason: String,
-    },
+    ExecutionFailed { tool_name: String, reason: String },
 
     #[error("Tool timeout: {tool_name} timed out after {timeout_ms}ms")]
-    Timeout {
-        tool_name: String,
-        timeout_ms: u64,
-    },
+    Timeout { tool_name: String, timeout_ms: u64 },
 
     #[error("Tool output parsing failed: {reason}")]
     OutputParsingFailed { reason: String },
 
     #[error("Tool initialization failed: {tool_name}, reason: {reason}")]
-    InitializationFailed {
-        tool_name: String,
-        reason: String,
-    },
+    InitializationFailed { tool_name: String, reason: String },
 
     #[error("Tool configuration invalid: {reason}")]
     InvalidConfiguration { reason: String },
@@ -174,18 +165,10 @@ impl ErrorReporter {
     /// Format error for user display
     pub fn format_user_error(error: &SlideError) -> String {
         match error {
-            SlideError::Execution(exec_err) => {
-                Self::format_execution_error(exec_err)
-            }
-            SlideError::Sandbox(sandbox_err) => {
-                Self::format_sandbox_error(sandbox_err)
-            }
-            SlideError::Tool(tool_err) => {
-                Self::format_tool_error(tool_err)
-            }
-            SlideError::Config(config_err) => {
-                Self::format_config_error(config_err)
-            }
+            SlideError::Execution(exec_err) => Self::format_execution_error(exec_err),
+            SlideError::Sandbox(sandbox_err) => Self::format_sandbox_error(sandbox_err),
+            SlideError::Tool(tool_err) => Self::format_tool_error(tool_err),
+            SlideError::Config(config_err) => Self::format_config_error(config_err),
             SlideError::Io(io_err) => {
                 format!("File operation failed: {}", io_err)
             }
@@ -260,7 +243,11 @@ impl ErrorReporter {
                     reason
                 )
             }
-            ToolError::FileOperationFailed { operation, path, reason } => {
+            ToolError::FileOperationFailed {
+                operation,
+                path,
+                reason,
+            } => {
                 format!(
                     "📁 File operation failed: {} on {}\n📝 Reason: {}\n💡 Check file permissions and path existence",
                     operation, path, reason

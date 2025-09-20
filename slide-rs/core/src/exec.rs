@@ -2,23 +2,19 @@
 use std::os::unix::process::ExitStatusExt;
 
 use std::collections::HashMap;
-use std::io;
 use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::time::Duration;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
+use async_channel::Sender as AsyncSender;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
-use async_channel::Sender as AsyncSender;
-use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
+use tokio::io::{AsyncReadExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::mpsc::{self, Sender};
 
 use crate::approval_manager::{ApprovalManager, ApprovalRequest, ApprovalResponse, AskForApproval};
-use crate::config_types::ShellEnvironmentPolicy;
-use crate::exec_env::create_env;
 use crate::is_safe_command::{explain_safety_concern, is_known_safe_command};
 use crate::seatbelt::SandboxPolicy;
 
@@ -260,11 +256,14 @@ async fn exec(
         }
     }
 
+    // Get timeout before moving params
+    let timeout = params.timeout_duration();
+
     // Prepare environment
     let env = if params.env.is_empty() {
         std::env::vars().collect()
     } else {
-        params.env
+        params.env.clone()
     };
 
     // Build command
@@ -280,7 +279,6 @@ async fn exec(
         .stdin(std::process::Stdio::null());
 
     // Execute with timeout
-    let timeout = params.timeout_duration();
     let child = cmd.spawn()?;
 
     match tokio::time::timeout(timeout, collect_output(child, stdout_stream)).await {
@@ -582,7 +580,8 @@ pub async fn spawn_command_under_seatbelt(
         .stderr(std::process::Stdio::piped())
         .stdin(std::process::Stdio::null());
 
-    let child = cmd.spawn()
+    let child = cmd
+        .spawn()
         .with_context(|| format!("Failed to spawn sandboxed command: {:?}", command))?;
 
     match tokio::time::timeout(timeout, collect_output(child, stdout_stream)).await {
@@ -606,7 +605,10 @@ pub async fn spawn_command_under_seatbelt(
             let duration_ms = start.elapsed().as_millis() as u64;
             Ok(RawExecToolCallOutput {
                 stdout: String::new(),
-                stderr: format!("Sandboxed command timed out after {}ms", timeout.as_millis()),
+                stderr: format!(
+                    "Sandboxed command timed out after {}ms",
+                    timeout.as_millis()
+                ),
                 exit_code: TIMEOUT_CODE,
                 duration_ms,
                 timed_out: true,
@@ -670,7 +672,8 @@ pub async fn spawn_command_under_linux_sandbox(
         .stderr(std::process::Stdio::piped())
         .stdin(std::process::Stdio::null());
 
-    let child = cmd.spawn()
+    let child = cmd
+        .spawn()
         .with_context(|| format!("Failed to spawn sandboxed command: {:?}", command))?;
 
     match tokio::time::timeout(timeout, collect_output(child, stdout_stream)).await {
@@ -694,7 +697,10 @@ pub async fn spawn_command_under_linux_sandbox(
             let duration_ms = start.elapsed().as_millis() as u64;
             Ok(RawExecToolCallOutput {
                 stdout: String::new(),
-                stderr: format!("Sandboxed command timed out after {}ms", timeout.as_millis()),
+                stderr: format!(
+                    "Sandboxed command timed out after {}ms",
+                    timeout.as_millis()
+                ),
                 exit_code: TIMEOUT_CODE,
                 duration_ms,
                 timed_out: true,
