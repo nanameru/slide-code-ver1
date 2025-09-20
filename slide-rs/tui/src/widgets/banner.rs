@@ -6,11 +6,12 @@ use ratatui::text::{Line, Span};
 pub const MESSAGE_PREFIX: &str = "__SLIDE_ASCII_BANNER__";
 
 const STARTUP_BANNER_LINES: &[&str] = &[
-    " █████   ██      ███   █████   ██████    █████   ████   █████   ██████",
-    "██      ██      ██    ██  ██  ██       ██      ██  ██  ██  ██  ██    ",
-    " █████  ██      ██    ██  ██  █████     ██      ██  ██  ██  ██  █████ ",
-    "     ██ ██      ██    ██  ██  ██       ██      ██  ██  ██  ██  ██    ",
-    " █████   ███████ ███   █████   ██████    █████   ████   █████   ██████",
+    // "SLIDE" block letters, 5 lines tall, fixed column widths
+    " █████   █        ███████  ██████   ███████",
+    "█        █        █   █   █     █  █      ",
+    " █████   █        █   █   █     █  ██████ ",
+    "      █  █        █   █   █     █  █      ",
+    " █████   ███████  ███████  ██████   ███████",
 ];
 
 const RAINBOW_STOPS: &[Color] = &[
@@ -34,15 +35,10 @@ pub fn banner_message() -> String {
 /// Lines used to render the banner both in terminal scrollback and inside the
 /// chat widget.
 pub fn banner_lines() -> Vec<Line<'static>> {
-    let max_width = STARTUP_BANNER_LINES
-        .iter()
-        .map(|line| line.chars().count())
-        .max()
-        .unwrap_or(1);
-
     let mut lines: Vec<Line> = STARTUP_BANNER_LINES
         .iter()
         .map(|line| {
+            let line_len = line.chars().count();
             let spans: Vec<Span> = line
                 .chars()
                 .enumerate()
@@ -50,8 +46,8 @@ pub fn banner_lines() -> Vec<Line<'static>> {
                     if ch == ' ' {
                         return Span::raw(" ");
                     }
-                    let ratio = if max_width > 1 {
-                        col as f32 / (max_width as f32 - 1.0)
+                    let ratio = if line_len > 1 {
+                        col as f32 / (line_len as f32 - 1.0)
                     } else {
                         0.0
                     };
