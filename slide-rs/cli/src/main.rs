@@ -36,14 +36,29 @@ async fn cli_main(
             Ok(s) => s,
             Err(_) => return, // port in use; skip
         };
-        // Record the initial size of the log file so we only show logs from this run
-        let initial_len: u64 = std::fs::metadata("/tmp/slide.log").map(|m| m.len()).unwrap_or(0);
+        // Record the initial size of the log file so we only show logs from this run.
+        // If the file does not exist yet, lazily set the offset when it first appears.
+        let mut initial_len: Option<u64> = std::fs::metadata("/tmp/slide.log").ok().map(|m| m.len());
         loop {
             if let Ok(Some(req)) = server.recv_timeout(Duration::from_millis(200)) {
+                // Refresh initial_len lazily and handle truncation/rotation
+                if initial_len.is_none() {
+                    if let Ok(meta) = std::fs::metadata("/tmp/slide.log") {
+                        initial_len = Some(meta.len());
+                    }
+                }
+                if let (Some(offset), Ok(meta)) = (initial_len, std::fs::metadata("/tmp/slide.log")) {
+                    if meta.len() < offset {
+                        // File truncated/rotated; reset baseline to current size
+                        initial_len = Some(meta.len());
+                    }
+                }
+
                 let body = match std::fs::read("/tmp/slide.log") {
                     Ok(bytes) => {
-                        if (bytes.len() as u64) > initial_len {
-                            let start = initial_len as usize;
+                        let start_u64 = initial_len.unwrap_or(bytes.len() as u64);
+                        if (bytes.len() as u64) > start_u64 {
+                            let start = start_u64 as usize;
                             String::from_utf8_lossy(&bytes[start..]).to_string()
                         } else {
                             "".to_string()
