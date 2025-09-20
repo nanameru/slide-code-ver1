@@ -205,22 +205,28 @@ impl App {
             return;
         }
 
-        // 見出し + 本文（接頭辞なし）で履歴へ
+        // 1行目に "You: " を付けて履歴へ（複数行は2行目以降をそのまま表示）
         let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "You",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )));
-        for l in text.lines() {
-            lines.push(Line::from(l.to_string()));
+        let mut iter = text.lines();
+        if let Some(first) = iter.next() {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "You",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(": "),
+                Span::raw(first.to_string()),
+            ]));
+        }
+        for rest in iter {
+            lines.push(Line::from(rest.to_string()));
         }
         insert_history_lines(terminal, lines);
 
         // Keep in messages for compatibility
-        self.messages.push(text.clone());
+        self.messages.push(format!("You: {}", text));
         append_log(&format!("You: {}", text));
 
         if let Some(agent) = &self.agent {
@@ -761,6 +767,22 @@ where
             // デルタをストリーミング状態に反映し、完成行のみ履歴へ積む
             let lines = app.answer_stream.push_delta(&delta);
             if !lines.is_empty() {
+                // 最初のデルタの場合に限り、Assistant 見出しを挿入
+                let need_header = app
+                    .messages
+                    .last()
+                    .map(|m| !m.starts_with("Assistant:"))
+                    .unwrap_or(true);
+                if need_header {
+                    insert_history_lines(terminal, vec![Line::from(vec![
+                        Span::styled(
+                            "Assistant",
+                            Style::default()
+                                .fg(Color::Green)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ])]);
+                }
                 insert_history_lines(terminal, lines);
             }
             // 互換目的でメモリ上のメッセージも更新
@@ -785,6 +807,22 @@ where
             let mut tail = app.answer_stream.finalize();
             pending.append(&mut tail);
             if !pending.is_empty() {
+                // 完了時にもヘッダが未表示なら付与
+                let need_header = app
+                    .messages
+                    .last()
+                    .map(|m| !m.starts_with("Assistant:"))
+                    .unwrap_or(true);
+                if need_header {
+                    insert_history_lines(terminal, vec![Line::from(vec![
+                        Span::styled(
+                            "Assistant",
+                            Style::default()
+                                .fg(Color::Green)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ])]);
+                }
                 insert_history_lines(terminal, pending);
             }
             app.messages.push(format!("Assistant: {}", message));
