@@ -1,6 +1,15 @@
 [workspace]
 members = [
-    "file-search",
+    "slide-rs/cli",
+    "slide-rs/tui",
+    "slide-rs/core",
+    "slide-rs/chatgpt",
+    "slide-rs/common",
+    "slide-rs/ansi-escape",
+    "slide-rs/apply-patch",
+    "slide-rs/arg0",
+    "slide-rs/protocol",
+    "slide-rs/slides-tools",
 ]
 resolver = "2"
 

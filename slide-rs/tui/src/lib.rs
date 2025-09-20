@@ -9,6 +9,7 @@ pub mod history_store;
 pub mod insert_history;
 pub mod interactive;
 pub mod preview;
+pub mod status_indicator_widget;
 pub mod streaming;
 pub mod user_approval_widget;
 pub mod widgets;

@@ -4,8 +4,6 @@ use ratatui::widgets::WidgetRef;
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
-    text::Line,
-    widgets::{Block, Borders, Paragraph, Wrap},
 };
 
 mod bottom_pane_view;
@@ -23,6 +21,7 @@ pub mod selection_popup_common;
 pub mod textarea;
 use crate::app_event_sender::AppEventSender;
 use crate::user_approval_widget::ApprovalRequest;
+use crate::status_indicator_widget::StatusIndicatorWidget;
 use approval_modal_view::ApprovalModalView;
 pub use chat_composer::{ChatComposer, InputResult};
 
@@ -42,6 +41,11 @@ pub(crate) struct BottomPane {
 
     has_input_focus: bool,
     is_task_running: bool,
+
+    /// Inline status indicator shown above the composer while a task is running.
+    status: Option<StatusIndicatorWidget>,
+    /// Queued user messages to show under the status indicator.
+    queued_user_messages: Vec<String>,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -58,6 +62,8 @@ impl BottomPane {
             active_view: None,
             has_input_focus: params.has_input_focus,
             is_task_running: false,
+            status: None,
+            queued_user_messages: Vec::new(),
         }
     }
 
@@ -67,28 +73,52 @@ impl BottomPane {
         } else {
             self.composer.desired_height(width)
         };
+
+        // If a status indicator is active and no modal is covering the composer,
+        // include its height above the composer.
+        if self.active_view.is_none() {
+            if let Some(status) = self.status.as_ref() {
+                base = base.saturating_add(status.desired_height(width));
+            }
+        }
+
         base = base.saturating_add(Self::BOTTOM_PAD_LINES);
         base
     }
 
-    fn layout(&self, area: Rect) -> Rect {
-        // 余白 + コンテンツ（最低1行）+ 下パディング
-        let [_, content, _] = Layout::vertical([
+    fn layout(&self, area: Rect) -> [Rect; 2] {
+        let status_height = if self.active_view.is_none() {
+            if let Some(status) = self.status.as_ref() {
+                status.desired_height(area.width)
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
+        let [_, status, content, _] = Layout::vertical([
             Constraint::Max(0),
+            Constraint::Max(status_height),
             Constraint::Min(1),
             Constraint::Max(Self::BOTTOM_PAD_LINES),
         ])
         .areas(area);
-        content
+
+        [status, content]
     }
 
     /// 画面上のカーソル位置（本簡易版では None）
-    pub fn cursor_pos(&self, _area: Rect) -> Option<(u16, u16)> {
+    pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        // Hide the cursor whenever an overlay view is active (e.g. the
+        // status indicator shown while a task is running, or approval modal).
+        // In these states the textarea is not interactable, so we should not
+        // show its caret.
         if self.active_view.is_some() {
             None
-        } else if self.has_input_focus {
-            None
         } else {
+            let [_, _content] = self.layout(area);
+            // For now, just return None as cursor positioning is not implemented
             None
         }
     }
@@ -102,6 +132,15 @@ impl BottomPane {
             }
             None
         } else {
+            // If a task is running and a status line is visible, allow Esc to
+            // send an interrupt even while the composer has focus.
+            if matches!(key_event.code, crossterm::event::KeyCode::Esc)
+                && self.is_task_running
+                && self.status.is_some()
+            {
+                // TODO: Send Op::Interrupt when we have the event sender
+                return None;
+            }
             let (res, _redraw) = self.composer.handle_key_event(key_event);
             match res {
                 InputResult::Submitted(_) => Some(res),
@@ -125,18 +164,37 @@ impl BottomPane {
 
     pub(crate) fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
+
+        if running {
+            if self.status.is_none() {
+                self.status = Some(StatusIndicatorWidget::new());
+            }
+            if let Some(status) = self.status.as_mut() {
+                status.set_queued_messages(self.queued_user_messages.clone());
+            }
+        } else {
+            // Hide the status indicator when a task completes, but keep other modal views.
+            self.status = None;
+        }
     }
 
     /// 簡易描画（Paragraph ベース）
     pub fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let content = self.layout(area);
+        let [status_area, content] = self.layout(area);
+
+        // When a modal view is active, it owns the whole content area.
         if let Some(view) = &self.active_view {
             view.render(content, buf);
-            return;
+        } else {
+            // No active modal:
+            // If a status indicator is active, render it above the composer.
+            if let Some(status) = &self.status {
+                status.render_ref(status_area, buf);
+            }
+
+            // Render the composer in the remaining area.
+            (&self.composer).render_ref(content, buf);
         }
-        // Composer
-        // ChatComposer implements WidgetRef for &Self
-        (&self.composer).render_ref(content, buf);
     }
 
     /// Whether there is an active overlay view that should intercept input
@@ -149,5 +207,26 @@ impl BottomPane {
     /// 承認モーダルの表示
     pub fn show_approval_modal(&mut self, req: ApprovalRequest, tx: AppEventSender) {
         self.active_view = Some(Box::new(ApprovalModalView::new(req, tx)));
+    }
+
+    /// Update the animated header shown to the left of the brackets in the
+    /// status indicator (defaults to "Working"). No-ops if the status
+    /// indicator is not active.
+    pub(crate) fn update_status_header(&mut self, header: String) {
+        if let Some(status) = self.status.as_mut() {
+            status.update_header(header);
+        }
+    }
+
+    /// Update the queued messages shown under the status header.
+    pub(crate) fn set_queued_user_messages(&mut self, queued: Vec<String>) {
+        self.queued_user_messages = queued.clone();
+        if let Some(status) = self.status.as_mut() {
+            status.set_queued_messages(queued);
+        }
+    }
+
+    pub(crate) fn is_task_running(&self) -> bool {
+        self.is_task_running
     }
 }

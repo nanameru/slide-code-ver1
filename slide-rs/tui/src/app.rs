@@ -21,7 +21,13 @@ use crate::bottom_pane::{BottomPane, BottomPaneParams};
 use crate::insert_history::insert_history_lines;
 use crate::streaming::AnswerStreamState;
 use crate::user_approval_widget::ApprovalRequest;
-use crate::widgets::{chat::ChatWidget, list_selection::ListSelection, modal::Modal, status_bar::StatusBar};
+use crate::widgets::{
+    banner::{banner_history_lines, banner_message},
+    chat::ChatWidget,
+    list_selection::ListSelection,
+    modal::Modal,
+    status_bar::StatusBar,
+};
 use slide_core::codex::Event as CoreEvent;
 use slide_core::codex::Op;
 
@@ -146,7 +152,7 @@ impl App {
             mode: Mode::Normal,
             status: RunStatus::Idle,
             last_tick: Instant::now(),
-            messages: Vec::new(),
+            messages: vec![banner_message()],
             chat_scroll_top: 0,
             chat_follow_bottom: true,
             chat_viewport_height: 0,
@@ -162,7 +168,8 @@ impl App {
             preview_path: None,
             recent_files,
             agent: None,
-            bottom_pane: BottomPane::new(BottomPaneParams{ has_input_focus: true, placeholder_text: "Ask Slide Code to do anything".into()}),
+            // Empty placeholder to hide any ghost text in input
+            bottom_pane: BottomPane::new(BottomPaneParams{ has_input_focus: true, placeholder_text: "".into()}),
             app_event_rx: app_rx,
             app_event_tx: app_tx,
             // pending_history_lines removed
@@ -471,8 +478,9 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
         }
     }
 
-    // Prepare inline viewport (no startup banner)
+    // Prepare inline viewport and emit startup banner into scrollback
     draw_input_area_only(&mut terminal, &mut app)?;
+    insert_history_lines(&mut terminal, banner_history_lines());
 
     loop {
         // Drain app events from UI widgets
@@ -578,7 +586,8 @@ where
     B: ratatui::backend::Backend,
 {
     let size = terminal.size()?;
-    let status_height: u16 = 1;
+    // Status row height is dynamic (0 unless Running)
+    let status_height: u16 = if app.status == RunStatus::Running { 1 } else { 0 };
     let desired_bottom_height = app.bottom_pane.desired_height(size.width).max(1);
     let total_desired_height = status_height.saturating_add(desired_bottom_height);
     let input_height = total_desired_height.min(size.height.max(1));
@@ -601,13 +610,15 @@ where
 }
 
 fn draw_input_ui(f: &mut Frame, app: &mut App, area: Rect, bottom_height: u16) {
+    // Hide status row unless Running (allocate 0 height when not running)
+    let status_height = if app.status == RunStatus::Running { 1 } else { 0 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Length(bottom_height)])
+        .constraints([Constraint::Length(status_height), Constraint::Length(bottom_height)])
         .split(area);
 
     // Status bar (replace with Thinking... animation while running)
-    if app.status == RunStatus::Running {
+    if app.status == RunStatus::Running && chunks[0].height > 0 {
         // Radar-like sweep over the text "Thinking..." (green gradient)
         let text = "Thinking...";
         let chars: Vec<char> = text.chars().collect();
@@ -637,18 +648,7 @@ fn draw_input_ui(f: &mut Frame, app: &mut App, area: Rect, bottom_height: u16) {
         let p = Paragraph::new(line);
         f.render_widget(p, chunks[0]);
     } else {
-        let status = match app.status {
-            RunStatus::Idle => "Idle",
-            RunStatus::Running => "Running…",
-            RunStatus::Error => "Error",
-        };
-        let mode = match app.mode {
-            Mode::Normal => "NORMAL",
-            Mode::Insert => "INSERT",
-            Mode::Help => "HELP",
-        };
-        let status_bar = StatusBar::new(mode, status, "i:insert  q:quit");
-        f.render_widget(status_bar, chunks[0]);
+        // Not running: render nothing (status hidden)
     }
 
     // Bottom pane (input area) using render_ref
@@ -786,6 +786,7 @@ where
         CoreEvent::SessionConfigured { .. } => {}
         CoreEvent::TaskStarted => {
             app.status = RunStatus::Running;
+            app.bottom_pane.set_task_running(true);
             append_log("[task] started");
         }
         CoreEvent::AgentMessageDelta { delta } => {
@@ -867,6 +868,7 @@ where
         }
         CoreEvent::TaskComplete => {
             app.status = RunStatus::Idle;
+            app.bottom_pane.set_task_running(false);
             // 念のため残りをフラッシュ
             let tail = app.answer_stream.finalize();
             if !tail.is_empty() {
@@ -877,6 +879,7 @@ where
         CoreEvent::Error { message } => {
             app.messages.push(format!("[error] {}", message));
             app.status = RunStatus::Error;
+            app.bottom_pane.set_task_running(false);
             append_log(&format!("[error] {}", message));
         }
         CoreEvent::ShutdownComplete => {}

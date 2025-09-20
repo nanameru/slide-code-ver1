@@ -47,7 +47,7 @@ impl ChatComposer {
             esc_backtrack_hint: false,
             use_shift_enter_hint: true,
             last_activity: Instant::now(),
-            show_hints: true,
+            show_hints: false,
         }
     }
 
