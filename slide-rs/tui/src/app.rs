@@ -21,13 +21,7 @@ use crate::bottom_pane::{BottomPane, BottomPaneParams};
 use crate::insert_history::insert_history_lines;
 use crate::streaming::AnswerStreamState;
 use crate::user_approval_widget::ApprovalRequest;
-use crate::widgets::{
-    banner::{banner_history_lines, banner_message},
-    chat::ChatWidget,
-    list_selection::ListSelection,
-    modal::Modal,
-    status_bar::StatusBar,
-};
+use crate::widgets::{chat::ChatWidget, list_selection::ListSelection, modal::Modal, status_bar::StatusBar};
 use slide_core::codex::Event as CoreEvent;
 use slide_core::codex::Op;
 
@@ -152,7 +146,7 @@ impl App {
             mode: Mode::Normal,
             status: RunStatus::Idle,
             last_tick: Instant::now(),
-            messages: vec![banner_message()],
+            messages: Vec::new(),
             chat_scroll_top: 0,
             chat_follow_bottom: true,
             chat_viewport_height: 0,
@@ -477,9 +471,8 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
         }
     }
 
-    // Prepare inline viewport and emit startup banner into scrollback
+    // Prepare inline viewport (no startup banner)
     draw_input_area_only(&mut terminal, &mut app)?;
-    insert_history_lines(&mut terminal, banner_history_lines());
 
     loop {
         // Drain app events from UI widgets
