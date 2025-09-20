@@ -123,11 +123,8 @@ impl Default for Shell {
 }
 
 fn strip_bash_lc(command: &[String]) -> Option<String> {
-    if let [bash, flag, script] = command
-        && bash == "bash"
-        && flag == "-lc"
-    {
-        Some(script.clone())
+    if command.len() == 3 && command[0] == "bash" && command[1] == "-lc" {
+        Some(command[2].clone())
     } else {
         None
     }
@@ -136,7 +133,7 @@ fn strip_bash_lc(command: &[String]) -> Option<String> {
 // Legacy compatibility
 #[derive(Debug, Clone)]
 pub struct ShellConfig {
-    pub program: String
+    pub program: String,
 }
 
 #[cfg(test)]
@@ -173,4 +170,3 @@ mod tests {
         assert_eq!(result, Some("ls".to_string()));
     }
 }
-

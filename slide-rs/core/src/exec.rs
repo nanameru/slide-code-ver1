@@ -13,11 +13,11 @@ use tokio::io::BufReader;
 use tokio::process::Child;
 use tokio::sync::mpsc::Sender;
 
-use crate::approval_manager::{AskForApproval, ApprovalManager, ApprovalRequest, ApprovalResponse};
-use crate::exec_env::create_env;
+use crate::approval_manager::{ApprovalManager, ApprovalRequest, ApprovalResponse, AskForApproval};
 use crate::config_types::ShellEnvironmentPolicy;
+use crate::exec_env::create_env;
+use crate::is_safe_command::{explain_safety_concern, is_known_safe_command};
 use crate::seatbelt::SandboxPolicy;
-use crate::is_safe_command::{is_known_safe_command, explain_safety_concern};
 
 const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 
@@ -104,39 +104,47 @@ pub async fn process_exec_tool_call(
 ) -> Result<ExecToolCallOutput> {
     let start = Instant::now();
 
-    let raw_output_result: std::result::Result<RawExecToolCallOutput, anyhow::Error> = match sandbox_type
-    {
-        SandboxType::None => exec(params, sandbox_policy, stdout_stream.clone()).await,
-        SandboxType::MacosSeatbelt => {
-            let timeout = params.timeout_duration();
-            let ExecParams {
-                command, cwd, env, ..
-            } = params;
+    let raw_output_result: std::result::Result<RawExecToolCallOutput, anyhow::Error> =
+        match sandbox_type {
+            SandboxType::None => exec(params, sandbox_policy, stdout_stream.clone()).await,
+            SandboxType::MacosSeatbelt => {
+                let timeout = params.timeout_duration();
+                let ExecParams {
+                    command, cwd, env, ..
+                } = params;
 
-            // For now, fall back to normal execution
-            // TODO: Implement macOS Seatbelt sandbox
-            let params = ExecParams {
-                command,
-                cwd,
-                timeout_ms: Some(timeout.as_millis() as u64),
-                env,
-                with_escalated_permissions: None,
-                justification: None,
-            };
-            exec(params, sandbox_policy, stdout_stream.clone()).await
-        }
-        SandboxType::LinuxSeccomp => {
-            // For now, fall back to normal execution
-            // TODO: Implement Linux Seccomp sandbox
-            exec(params, sandbox_policy, stdout_stream.clone()).await
-        }
-    };
+                // For now, fall back to normal execution
+                // TODO: Implement macOS Seatbelt sandbox
+                let params = ExecParams {
+                    command,
+                    cwd,
+                    timeout_ms: Some(timeout.as_millis() as u64),
+                    env,
+                    with_escalated_permissions: None,
+                    justification: None,
+                };
+                exec(params, sandbox_policy, stdout_stream.clone()).await
+            }
+            SandboxType::LinuxSeccomp => {
+                // For now, fall back to normal execution
+                // TODO: Implement Linux Seccomp sandbox
+                exec(params, sandbox_policy, stdout_stream.clone()).await
+            }
+        };
 
     let duration_ms = start.elapsed().as_millis() as u64;
 
     match raw_output_result {
         Ok(raw_output) => {
-            let command_summary = format!("Command: {}", raw_output.stdout.lines().take(3).collect::<Vec<_>>().join(" "));
+            let command_summary = format!(
+                "Command: {}",
+                raw_output
+                    .stdout
+                    .lines()
+                    .take(3)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
 
             Ok(ExecToolCallOutput {
                 stdout: raw_output.stdout,
@@ -147,16 +155,14 @@ pub async fn process_exec_tool_call(
                 command_summary,
             })
         }
-        Err(e) => {
-            Ok(ExecToolCallOutput {
-                stdout: String::new(),
-                stderr: format!("Execution failed: {}", e),
-                exit_code: 1,
-                duration_ms,
-                timed_out: false,
-                command_summary: "Failed to execute".to_string(),
-            })
-        }
+        Err(e) => Ok(ExecToolCallOutput {
+            stdout: String::new(),
+            stderr: format!("Execution failed: {}", e),
+            exit_code: 1,
+            duration_ms,
+            timed_out: false,
+            command_summary: "Failed to execute".to_string(),
+        }),
     }
 }
 
@@ -171,7 +177,10 @@ async fn exec(
     // Safety check
     if !is_known_safe_command(&params.command) {
         if let Some(concern) = explain_safety_concern(&params.command) {
-            return Err(anyhow::anyhow!("Command rejected by safety policy: {}", concern));
+            return Err(anyhow::anyhow!(
+                "Command rejected by safety policy: {}",
+                concern
+            ));
         }
     }
 
@@ -234,13 +243,15 @@ async fn collect_output(
     mut child: Child,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<(String, String, ExitStatus)> {
-    let stdout = child.stdout.take().ok_or_else(|| {
-        anyhow::anyhow!("Failed to capture stdout")
-    })?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("Failed to capture stdout"))?;
 
-    let stderr = child.stderr.take().ok_or_else(|| {
-        anyhow::anyhow!("Failed to capture stderr")
-    })?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("Failed to capture stderr"))?;
 
     // Collect stdout
     let stdout_task = async {
@@ -291,11 +302,8 @@ async fn collect_output(
     };
 
     // Wait for both output collection and process completion
-    let (stdout_result, stderr_result, exit_status) = tokio::try_join!(
-        stdout_task,
-        stderr_task,
-        child.wait()
-    )?;
+    let (stdout_result, stderr_result, exit_status) =
+        tokio::try_join!(stdout_task, stderr_task, child.wait())?;
 
     Ok((stdout_result, stderr_result, exit_status))
 }
@@ -326,10 +334,7 @@ pub struct SandboxedExecutor {
 }
 
 impl SandboxedExecutor {
-    pub fn new(
-        approval_policy: AskForApproval,
-        sandbox_policy: SandboxPolicy,
-    ) -> Self {
+    pub fn new(approval_policy: AskForApproval, sandbox_policy: SandboxPolicy) -> Self {
         Self {
             approval_manager: ApprovalManager::new(approval_policy),
             sandbox_policy,
@@ -348,13 +353,18 @@ impl SandboxedExecutor {
                 risk_level: "medium".to_string(),
             };
 
-            match self.approval_manager.request_approval(approval_request).await {
+            match self
+                .approval_manager
+                .request_approval(approval_request)
+                .await
+            {
                 ApprovalResponse::Approved => {
                     // Continue with execution
                 }
                 ApprovalResponse::ApprovedAndTrust => {
                     // Add to trusted commands and continue
-                    self.approval_manager.approve_command(params.command.clone());
+                    self.approval_manager
+                        .approve_command(params.command.clone());
                 }
                 ApprovalResponse::Denied => {
                     return Ok(ExecToolCallOutput {
@@ -381,11 +391,16 @@ impl SandboxedExecutor {
             &self.sandbox_policy,
             &None,
             None,
-        ).await
+        )
+        .await
     }
 
     /// Execute a simple command string
-    pub async fn execute_simple(&mut self, command: &str, cwd: PathBuf) -> Result<ExecToolCallOutput> {
+    pub async fn execute_simple(
+        &mut self,
+        command: &str,
+        cwd: PathBuf,
+    ) -> Result<ExecToolCallOutput> {
         let command_parts = crate::parse_command::parse_command_string(command);
         if command_parts.is_empty() {
             return Err(anyhow::anyhow!("Empty command"));
@@ -435,4 +450,3 @@ pub async fn exec_command(cmd: &str, _sandbox: bool, _network: bool) -> Result<E
         stderr: result.stderr,
     })
 }
-

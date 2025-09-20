@@ -329,7 +329,11 @@ impl ToolExecutor {
                         Ok(format!(
                             "Explored\n- List files in {}\n\nFiles found:\n{}",
                             target_path.display(),
-                            files.iter().map(|f| format!("  {}", f)).collect::<Vec<_>>().join("\n")
+                            files
+                                .iter()
+                                .map(|f| format!("  {}", f))
+                                .collect::<Vec<_>>()
+                                .join("\n")
                         ))
                     }
                     Err(e) => Ok(format!(
@@ -357,15 +361,15 @@ impl ToolExecutor {
                                 query,
                                 search_path.display(),
                                 results.len(),
-                                results.iter().map(|r| format!("  {}", r)).collect::<Vec<_>>().join("\n")
+                                results
+                                    .iter()
+                                    .map(|r| format!("  {}", r))
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
                             ))
                         }
                     }
-                    Err(e) => Ok(format!(
-                        "Explored\n- Search for '{}' failed: {}",
-                        query,
-                        e
-                    )),
+                    Err(e) => Ok(format!("Explored\n- Search for '{}' failed: {}", query, e)),
                 }
             }
         }
@@ -373,53 +377,76 @@ impl ToolExecutor {
 }
 
 impl ToolExecutor {
-    /// コマンド実行成功時のフォーマット
-    fn format_successful_command_output(&self, result: &ExecToolCallOutput) -> String {
-        let command_summary = if !result.command_summary.is_empty() {
-            &result.command_summary
-        } else {
-            "Command executed"
-        };
-
-        if !result.stdout.is_empty() {
-            format!(
-                "Change Approved\n☑ {} (exit code: {})\n\nOutput:\n{}",
-                command_summary,
-                result.exit_code,
-                result.stdout
-            )
-        } else {
-            format!(
-                "Change Approved\n☑ {} (exit code: {})",
-                command_summary,
-                result.exit_code
-            )
+    async fn execute_shell_command(
+        &self,
+        command: Vec<String>,
+        working_dir: Option<PathBuf>,
+        with_escalated_permissions: bool,
+        justification: Option<String>,
+        timeout_ms: Option<u64>,
+    ) -> Result<String> {
+        if command.is_empty() {
+            return Ok("Shell tool call did not include a command.".to_string());
         }
-    }
 
-    /// コマンド実行失敗時のフォーマット
-    fn format_failed_command_output(&self, result: &ExecToolCallOutput) -> String {
-        let command_summary = if !result.command_summary.is_empty() {
-            &result.command_summary
+        if with_escalated_permissions {
+            return Ok(
+                "Command requested escalated permissions, which are not supported in this build."
+                    .to_string(),
+            );
+        }
+
+        let mut cmd = Command::new(&command[0]);
+        cmd.args(&command[1..]);
+
+        let cwd = working_dir.unwrap_or_else(|| self.cwd.clone());
+        cmd.current_dir(&cwd);
+
+        let env_map = create_env(&self.shell_environment_policy);
+        cmd.env_clear();
+        cmd.envs(env_map);
+
+        let output_future = cmd.output();
+        let output = if let Some(ms) = timeout_ms {
+            match timeout(Duration::from_millis(ms), output_future).await {
+                Ok(result) => {
+                    result.with_context(|| format!("Failed to execute command: {:?}", command))?
+                }
+                Err(_) => return Ok(format!("Command timed out after {ms} ms")),
+            }
         } else {
-            "Command failed"
+            output_future
+                .await
+                .with_context(|| format!("Failed to execute command: {:?}", command))?
         };
 
-        let mut output = format!(
-            "Proposed Change failed\n{} (exit code: {})",
-            command_summary,
-            result.exit_code
+        let exit_code = output.status.code().unwrap_or_default();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        let mut message = format!(
+            "Change Approved\n☑ Command `{}` exited with code {}",
+            command.join(" "),
+            exit_code
         );
 
-        if !result.stderr.is_empty() {
-            output.push_str(&format!("\n\nError output:\n{}", result.stderr));
+        if !stdout.trim().is_empty() {
+            message.push_str("\n\nSTDOUT:\n");
+            message.push_str(stdout.trim_end());
         }
 
-        if !result.stdout.is_empty() {
-            output.push_str(&format!("\n\nStandard output:\n{}", result.stdout));
+        if !stderr.trim().is_empty() {
+            message.push_str("\n\nSTDERR:\n");
+            message.push_str(stderr.trim_end());
         }
 
-        output
+        if let Some(justification) = justification {
+            if !justification.is_empty() {
+                message.push_str(&format!("\n\nJustification: {}", justification));
+            }
+        }
+
+        Ok(message)
     }
 
     /// ファイルを再帰的に検索

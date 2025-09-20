@@ -258,9 +258,17 @@ pub fn parse_patch(patch_content: &str) -> Result<Vec<FileOperation>, String> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FileOperation {
-    Add { path: String, content: String },
-    Delete { path: String },
-    Update { path: String, changes: Vec<ChangeOperation> },
+    Add {
+        path: String,
+        content: String,
+    },
+    Delete {
+        path: String,
+    },
+    Update {
+        path: String,
+        changes: Vec<ChangeOperation>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -444,10 +452,18 @@ mod tests {
     fn test_apply_changes() {
         let original = "line1\nline2\nline3";
         let changes = vec![
-            ChangeOperation::Context { line: "line1".to_string() },
-            ChangeOperation::Remove { line: "line2".to_string() },
-            ChangeOperation::Add { line: "new_line2".to_string() },
-            ChangeOperation::Context { line: "line3".to_string() },
+            ChangeOperation::Context {
+                line: "line1".to_string(),
+            },
+            ChangeOperation::Remove {
+                line: "line2".to_string(),
+            },
+            ChangeOperation::Add {
+                line: "new_line2".to_string(),
+            },
+            ChangeOperation::Context {
+                line: "line3".to_string(),
+            },
         ];
 
         let result = apply_changes(original, &changes).unwrap();

@@ -128,13 +128,13 @@ impl<'a> ChatWidget<'a> {
 
     /// ツール実行結果かどうかを判定
     fn is_tool_execution_result(&self, message: &str) -> bool {
-        message.contains("Updated Plan") ||
-        message.contains("Proposed Change") ||
-        message.contains("Change Approved") ||
-        message.contains("Explored") ||
-        message.contains("[Tool Execution Result]") ||
-        message.contains("*** Begin Patch") ||
-        message.contains("*** End Patch")
+        message.contains("Updated Plan")
+            || message.contains("Proposed Change")
+            || message.contains("Change Approved")
+            || message.contains("Explored")
+            || message.contains("[Tool Execution Result]")
+            || message.contains("*** Begin Patch")
+            || message.contains("*** End Patch")
     }
 
     /// ツール実行結果をフォーマット
@@ -147,72 +147,72 @@ impl<'a> ChatWidget<'a> {
 
             // セクションヘッダーの判定とスタイリング
             if trimmed.starts_with("Updated Plan") {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        "Updated Plan",
-                        Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)
-                    )
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    "Updated Plan",
+                    Style::default()
+                        .fg(Color::Blue)
+                        .add_modifier(Modifier::BOLD),
+                )]));
             } else if trimmed.starts_with("Proposed Change") {
                 lines.push(Line::from(vec![
                     Span::styled(
                         "Proposed Change",
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
                     ),
                     Span::raw(" "),
                     Span::styled(
-                        &trimmed["Proposed Change".len()..],
-                        Style::default().fg(Color::White)
-                    )
+                        trimmed["Proposed Change".len()..].to_string(),
+                        Style::default().fg(Color::White),
+                    ),
                 ]));
             } else if trimmed.starts_with("Change Approved") {
                 lines.push(Line::from(vec![
                     Span::styled(
                         "Change Approved",
-                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
                     ),
                     Span::raw(" "),
                     Span::styled(
-                        &trimmed["Change Approved".len()..],
-                        Style::default().fg(Color::White)
-                    )
+                        trimmed["Change Approved".len()..].to_string(),
+                        Style::default().fg(Color::White),
+                    ),
                 ]));
             } else if trimmed.starts_with("Explored") {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        "Explored",
-                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-                    )
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    "Explored",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )]));
             } else if trimmed.starts_with("[Tool Execution Result]") {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        "[Tool Execution Result]",
-                        Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)
-                    )
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    "[Tool Execution Result]",
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                )]));
             // 差分表示の色分け
             } else if trimmed.starts_with("+") {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        line,
-                        Style::default().fg(Color::Green)
-                    )
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    line.to_string(),
+                    Style::default().fg(Color::Green),
+                )]));
             } else if trimmed.starts_with("-") {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        line,
-                        Style::default().fg(Color::Red)
-                    )
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    line.to_string(),
+                    Style::default().fg(Color::Red),
+                )]));
             } else if trimmed.starts_with("@@") {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        line,
-                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-                    )
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    line.to_string(),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )]));
             // チェックボックス付きタスクリスト
             } else if trimmed.starts_with("□") || trimmed.starts_with("☑") {
                 let (checkbox, rest) = if trimmed.starts_with("□") {
@@ -221,28 +221,30 @@ impl<'a> ChatWidget<'a> {
                     ("☑", &trimmed[3..])
                 };
 
-                let checkbox_color = if checkbox == "☑" { Color::Green } else { Color::Gray };
+                let checkbox_color = if checkbox == "☑" {
+                    Color::Green
+                } else {
+                    Color::Gray
+                };
 
                 lines.push(Line::from(vec![
                     Span::raw("  "), // インデント
-                    Span::styled(
-                        checkbox,
-                        Style::default().fg(checkbox_color)
-                    ),
+                    Span::styled(checkbox, Style::default().fg(checkbox_color)),
                     Span::raw(" "),
-                    Span::raw(rest)
+                    Span::raw(rest.to_string()),
                 ]));
             // ファイルパスのハイライト
-            } else if trimmed.contains(".rs") || trimmed.contains(".toml") || trimmed.contains(".md") {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        line,
-                        Style::default().fg(Color::LightBlue)
-                    )
-                ]));
+            } else if trimmed.contains(".rs")
+                || trimmed.contains(".toml")
+                || trimmed.contains(".md")
+            {
+                lines.push(Line::from(vec![Span::styled(
+                    line.to_string(),
+                    Style::default().fg(Color::LightBlue),
+                )]));
             // その他の行
             } else {
-                lines.push(Line::from(Span::raw(line)));
+                lines.push(Line::from(Span::raw(line.to_string())));
             }
         }
 

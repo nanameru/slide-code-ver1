@@ -75,56 +75,72 @@ impl AnswerStreamState {
         if trimmed.starts_with("Updated Plan") {
             Line::from(Span::styled(
                 line.to_string(),
-                Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Blue)
+                    .add_modifier(Modifier::BOLD),
             ))
         } else if trimmed.starts_with("Proposed Change") {
             Line::from(Span::styled(
                 line.to_string(),
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             ))
         } else if trimmed.starts_with("Change Approved") {
             Line::from(Span::styled(
                 line.to_string(),
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
             ))
         } else if trimmed.starts_with("Explored") {
             Line::from(Span::styled(
                 line.to_string(),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ))
         } else if trimmed.starts_with("[Tool Execution Result]") {
             Line::from(Span::styled(
                 line.to_string(),
-                Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
             ))
         // 差分表示の色分け
         } else if trimmed.starts_with("+") {
             Line::from(Span::styled(
                 line.to_string(),
-                Style::default().fg(Color::Green)
+                Style::default().fg(Color::Green),
             ))
         } else if trimmed.starts_with("-") {
             Line::from(Span::styled(
                 line.to_string(),
-                Style::default().fg(Color::Red)
+                Style::default().fg(Color::Red),
             ))
         } else if trimmed.starts_with("@@") {
             Line::from(Span::styled(
                 line.to_string(),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ))
         // チェックボックス付きタスクリスト
         } else if trimmed.starts_with("□") || trimmed.starts_with("☑") {
-            let checkbox_color = if trimmed.starts_with("☑") { Color::Green } else { Color::Gray };
+            let checkbox_color = if trimmed.starts_with("☑") {
+                Color::Green
+            } else {
+                Color::Gray
+            };
             Line::from(Span::styled(
                 line.to_string(),
-                Style::default().fg(checkbox_color)
+                Style::default().fg(checkbox_color),
             ))
         // ファイルパスのハイライト
         } else if trimmed.contains(".rs") || trimmed.contains(".toml") || trimmed.contains(".md") {
             Line::from(Span::styled(
                 line.to_string(),
-                Style::default().fg(Color::LightBlue)
+                Style::default().fg(Color::LightBlue),
             ))
         // その他の行
         } else {
