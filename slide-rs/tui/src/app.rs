@@ -31,10 +31,7 @@ use crate::widgets::{
 use slide_core::codex::Event as CoreEvent;
 use slide_core::codex::Op;
 
-// Spinner frames for Thinking... indicator (radar-like feel)
-const THINK_SPINNER_FRAMES: [&str; 8] = [
-    "⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷",
-];
+// (leftover from earlier spinner impl) — intentionally removed
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -191,8 +188,9 @@ impl App {
     fn on_tick(&mut self) {
         // Spinner frame advance every ~140ms while running
         if self.status == RunStatus::Running {
-            if self.thinking_last_change.elapsed() > Duration::from_millis(140) {
-                self.thinking_frame_idx = (self.thinking_frame_idx + 1) % THINK_SPINNER_FRAMES.len();
+            if self.thinking_last_change.elapsed() > Duration::from_millis(100) {
+                // Advance across the sweep length (text length + depth simulated by 5 extra steps)
+                self.thinking_frame_idx = self.thinking_frame_idx.wrapping_add(1);
                 self.thinking_last_change = Instant::now();
             }
         }
@@ -617,17 +615,32 @@ fn draw_input_ui(f: &mut Frame, app: &mut App, area: Rect, bottom_height: u16) {
 
     // Status bar (replace with Thinking... animation while running)
     if app.status == RunStatus::Running {
-        let frame = THINK_SPINNER_FRAMES[app.thinking_frame_idx];
-        let line = Line::from(vec![
-            Span::styled(
-                " Thinking... ",
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" "),
-            Span::styled(frame, Style::default().fg(Color::Green)),
-        ]);
+        // Radar-like sweep over the text "Thinking..." (green gradient)
+        let text = "Thinking...";
+        let chars: Vec<char> = text.chars().collect();
+        let len = chars.len() as i32;
+        let depth = ((len as f32 * 0.35).floor() as i32).clamp(2, len.max(2));
+        let step = (255 / depth.max(1)) as i32;
+        let global_pos = (app.thinking_frame_idx as i32) % (len + depth);
+
+        let mut spans: Vec<Span> = Vec::with_capacity(chars.len());
+        for i in 0..len {
+            let pos = -(i - global_pos);
+            if pos > 0 && pos <= depth - 1 {
+                let shade = ((depth - pos) * step).clamp(0, 255) as u8;
+                spans.push(Span::styled(
+                    chars[i as usize].to_string(),
+                    Style::default()
+                        .fg(Color::Rgb(0, shade, 0))
+                        .add_modifier(Modifier::BOLD),
+                ));
+            } else {
+                // Show as space (hide non-illuminated characters) to mimic chalk-animation radar
+                spans.push(Span::raw(" "));
+            }
+        }
+
+        let line = Line::from(spans);
         let p = Paragraph::new(line);
         f.render_widget(p, chunks[0]);
     } else {
