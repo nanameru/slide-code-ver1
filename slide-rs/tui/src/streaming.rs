@@ -67,6 +67,11 @@ impl AnswerStreamState {
         out
     }
 
+    /// デルタを受信済みかどうかを確認
+    pub fn has_received_delta(&self) -> bool {
+        self.header_emitted || self.active
+    }
+
     /// 行のスタイリングを適用（ツール実行結果の色分け）
     fn format_line(&self, line: &str) -> Line<'static> {
         let trimmed = line.trim();
@@ -162,9 +167,9 @@ impl AnswerStreamState {
 
     fn header_line(&self) -> Line<'static> {
         Line::from(Span::styled(
-            "slide",
+            "Assistant",
             Style::default()
-                .fg(Color::Magenta)
+                .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),
         ))
     }

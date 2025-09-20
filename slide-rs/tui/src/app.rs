@@ -205,8 +205,9 @@ impl App {
             return;
         }
 
-        // 1行目に "You: " を付けて履歴へ（複数行は2行目以降をそのまま表示）
+        // 空行 + "You: " メッセージを履歴へ追加
         let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from(""));
         let mut iter = text.lines();
         if let Some(first) = iter.next() {
             lines.push(Line::from(vec![
@@ -767,22 +768,7 @@ where
             // デルタをストリーミング状態に反映し、完成行のみ履歴へ積む
             let lines = app.answer_stream.push_delta(&delta);
             if !lines.is_empty() {
-                // 最初のデルタの場合に限り、Assistant 見出しを挿入
-                let need_header = app
-                    .messages
-                    .last()
-                    .map(|m| !m.starts_with("Assistant:"))
-                    .unwrap_or(true);
-                if need_header {
-                    insert_history_lines(terminal, vec![Line::from(vec![
-                        Span::styled(
-                            "Assistant",
-                            Style::default()
-                                .fg(Color::Green)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                    ])]);
-                }
+                // streaming.rsで既にヘッダー処理されているため、ここでは直接挿入
                 insert_history_lines(terminal, lines);
             }
             // 互換目的でメモリ上のメッセージも更新
@@ -807,14 +793,15 @@ where
             let mut tail = app.answer_stream.finalize();
             pending.append(&mut tail);
             if !pending.is_empty() {
-                // 完了時にもヘッダが未表示なら付与
+                // デルタが未処理でヘッダが未表示の場合のみヘッダを付与
+                // （通常のストリーミングでは既にAgentMessageDeltaでヘッダ表示済み）
                 let need_header = app
                     .messages
                     .last()
                     .map(|m| !m.starts_with("Assistant:"))
-                    .unwrap_or(true);
+                    .unwrap_or(true) && !app.answer_stream.has_received_delta();
                 if need_header {
-                    insert_history_lines(terminal, vec![Line::from(vec![
+                    insert_history_lines(terminal, vec![Line::from(""), Line::from(vec![
                         Span::styled(
                             "Assistant",
                             Style::default()
