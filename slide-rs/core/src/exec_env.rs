@@ -1,7 +1,5 @@
 use crate::config_types::{
-    EnvironmentVariablePattern,
-    ShellEnvironmentPolicy,
-    ShellEnvironmentPolicyInherit
+    EnvironmentVariablePattern, ShellEnvironmentPolicy, ShellEnvironmentPolicyInherit,
 };
 use std::collections::HashMap;
 use std::collections::HashSet;

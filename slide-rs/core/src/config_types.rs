@@ -1,6 +1,6 @@
 use crate::seatbelt::SandboxPolicy;
-use slide_common::ApprovalMode;
 use serde::{Deserialize, Serialize};
+use slide_common::ApprovalMode;
 
 #[derive(Debug, Clone)]
 pub struct CoreConfig {
@@ -97,7 +97,7 @@ fn glob_match(pattern: &str, text: &str) -> bool {
     }
 
     if pattern.starts_with('*') && pattern.ends_with('*') {
-        let middle = &pattern[1..pattern.len()-1];
+        let middle = &pattern[1..pattern.len() - 1];
         return text.contains(middle);
     }
 
@@ -107,10 +107,9 @@ fn glob_match(pattern: &str, text: &str) -> bool {
     }
 
     if pattern.ends_with('*') {
-        let prefix = &pattern[..pattern.len()-1];
+        let prefix = &pattern[..pattern.len() - 1];
         return text.starts_with(prefix);
     }
 
     pattern == text
 }
-

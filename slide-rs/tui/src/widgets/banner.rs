@@ -24,8 +24,6 @@ const RAINBOW_STOPS: &[Color] = &[
     Color::Rgb(160, 255, 90), // lime
 ];
 
-const BANNER_BG: Color = Color::Rgb(18, 24, 38);
-
 /// Build the banner message that can be pushed into the chat history list.
 /// The message acts as a sentinel token that the chat widget expands into
 /// the richly styled banner at render time.
@@ -50,7 +48,7 @@ pub fn banner_lines() -> Vec<Line<'static>> {
                 .enumerate()
                 .map(|(col, ch)| {
                     if ch == ' ' {
-                        return Span::styled(" ".to_string(), Style::default().bg(BANNER_BG));
+                        return Span::raw(" ");
                     }
                     let ratio = if max_width > 1 {
                         col as f32 / (max_width as f32 - 1.0)
@@ -60,10 +58,7 @@ pub fn banner_lines() -> Vec<Line<'static>> {
                     let fg = rainbow_color(ratio);
                     Span::styled(
                         ch.to_string(),
-                        Style::default()
-                            .fg(fg)
-                            .bg(BANNER_BG)
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(fg).add_modifier(Modifier::BOLD),
                     )
                 })
                 .collect();
@@ -71,18 +66,13 @@ pub fn banner_lines() -> Vec<Line<'static>> {
         })
         .collect();
 
-    lines.push(Line::from(vec![Span::styled(
-        String::new(),
-        Style::default().bg(BANNER_BG),
-    )]));
+    lines.push(Line::default());
 
     let accent = Style::default()
         .fg(Color::Rgb(192, 230, 255))
-        .bg(BANNER_BG)
         .add_modifier(Modifier::BOLD);
     let hint = Style::default()
         .fg(Color::Rgb(150, 170, 200))
-        .bg(BANNER_BG)
         .add_modifier(Modifier::DIM);
 
     lines.push(Line::from(vec![Span::styled(

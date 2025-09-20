@@ -103,7 +103,6 @@ pub struct ToolsConfig {
     pub include_slides_tools: bool,
 }
 
-
 pub struct ToolsConfigParams {
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
@@ -119,7 +118,9 @@ impl ToolsConfig {
     pub fn new(params: &ToolsConfigParams) -> Self {
         let shell_type = if params.use_streamable_shell_tool {
             ConfigShellToolType::StreamableShell
-        } else if matches!(params.approval_policy, AskForApproval::OnRequest) && !params.use_streamable_shell_tool {
+        } else if matches!(params.approval_policy, AskForApproval::OnRequest)
+            && !params.use_streamable_shell_tool
+        {
             ConfigShellToolType::ShellWithRequest {
                 sandbox_policy: params.sandbox_policy.clone(),
             }
@@ -270,7 +271,8 @@ fn create_plan_tool() -> OpenAiTool {
 
     OpenAiTool::Function(ResponsesApiTool {
         name: "update_plan".to_string(),
-        description: "Updates the task plan. Provide an explanation and a list of plan items.".to_string(),
+        description: "Updates the task plan. Provide an explanation and a list of plan items."
+            .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -390,18 +392,23 @@ Examples:
 /// Legacy function for compatibility - returns tool names
 pub fn get_openai_tools(cfg: &ToolsConfig, _mcp_tools: Option<Vec<String>>) -> Vec<String> {
     let tools = create_tools(cfg, _mcp_tools);
-    tools.into_iter().map(|t| match t {
-        OpenAiTool::Function(f) => f.name,
-        OpenAiTool::Freeform(f) => f.name,
-        OpenAiTool::LocalShell {} => "local_shell".to_string(),
-    }).collect()
+    tools
+        .into_iter()
+        .map(|t| match t {
+            OpenAiTool::Function(f) => f.name,
+            OpenAiTool::Freeform(f) => f.name,
+            OpenAiTool::LocalShell {} => "local_shell".to_string(),
+        })
+        .collect()
 }
 
 /// Render a concise instruction block that advertises available tools to the model.
 /// This is a lightweight alternative to function/tool calling and mirrors codex style.
 pub fn render_tools_instructions(cfg: &ToolsConfig, approval_mode_hint: Option<&str>) -> String {
     let mut lines: Vec<String> = Vec::new();
-    lines.push("You can propose using the following tools by writing clear instructions:".to_string());
+    lines.push(
+        "You can propose using the following tools by writing clear instructions:".to_string(),
+    );
 
     // Shell tool description based on configuration
     match &cfg.shell_type {
@@ -411,7 +418,9 @@ pub fn render_tools_instructions(cfg: &ToolsConfig, approval_mode_hint: Option<&
         ConfigShellToolType::ShellWithRequest { sandbox_policy } => {
             let policy_desc = match sandbox_policy {
                 SandboxPolicy::ReadOnly => "read-only sandbox",
-                SandboxPolicy::WorkspaceWrite { .. } => "workspace-write sandbox (use with_escalated_permissions for broader access)",
+                SandboxPolicy::WorkspaceWrite { .. } => {
+                    "workspace-write sandbox (use with_escalated_permissions for broader access)"
+                }
                 SandboxPolicy::DangerFullAccess => "full access",
             };
             lines.push(format!("- shell: run a shell command in {}. Always explain why and prefer read-only commands (ls, cat, rg).", policy_desc));
@@ -422,11 +431,20 @@ pub fn render_tools_instructions(cfg: &ToolsConfig, approval_mode_hint: Option<&
     }
 
     if cfg.include_apply_patch_tool {
-        lines.push("- apply_patch: propose a unified diff to edit files. Keep edits minimal and correct.".to_string());
+        lines.push(
+            "- apply_patch: propose a unified diff to edit files. Keep edits minimal and correct."
+                .to_string(),
+        );
     }
     if cfg.include_slides_tools {
-        lines.push("- slides_write: write slide files under slides/ (create/overwrite/append).".to_string());
-        lines.push("- slides_apply_patch: apply a restricted apply_patch affecting only slides/ files.".to_string());
+        lines.push(
+            "- slides_write: write slide files under slides/ (create/overwrite/append)."
+                .to_string(),
+        );
+        lines.push(
+            "- slides_apply_patch: apply a restricted apply_patch affecting only slides/ files."
+                .to_string(),
+        );
     }
     if cfg.include_plan_tool {
         lines.push("- update_plan: refine your task plan concisely.".to_string());
@@ -435,11 +453,15 @@ pub fn render_tools_instructions(cfg: &ToolsConfig, approval_mode_hint: Option<&
         lines.push("- view_image: request to view an image by path.".to_string());
     }
     if cfg.include_web_search_request {
-        lines.push("- web_search_request: request a web search when strictly necessary.".to_string());
+        lines.push(
+            "- web_search_request: request a web search when strictly necessary.".to_string(),
+        );
     }
 
     if let Some(mode) = approval_mode_hint {
-        lines.push(format!("Approval policy: {mode}. Destructive or ambiguous actions may require user approval."));
+        lines.push(format!(
+            "Approval policy: {mode}. Destructive or ambiguous actions may require user approval."
+        ));
     }
 
     lines.push("When proposing a tool, output a short rationale followed by the exact command or a minimal diff.".to_string());

@@ -36,9 +36,8 @@ impl Default for ApprovalManager {
 
         // Default trusted commands (safe read-only operations)
         for cmd in &[
-            "ls", "cat", "grep", "find", "echo", "pwd",
-            "whoami", "date", "which", "head", "tail",
-            "wc", "sort", "uniq", "file", "stat"
+            "ls", "cat", "grep", "find", "echo", "pwd", "whoami", "date", "which", "head", "tail",
+            "wc", "sort", "uniq", "file", "stat",
         ] {
             trusted_commands.insert(cmd.to_string());
         }

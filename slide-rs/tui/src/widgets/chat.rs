@@ -31,7 +31,7 @@ impl<'a> ChatWidget<'a> {
         self
     }
 
-    /// メッセージを行に変換（Codex風のシンプルなフォーマット）
+    /// メッセージを行に変換（ツール実行結果を含むCodex風フォーマット）
     fn build_lines(&self) -> Vec<Line> {
         let mut lines: Vec<Line> = Vec::with_capacity(self.messages.len() * 2);
 
@@ -43,8 +43,11 @@ impl<'a> ChatWidget<'a> {
             }
 
             if !handled {
+                // ツール実行結果の特別処理
+                if self.is_tool_execution_result(message) {
+                    lines.extend(self.format_tool_execution(message));
                 // メッセージの種別によってスタイルを変更
-                if message.starts_with("You:") {
+                } else if message.starts_with("You:") {
                     let content = message.strip_prefix("You:").unwrap_or(message).trim();
                     lines.push(Line::from(vec![
                         Span::styled(
@@ -118,6 +121,129 @@ impl<'a> ChatWidget<'a> {
                     .fg(Color::DarkGray)
                     .add_modifier(Modifier::DIM),
             )));
+        }
+
+        lines
+    }
+
+    /// ツール実行結果かどうかを判定
+    fn is_tool_execution_result(&self, message: &str) -> bool {
+        message.contains("Updated Plan") ||
+        message.contains("Proposed Change") ||
+        message.contains("Change Approved") ||
+        message.contains("Explored") ||
+        message.contains("[Tool Execution Result]") ||
+        message.contains("*** Begin Patch") ||
+        message.contains("*** End Patch")
+    }
+
+    /// ツール実行結果をフォーマット
+    fn format_tool_execution(&self, message: &str) -> Vec<Line> {
+        let mut lines = Vec::new();
+        let content_lines: Vec<&str> = message.lines().collect();
+
+        for line in content_lines {
+            let trimmed = line.trim();
+
+            // セクションヘッダーの判定とスタイリング
+            if trimmed.starts_with("Updated Plan") {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        "Updated Plan",
+                        Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)
+                    )
+                ]));
+            } else if trimmed.starts_with("Proposed Change") {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        "Proposed Change",
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        &trimmed["Proposed Change".len()..],
+                        Style::default().fg(Color::White)
+                    )
+                ]));
+            } else if trimmed.starts_with("Change Approved") {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        "Change Approved",
+                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        &trimmed["Change Approved".len()..],
+                        Style::default().fg(Color::White)
+                    )
+                ]));
+            } else if trimmed.starts_with("Explored") {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        "Explored",
+                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    )
+                ]));
+            } else if trimmed.starts_with("[Tool Execution Result]") {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        "[Tool Execution Result]",
+                        Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)
+                    )
+                ]));
+            // 差分表示の色分け
+            } else if trimmed.starts_with("+") {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        line,
+                        Style::default().fg(Color::Green)
+                    )
+                ]));
+            } else if trimmed.starts_with("-") {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        line,
+                        Style::default().fg(Color::Red)
+                    )
+                ]));
+            } else if trimmed.starts_with("@@") {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        line,
+                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    )
+                ]));
+            // チェックボックス付きタスクリスト
+            } else if trimmed.starts_with("□") || trimmed.starts_with("☑") {
+                let (checkbox, rest) = if trimmed.starts_with("□") {
+                    ("□", &trimmed[3..])
+                } else {
+                    ("☑", &trimmed[3..])
+                };
+
+                let checkbox_color = if checkbox == "☑" { Color::Green } else { Color::Gray };
+
+                lines.push(Line::from(vec![
+                    Span::raw("  "), // インデント
+                    Span::styled(
+                        checkbox,
+                        Style::default().fg(checkbox_color)
+                    ),
+                    Span::raw(" "),
+                    Span::raw(rest)
+                ]));
+            // ファイルパスのハイライト
+            } else if trimmed.contains(".rs") || trimmed.contains(".toml") || trimmed.contains(".md") {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        line,
+                        Style::default().fg(Color::LightBlue)
+                    )
+                ]));
+            // その他の行
+            } else {
+                lines.push(Line::from(Span::raw(line)));
+            }
         }
 
         lines

@@ -117,7 +117,11 @@ pub fn build_seatbelt_policy(policy: SandboxPolicy) -> String {
 "#
             )
         }
-        SandboxPolicy::WorkspaceWrite { writable_roots, network_access, .. } => {
+        SandboxPolicy::WorkspaceWrite {
+            writable_roots,
+            network_access,
+            ..
+        } => {
             let mut policy = format!(
                 r#"(version 1)
 (deny default)
@@ -144,4 +148,3 @@ pub fn build_seatbelt_policy(policy: SandboxPolicy) -> String {
         }
     }
 }
-

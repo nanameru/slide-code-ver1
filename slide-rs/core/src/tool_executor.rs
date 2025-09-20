@@ -1,31 +1,28 @@
-use crate::exec::{SandboxedExecutor, ExecParams, ExecToolCallOutput};
-use crate::seatbelt::SandboxPolicy;
 use crate::approval_manager::AskForApproval;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::exec_env::create_env;
-use crate::tool_apply_patch::{parse_patch, apply_file_operation, ApplyPatchInput, tool_apply_patch};
+use crate::seatbelt::SandboxPolicy;
+use crate::tool_apply_patch::{tool_apply_patch, ApplyPatchInput};
+use anyhow::{Context, Result};
 use serde_json::Value;
-use std::collections::HashMap;
 use std::path::PathBuf;
-use anyhow::Result;
+use tokio::process::Command;
+use tokio::time::{timeout, Duration};
 
 /// ツール実行を管理する統合実行エンジン
 pub struct ToolExecutor {
-    executor: SandboxedExecutor,
     cwd: PathBuf,
     shell_environment_policy: ShellEnvironmentPolicy,
 }
 
 impl ToolExecutor {
     pub fn new(
-        approval_policy: AskForApproval,
-        sandbox_policy: SandboxPolicy,
+        _approval_policy: AskForApproval,
+        _sandbox_policy: SandboxPolicy,
         cwd: PathBuf,
         shell_environment_policy: ShellEnvironmentPolicy,
     ) -> Self {
-        let executor = SandboxedExecutor::new(approval_policy, sandbox_policy);
         Self {
-            executor,
             cwd,
             shell_environment_policy,
         }
@@ -39,7 +36,10 @@ impl ToolExecutor {
         if let Some(tool_calls) = self.extract_tool_calls(response)? {
             for tool_call in tool_calls {
                 let execution_result = self.execute_tool_call(tool_call).await?;
-                result.push_str(&format!("\n\n[Tool Execution Result]\n{}", execution_result));
+                result.push_str(&format!(
+                    "\n\n[Tool Execution Result]\n{}",
+                    execution_result
+                ));
             }
         }
 
@@ -47,7 +47,10 @@ impl ToolExecutor {
     }
 
     /// 複数のツールを並列実行
-    pub async fn execute_multiple_tools(&mut self, tool_calls: Vec<ToolCall>) -> Result<Vec<String>> {
+    pub async fn execute_multiple_tools(
+        &mut self,
+        tool_calls: Vec<ToolCall>,
+    ) -> Result<Vec<String>> {
         let mut results = Vec::new();
 
         for tool_call in tool_calls {
@@ -100,13 +103,15 @@ impl ToolExecutor {
     fn parse_tool_call(&self, json_str: &str) -> Result<ToolCall> {
         let value: Value = serde_json::from_str(json_str)?;
 
-        let tool_name = value["tool"].as_str()
+        let tool_name = value["tool"]
+            .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing tool name"))?;
 
         match tool_name {
             "shell" => {
                 let command = if let Some(cmd_array) = value["command"].as_array() {
-                    cmd_array.iter()
+                    cmd_array
+                        .iter()
                         .map(|v| v.as_str().unwrap_or_default().to_string())
                         .collect()
                 } else if let Some(cmd_str) = value["command"].as_str() {
@@ -116,12 +121,11 @@ impl ToolExecutor {
                     return Err(anyhow::anyhow!("Invalid command format"));
                 };
 
-                let working_dir = value["working_dir"].as_str()
-                    .map(PathBuf::from);
+                let working_dir = value["working_dir"].as_str().map(PathBuf::from);
                 let with_escalated_permissions = value["with_escalated_permissions"]
-                    .as_bool().unwrap_or(false);
-                let justification = value["justification"].as_str()
-                    .map(String::from);
+                    .as_bool()
+                    .unwrap_or(false);
+                let justification = value["justification"].as_str().map(String::from);
                 let timeout_ms = value["timeout_ms"].as_u64();
 
                 Ok(ToolCall::Shell {
@@ -133,16 +137,19 @@ impl ToolExecutor {
                 })
             }
             "read_file" => {
-                let path = value["path"].as_str()
+                let path = value["path"]
+                    .as_str()
                     .ok_or_else(|| anyhow::anyhow!("Missing file path"))?;
                 Ok(ToolCall::ReadFile {
-                    path: PathBuf::from(path)
+                    path: PathBuf::from(path),
                 })
             }
             "write_file" => {
-                let path = value["path"].as_str()
+                let path = value["path"]
+                    .as_str()
                     .ok_or_else(|| anyhow::anyhow!("Missing file path"))?;
-                let content = value["content"].as_str()
+                let content = value["content"]
+                    .as_str()
                     .ok_or_else(|| anyhow::anyhow!("Missing file content"))?;
                 Ok(ToolCall::WriteFile {
                     path: PathBuf::from(path),
@@ -150,7 +157,8 @@ impl ToolExecutor {
                 })
             }
             "apply_patch" => {
-                let input = value["input"].as_str()
+                let input = value["input"]
+                    .as_str()
                     .ok_or_else(|| anyhow::anyhow!("Missing patch input"))?;
                 Ok(ToolCall::ApplyPatch {
                     input: input.to_string(),
@@ -161,7 +169,8 @@ impl ToolExecutor {
                 Ok(ToolCall::ListFiles { path })
             }
             "search_files" => {
-                let query = value["query"].as_str()
+                let query = value["query"]
+                    .as_str()
                     .ok_or_else(|| anyhow::anyhow!("Missing search query"))?;
                 let path = value["path"].as_str().map(PathBuf::from);
                 Ok(ToolCall::SearchFiles {
@@ -169,7 +178,7 @@ impl ToolExecutor {
                     path,
                 })
             }
-            _ => Err(anyhow::anyhow!("Unknown tool: {}", tool_name))
+            _ => Err(anyhow::anyhow!("Unknown tool: {}", tool_name)),
         }
     }
 
@@ -191,7 +200,8 @@ impl ToolExecutor {
         match name {
             "shell" => {
                 let command = if let Some(cmd_array) = value["command"].as_array() {
-                    cmd_array.iter()
+                    cmd_array
+                        .iter()
                         .map(|v| v.as_str().unwrap_or_default().to_string())
                         .collect()
                 } else {
@@ -201,7 +211,8 @@ impl ToolExecutor {
                 let working_dir = value["workdir"].as_str().map(PathBuf::from);
                 let timeout_ms = value["timeout_ms"].as_u64();
                 let with_escalated_permissions = value["with_escalated_permissions"]
-                    .as_bool().unwrap_or(false);
+                    .as_bool()
+                    .unwrap_or(false);
                 let justification = value["justification"].as_str().map(String::from);
 
                 Ok(ToolCall::Shell {
@@ -213,13 +224,14 @@ impl ToolExecutor {
                 })
             }
             "apply_patch" => {
-                let input = value["input"].as_str()
+                let input = value["input"]
+                    .as_str()
                     .ok_or_else(|| anyhow::anyhow!("Missing patch input"))?;
                 Ok(ToolCall::ApplyPatch {
                     input: input.to_string(),
                 })
             }
-            _ => Err(anyhow::anyhow!("Unknown function: {}", name))
+            _ => Err(anyhow::anyhow!("Unknown function: {}", name)),
         }
     }
 
@@ -231,31 +243,16 @@ impl ToolExecutor {
                 working_dir,
                 with_escalated_permissions,
                 justification,
-                timeout_ms
+                timeout_ms,
             } => {
-                let env = create_env(&self.shell_environment_policy);
-                let params = ExecParams {
+                self.execute_shell_command(
                     command,
-                    cwd: working_dir.unwrap_or_else(|| self.cwd.clone()),
-                    timeout_ms,
-                    env,
-                    with_escalated_permissions: Some(with_escalated_permissions),
+                    working_dir,
+                    with_escalated_permissions,
                     justification,
-                };
-
-                match self.executor.execute(params).await {
-                    Ok(result) => {
-                        Ok(format!(
-                            "Command executed successfully (exit code: {})\nSTDOUT:\n{}\nSTDERR:\n{}",
-                            result.exit_code,
-                            result.stdout,
-                            result.stderr
-                        ))
-                    }
-                    Err(e) => {
-                        Ok(format!("Command execution failed: {}", e))
-                    }
-                }
+                    timeout_ms,
+                )
+                .await
             }
             ToolCall::ReadFile { path } => {
                 let full_path = if path.is_absolute() {
@@ -265,8 +262,16 @@ impl ToolExecutor {
                 };
 
                 match tokio::fs::read_to_string(&full_path).await {
-                    Ok(content) => Ok(format!("File content:\n{}", content)),
-                    Err(e) => Ok(format!("Failed to read file {}: {}", full_path.display(), e)),
+                    Ok(content) => Ok(format!(
+                        "Explored\n- Read {}\n\nFile content:\n{}",
+                        full_path.display(),
+                        content
+                    )),
+                    Err(e) => Ok(format!(
+                        "Explored\n- Failed to read file {}: {}",
+                        full_path.display(),
+                        e
+                    )),
                 }
             }
             ToolCall::WriteFile { path, content } => {
@@ -279,18 +284,35 @@ impl ToolExecutor {
                 // ディレクトリが存在しない場合は作成
                 if let Some(parent) = full_path.parent() {
                     if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                        return Ok(format!("Failed to create directory {}: {}", parent.display(), e));
+                        return Ok(format!(
+                            "Change Approved\nFailed to create directory {}: {}",
+                            parent.display(),
+                            e
+                        ));
                     }
                 }
 
                 match tokio::fs::write(&full_path, content).await {
-                    Ok(_) => Ok(format!("Successfully wrote to {}", full_path.display())),
-                    Err(e) => Ok(format!("Failed to write file {}: {}", full_path.display(), e)),
+                    Ok(_) => Ok(format!(
+                        "Change Approved {}\n☑ Successfully wrote to {}",
+                        full_path.display(),
+                        full_path.display()
+                    )),
+                    Err(e) => Ok(format!(
+                        "Change Approved {}\nFailed to write file {}: {}",
+                        full_path.display(),
+                        full_path.display(),
+                        e
+                    )),
                 }
             }
             ToolCall::ApplyPatch { input } => {
                 let result = tool_apply_patch(ApplyPatchInput { patch: input }, true);
-                Ok(result.message)
+                if result.applied {
+                    Ok(format!("Change Approved\n☑ {}", result.message))
+                } else {
+                    Ok(format!("Proposed Change failed\n{}", result.message))
+                }
             }
             ToolCall::ListFiles { path } => {
                 let target_path = path.unwrap_or_else(|| self.cwd.clone());
@@ -304,9 +326,17 @@ impl ToolExecutor {
                             }
                         }
                         files.sort();
-                        Ok(format!("Files in {}:\n{}", target_path.display(), files.join("\n")))
+                        Ok(format!(
+                            "Explored\n- List files in {}\n\nFiles found:\n{}",
+                            target_path.display(),
+                            files.iter().map(|f| format!("  {}", f)).collect::<Vec<_>>().join("\n")
+                        ))
                     }
-                    Err(e) => Ok(format!("Failed to list files in {}: {}", target_path.display(), e)),
+                    Err(e) => Ok(format!(
+                        "Explored\n- Failed to list files in {}: {}",
+                        target_path.display(),
+                        e
+                    )),
                 }
             }
             ToolCall::SearchFiles { query, path } => {
@@ -315,12 +345,27 @@ impl ToolExecutor {
                 match self.search_files_recursive(&search_path, &query).await {
                     Ok(results) => {
                         if results.is_empty() {
-                            Ok(format!("No files found matching '{}'", query))
+                            Ok(format!(
+                                "Explored\n- Search for '{}' in {}\n\nNo files found matching '{}'",
+                                query,
+                                search_path.display(),
+                                query
+                            ))
                         } else {
-                            Ok(format!("Found {} matches:\n{}", results.len(), results.join("\n")))
+                            Ok(format!(
+                                "Explored\n- Search for '{}' in {}\n\nFound {} matches:\n{}",
+                                query,
+                                search_path.display(),
+                                results.len(),
+                                results.iter().map(|r| format!("  {}", r)).collect::<Vec<_>>().join("\n")
+                            ))
                         }
                     }
-                    Err(e) => Ok(format!("Search failed: {}", e)),
+                    Err(e) => Ok(format!(
+                        "Explored\n- Search for '{}' failed: {}",
+                        query,
+                        e
+                    )),
                 }
             }
         }
@@ -328,6 +373,55 @@ impl ToolExecutor {
 }
 
 impl ToolExecutor {
+    /// コマンド実行成功時のフォーマット
+    fn format_successful_command_output(&self, result: &ExecToolCallOutput) -> String {
+        let command_summary = if !result.command_summary.is_empty() {
+            &result.command_summary
+        } else {
+            "Command executed"
+        };
+
+        if !result.stdout.is_empty() {
+            format!(
+                "Change Approved\n☑ {} (exit code: {})\n\nOutput:\n{}",
+                command_summary,
+                result.exit_code,
+                result.stdout
+            )
+        } else {
+            format!(
+                "Change Approved\n☑ {} (exit code: {})",
+                command_summary,
+                result.exit_code
+            )
+        }
+    }
+
+    /// コマンド実行失敗時のフォーマット
+    fn format_failed_command_output(&self, result: &ExecToolCallOutput) -> String {
+        let command_summary = if !result.command_summary.is_empty() {
+            &result.command_summary
+        } else {
+            "Command failed"
+        };
+
+        let mut output = format!(
+            "Proposed Change failed\n{} (exit code: {})",
+            command_summary,
+            result.exit_code
+        );
+
+        if !result.stderr.is_empty() {
+            output.push_str(&format!("\n\nError output:\n{}", result.stderr));
+        }
+
+        if !result.stdout.is_empty() {
+            output.push_str(&format!("\n\nStandard output:\n{}", result.stdout));
+        }
+
+        output
+    }
+
     /// ファイルを再帰的に検索
     async fn search_files_recursive(&self, dir: &PathBuf, query: &str) -> Result<Vec<String>> {
         let mut results = Vec::new();

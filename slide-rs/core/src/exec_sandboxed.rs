@@ -1,8 +1,8 @@
 use crate::approval_manager::{ApprovalRequest, ApprovalResponse, AskForApproval};
-use crate::exec_env::create_env;
 use crate::config_types::ShellEnvironmentPolicy;
-use crate::safety::{SafetyCheck, assess_command_safety_v2};
-use crate::seatbelt::{SandboxPolicy, build_seatbelt_policy};
+use crate::exec_env::create_env;
+use crate::safety::{assess_command_safety_v2, SafetyCheck};
+use crate::seatbelt::{build_seatbelt_policy, SandboxPolicy};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -51,10 +51,7 @@ pub struct SandboxedExecutor {
 }
 
 impl SandboxedExecutor {
-    pub fn new(
-        approval_policy: AskForApproval,
-        sandbox_policy: SandboxPolicy,
-    ) -> Self {
+    pub fn new(approval_policy: AskForApproval, sandbox_policy: SandboxPolicy) -> Self {
         Self {
             approval_manager: crate::approval_manager::ApprovalManager::new(approval_policy),
             sandbox_policy,
@@ -86,7 +83,8 @@ impl SandboxedExecutor {
                     }
                     ApprovalResponse::ApprovedAndTrust => {
                         // Add to approved commands
-                        self.approval_manager.approve_command(params.command.clone());
+                        self.approval_manager
+                            .approve_command(params.command.clone());
                     }
                     ApprovalResponse::Denied => {
                         return Err(ExecError::ApprovalDenied);
@@ -151,7 +149,9 @@ impl SandboxedExecutor {
 
     /// Execute command within sandbox constraints
     async fn execute_sandboxed(&self, params: &ExecParams) -> Result<BasicExecResult, ExecError> {
-        let working_dir = params.working_dir.as_deref()
+        let working_dir = params
+            .working_dir
+            .as_deref()
             .unwrap_or_else(|| Path::new("."));
 
         // Prepare environment variables
@@ -159,28 +159,60 @@ impl SandboxedExecutor {
 
         match self.sandbox_policy {
             SandboxPolicy::ReadOnly => {
-                self.execute_read_only(params.command.clone(), working_dir, env_vars, params.timeout_ms).await
+                self.execute_read_only(
+                    params.command.clone(),
+                    working_dir,
+                    env_vars,
+                    params.timeout_ms,
+                )
+                .await
             }
             SandboxPolicy::WorkspaceWrite { .. } => {
-                self.execute_workspace_write(params.command.clone(), working_dir, env_vars, params.timeout_ms).await
+                self.execute_workspace_write(
+                    params.command.clone(),
+                    working_dir,
+                    env_vars,
+                    params.timeout_ms,
+                )
+                .await
             }
             SandboxPolicy::DangerFullAccess => {
-                self.execute_full_access(params.command.clone(), working_dir, env_vars, params.timeout_ms).await
+                self.execute_full_access(
+                    params.command.clone(),
+                    working_dir,
+                    env_vars,
+                    params.timeout_ms,
+                )
+                .await
             }
         }
     }
 
     /// Execute command with escalated permissions (outside normal sandbox)
-    async fn execute_with_escalated_permissions(&self, params: &ExecParams) -> Result<BasicExecResult, ExecError> {
-        let working_dir = params.working_dir.as_deref()
+    async fn execute_with_escalated_permissions(
+        &self,
+        params: &ExecParams,
+    ) -> Result<BasicExecResult, ExecError> {
+        let working_dir = params
+            .working_dir
+            .as_deref()
             .unwrap_or_else(|| Path::new("."));
 
         let env_vars = create_env(&params.environment_policy);
 
-        tracing::warn!("Executing command with escalated permissions: {:?}", params.command);
+        tracing::warn!(
+            "Executing command with escalated permissions: {:?}",
+            params.command
+        );
 
         // Execute without sandbox restrictions
-        self.execute_full_access(params.command.clone(), working_dir, env_vars, params.timeout_ms).await
+        self.execute_full_access(
+            params.command.clone(),
+            working_dir,
+            env_vars,
+            params.timeout_ms,
+        )
+        .await
     }
 
     /// Execute with read-only sandbox
@@ -193,21 +225,37 @@ impl SandboxedExecutor {
     ) -> Result<BasicExecResult, ExecError> {
         #[cfg(target_os = "macos")]
         {
-            self.execute_with_seatbelt(command, working_dir, env_vars, timeout_ms, &SandboxPolicy::ReadOnly).await
+            self.execute_with_seatbelt(
+                command,
+                working_dir,
+                env_vars,
+                timeout_ms,
+                &SandboxPolicy::ReadOnly,
+            )
+            .await
         }
         #[cfg(target_os = "linux")]
         {
-            self.execute_with_landlock(command, working_dir, env_vars, timeout_ms, &SandboxPolicy::ReadOnly).await
+            self.execute_with_landlock(
+                command,
+                working_dir,
+                env_vars,
+                timeout_ms,
+                &SandboxPolicy::ReadOnly,
+            )
+            .await
         }
         #[cfg(target_os = "windows")]
         {
             // Windows: Basic execution with limited environment
-            self.execute_basic(command, working_dir, env_vars, timeout_ms).await
+            self.execute_basic(command, working_dir, env_vars, timeout_ms)
+                .await
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
         {
             // Other platforms: Basic execution
-            self.execute_basic(command, working_dir, env_vars, timeout_ms).await
+            self.execute_basic(command, working_dir, env_vars, timeout_ms)
+                .await
         }
     }
 
@@ -221,16 +269,31 @@ impl SandboxedExecutor {
     ) -> Result<BasicExecResult, ExecError> {
         #[cfg(target_os = "macos")]
         {
-            self.execute_with_seatbelt(command, working_dir, env_vars, timeout_ms, &self.sandbox_policy).await
+            self.execute_with_seatbelt(
+                command,
+                working_dir,
+                env_vars,
+                timeout_ms,
+                &self.sandbox_policy,
+            )
+            .await
         }
         #[cfg(target_os = "linux")]
         {
-            self.execute_with_landlock(command, working_dir, env_vars, timeout_ms, &self.sandbox_policy).await
+            self.execute_with_landlock(
+                command,
+                working_dir,
+                env_vars,
+                timeout_ms,
+                &self.sandbox_policy,
+            )
+            .await
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             // Other platforms: Basic execution
-            self.execute_basic(command, working_dir, env_vars, timeout_ms).await
+            self.execute_basic(command, working_dir, env_vars, timeout_ms)
+                .await
         }
     }
 
@@ -242,7 +305,8 @@ impl SandboxedExecutor {
         env_vars: HashMap<String, String>,
         timeout_ms: Option<u64>,
     ) -> Result<BasicExecResult, ExecError> {
-        self.execute_basic(command, working_dir, env_vars, timeout_ms).await
+        self.execute_basic(command, working_dir, env_vars, timeout_ms)
+            .await
     }
 
     /// Basic command execution without sandbox
@@ -270,14 +334,19 @@ impl SandboxedExecutor {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
-        let timeout = timeout_ms.map(Duration::from_millis).unwrap_or(Duration::from_secs(30));
+        let timeout = timeout_ms
+            .map(Duration::from_millis)
+            .unwrap_or(Duration::from_secs(30));
 
         let output = tokio::time::timeout(timeout, async {
-            tokio::task::spawn_blocking(move || cmd.output()).await
+            tokio::task::spawn_blocking(move || cmd.output())
+                .await
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
         })
         .await
-        .map_err(|_| ExecError::Timeout { timeout_ms: timeout.as_millis() as u64 })?
+        .map_err(|_| ExecError::Timeout {
+            timeout_ms: timeout.as_millis() as u64,
+        })?
         .map_err(|e| ExecError::Io { source: e })?;
 
         Ok(BasicExecResult {
@@ -300,9 +369,11 @@ impl SandboxedExecutor {
         let policy = build_seatbelt_policy(sandbox_policy.clone());
 
         // Create a temporary policy file
-        let policy_file = std::env::temp_dir().join(format!("slide_policy_{}.sbpl", std::process::id()));
-        std::fs::write(&policy_file, policy)
-            .map_err(|e| ExecError::SandboxError { message: e.to_string() })?;
+        let policy_file =
+            std::env::temp_dir().join(format!("slide_policy_{}.sbpl", std::process::id()));
+        std::fs::write(&policy_file, policy).map_err(|e| ExecError::SandboxError {
+            message: e.to_string(),
+        })?;
 
         let mut sandbox_cmd = Command::new("sandbox-exec");
         sandbox_cmd
@@ -315,7 +386,9 @@ impl SandboxedExecutor {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
-        let timeout = timeout_ms.map(Duration::from_millis).unwrap_or(Duration::from_secs(30));
+        let timeout = timeout_ms
+            .map(Duration::from_millis)
+            .unwrap_or(Duration::from_secs(30));
 
         let result = tokio::time::timeout(timeout, async {
             tokio::task::spawn_blocking(move || {
@@ -323,11 +396,14 @@ impl SandboxedExecutor {
                 // Clean up policy file
                 let _ = std::fs::remove_file(&policy_file);
                 Ok::<_, std::io::Error>(output)
-            }).await
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
+            })
+            .await
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
         })
         .await
-        .map_err(|_| ExecError::Timeout { timeout_ms: timeout.as_millis() as u64 })?
+        .map_err(|_| ExecError::Timeout {
+            timeout_ms: timeout.as_millis() as u64,
+        })?
         .map_err(|e| ExecError::Io { source: e })?;
 
         Ok(BasicExecResult {
@@ -350,7 +426,8 @@ impl SandboxedExecutor {
         // For now, fall back to basic execution
         // Real implementation would use landlock/seccomp
         tracing::warn!("Landlock sandbox not yet implemented, falling back to basic execution");
-        self.execute_basic(command, working_dir, env_vars, timeout_ms).await
+        self.execute_basic(command, working_dir, env_vars, timeout_ms)
+            .await
     }
 }
 
@@ -367,10 +444,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_basic_execution() {
-        let mut executor = SandboxedExecutor::new(
-            AskForApproval::Never,
-            SandboxPolicy::ReadOnly,
-        );
+        let mut executor = SandboxedExecutor::new(AskForApproval::Never, SandboxPolicy::ReadOnly);
 
         let params = ExecParams {
             command: vec!["echo".to_string(), "hello".to_string()],
@@ -412,6 +486,9 @@ mod tests {
         // This should request approval, but auto-approve in test
         let result = executor.execute(params).await;
         // Result might fail because 'rm nonexistent' fails, but it should not be rejected by approval
-        assert!(matches!(result, Ok(_) | Err(ExecError::ExecutionFailed { .. })));
+        assert!(matches!(
+            result,
+            Ok(_) | Err(ExecError::ExecutionFailed { .. })
+        ));
     }
 }

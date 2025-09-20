@@ -1,5 +1,5 @@
-use crate::seatbelt::SandboxPolicy;
 use crate::approval_manager::ApprovalManager;
+use crate::seatbelt::SandboxPolicy;
 use slide_common::ApprovalMode;
 use std::collections::HashSet;
 use std::path::Path;
@@ -100,10 +100,29 @@ fn is_dangerous_command(command: &[String]) -> bool {
 
     let cmd = &command[0];
     let dangerous_commands = [
-        "rm", "rmdir", "mv", "cp", "dd", "mkfs", "fdisk",
-        "sudo", "su", "chmod", "chown", "kill", "killall",
-        "halt", "reboot", "shutdown", "systemctl", "service",
-        "mount", "umount", "format", "del", "erase"
+        "rm",
+        "rmdir",
+        "mv",
+        "cp",
+        "dd",
+        "mkfs",
+        "fdisk",
+        "sudo",
+        "su",
+        "chmod",
+        "chown",
+        "kill",
+        "killall",
+        "halt",
+        "reboot",
+        "shutdown",
+        "systemctl",
+        "service",
+        "mount",
+        "umount",
+        "format",
+        "del",
+        "erase",
     ];
 
     if dangerous_commands.contains(&cmd.as_str()) {
@@ -112,18 +131,18 @@ fn is_dangerous_command(command: &[String]) -> bool {
 
     // Check for dangerous patterns in the full command
     let full_command = command.join(" ");
-    full_command.contains("rm -rf") ||
-    full_command.contains("--force") ||
-    full_command.contains("--recursive") ||
-    full_command.contains(">/dev/") ||
-    full_command.contains("2>/dev/null") && full_command.contains("rm")
+    full_command.contains("rm -rf")
+        || full_command.contains("--force")
+        || full_command.contains("--recursive")
+        || full_command.contains(">/dev/")
+        || full_command.contains("2>/dev/null") && full_command.contains("rm")
 }
 
 fn is_known_safe_command(command: &[String]) -> bool {
     if command.is_empty() {
         return false;
     }
-    
+
     let cmd = &command[0];
     matches!(
         cmd.as_str(),
@@ -155,11 +174,10 @@ fn is_known_safe_command_str(command: &str) -> bool {
     if parts.is_empty() {
         return false;
     }
-    
+
     let cmd = parts[0];
     matches!(
         cmd,
         "ls" | "cat" | "grep" | "find" | "echo" | "pwd" | "whoami" | "date" | "which"
     )
 }
-

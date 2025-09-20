@@ -75,12 +75,9 @@ fn parse_command_impl(command: &[String]) -> Vec<ParsedCommand> {
 
     let joined = shlex_join(command);
 
-    // Check for bash -lc "..." pattern
-    if let [bash, flag, script] = command
-        && bash == "bash"
-        && flag == "-lc"
-    {
-        if let Some(inner_commands) = shlex_split(script) {
+    // Check for `bash -lc "..."` pattern without using unstable slice patterns.
+    if command.len() == 3 && command[0] == "bash" && command[1] == "-lc" {
+        if let Some(inner_commands) = shlex_split(&command[2]) {
             return parse_command_impl(&inner_commands);
         }
     }
@@ -225,12 +222,23 @@ pub fn parse_command_string(cmd: &str) -> Vec<String> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommandKind { Search, List, Format, Test, Lint, Unknown }
+pub enum CommandKind {
+    Search,
+    List,
+    Format,
+    Test,
+    Lint,
+    Unknown,
+}
 
 pub fn summarize(cmd: &str) -> CommandKind {
-    if cmd.contains("rg ") || cmd.contains("grep ") { CommandKind::Search }
-    else if cmd.starts_with("ls") { CommandKind::List }
-    else { CommandKind::Unknown }
+    if cmd.contains("rg ") || cmd.contains("grep ") {
+        CommandKind::Search
+    } else if cmd.starts_with("ls") {
+        CommandKind::List
+    } else {
+        CommandKind::Unknown
+    }
 }
 
 #[cfg(test)]
@@ -267,12 +275,20 @@ mod tests {
 
     #[test]
     fn test_parse_grep_command() {
-        let command = vec!["grep".to_string(), "pattern".to_string(), "file.txt".to_string()];
+        let command = vec![
+            "grep".to_string(),
+            "pattern".to_string(),
+            "file.txt".to_string(),
+        ];
         let result = parse_command(&command);
 
         assert_eq!(result.len(), 1);
         match &result[0] {
-            ParsedCommand::Search { cmd: _, query, path } => {
+            ParsedCommand::Search {
+                cmd: _,
+                query,
+                path,
+            } => {
                 assert_eq!(query, &Some("pattern".to_string()));
                 assert_eq!(path, &Some("file.txt".to_string()));
             }
@@ -355,10 +371,6 @@ mod tests {
 
     #[test]
     fn test_extra_spaces() {
-        assert_eq!(
-            parse_command_string("  ls   -la  "),
-            vec!["ls", "-la"]
-        );
+        assert_eq!(parse_command_string("  ls   -la  "), vec!["ls", "-la"]);
     }
 }
-

@@ -21,7 +21,9 @@ pub struct StubClient;
 impl ModelClient for StubClient {
     async fn stream(&self, prompt: String) -> Result<Receiver<ResponseEvent>> {
         let (tx, rx) = tokio::sync::mpsc::channel(32);
-        let _ = tx.send(ResponseEvent::TextDelta(format!("echo: {}", prompt))).await;
+        let _ = tx
+            .send(ResponseEvent::TextDelta(format!("echo: {}", prompt)))
+            .await;
         let _ = tx.send(ResponseEvent::Completed).await;
         Ok(rx)
     }
@@ -33,10 +35,16 @@ pub struct OpenAiAdapter {
 }
 
 impl OpenAiAdapter {
-    pub fn new(api_key: String) -> Self { Self { inner: slide_chatgpt::OpenAiModelClient::new(api_key) } }
+    pub fn new(api_key: String) -> Self {
+        Self {
+            inner: slide_chatgpt::OpenAiModelClient::new(api_key),
+        }
+    }
 
     pub fn new_with_model(api_key: String, model: String) -> Self {
-        Self { inner: slide_chatgpt::OpenAiModelClient::new_with_model(api_key, model) }
+        Self {
+            inner: slide_chatgpt::OpenAiModelClient::new_with_model(api_key, model),
+        }
     }
 }
 
@@ -47,11 +55,15 @@ impl ModelClient for OpenAiAdapter {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
             while let Some(delta) = rx_text.recv().await {
-                if delta.is_empty() { let _ = tx.send(ResponseEvent::Completed).await; break; }
-                if tx.send(ResponseEvent::TextDelta(delta)).await.is_err() { break; }
+                if delta.is_empty() {
+                    let _ = tx.send(ResponseEvent::Completed).await;
+                    break;
+                }
+                if tx.send(ResponseEvent::TextDelta(delta)).await.is_err() {
+                    break;
+                }
             }
         });
         Ok(rx)
     }
 }
-

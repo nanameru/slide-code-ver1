@@ -6,31 +6,51 @@ use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 
 use crate::client::{ModelClient, ResponseEvent};
-use slide_chatgpt::client::{ChatGptClient, SlideRequest};
-use crate::openai_tools::{ToolsConfig, ToolsConfigParams, render_tools_instructions};
+use crate::openai_tools::{render_tools_instructions, ToolsConfig, ToolsConfigParams};
 use crate::tool_executor::ToolExecutor;
+use slide_chatgpt::client::{ChatGptClient, SlideRequest};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReviewDecision { Approved, ApprovedForSession, Denied, Abort }
+pub enum ReviewDecision {
+    Approved,
+    ApprovedForSession,
+    Denied,
+    Abort,
+}
 
 #[derive(Debug, Clone)]
 pub enum Event {
     SessionConfigured {},
     TaskStarted,
-    AgentMessageDelta { delta: String },
-    AgentMessage { message: String },
-    ExecCommandBegin { command: Vec<String>, cwd: PathBuf },
-    ExecCommandEnd { exit_code: i32 },
+    AgentMessageDelta {
+        delta: String,
+    },
+    AgentMessage {
+        message: String,
+    },
+    ExecCommandBegin {
+        command: Vec<String>,
+        cwd: PathBuf,
+    },
+    ExecCommandEnd {
+        exit_code: i32,
+    },
     ApplyPatchApprovalRequest {
         id: String,
         changes: HashMap<PathBuf, String>,
         reason: Option<String>,
     },
     PatchApplyBegin {},
-    PatchApplyEnd { success: bool },
-    TurnDiff { unified_diff: String },
+    PatchApplyEnd {
+        success: bool,
+    },
+    TurnDiff {
+        unified_diff: String,
+    },
     TaskComplete,
-    Error { message: String },
+    Error {
+        message: String,
+    },
     ShutdownComplete,
     ExecApprovalRequest {
         id: String,
@@ -42,10 +62,18 @@ pub enum Event {
 
 #[derive(Debug, Clone)]
 pub enum Op {
-    UserInput { text: String },
+    UserInput {
+        text: String,
+    },
     Interrupt,
-    ExecApproval { id: String, decision: ReviewDecision },
-    PatchApproval { id: String, decision: ReviewDecision },
+    ExecApproval {
+        id: String,
+        decision: ReviewDecision,
+    },
+    PatchApproval {
+        id: String,
+        decision: ReviewDecision,
+    },
     Shutdown,
 }
 
@@ -84,22 +112,51 @@ impl Codex {
                     Op::UserInput { text } => {
                         let _ = tx_event.send(Event::TaskStarted).await;
                         if let Some(prompt) = text.strip_prefix("/slide ") {
-                            match slide_client.generate_slides(SlideRequest { prompt: prompt.to_string(), num_slides: 6, language: "ja".to_string() }).await {
+                            match slide_client
+                                .generate_slides(SlideRequest {
+                                    prompt: prompt.to_string(),
+                                    num_slides: 6,
+                                    language: "ja".to_string(),
+                                })
+                                .await
+                            {
                                 Ok(resp) => {
                                     for line in resp.markdown.lines() {
                                         let delta = format!("{}\n", line);
-                                        let _ = tx_event.send(Event::AgentMessageDelta { delta }).await;
+                                        let _ =
+                                            tx_event.send(Event::AgentMessageDelta { delta }).await;
                                     }
                                     let save_path = PathBuf::from("slides").join("draft.md");
-                                    if let Some(parent) = save_path.parent() { let _ = std::fs::create_dir_all(parent); }
-                                    if let Err(e) = std::fs::write(&save_path, resp.markdown.as_bytes()) {
-                                        let _ = tx_event.send(Event::Error { message: format!("failed to save slides: {e}") }).await;
+                                    if let Some(parent) = save_path.parent() {
+                                        let _ = std::fs::create_dir_all(parent);
+                                    }
+                                    if let Err(e) =
+                                        std::fs::write(&save_path, resp.markdown.as_bytes())
+                                    {
+                                        let _ = tx_event
+                                            .send(Event::Error {
+                                                message: format!("failed to save slides: {e}"),
+                                            })
+                                            .await;
                                     } else {
-                                        let _ = tx_event.send(Event::AgentMessage { message: format!("Saved to {}", save_path.display()) }).await;
+                                        let _ = tx_event
+                                            .send(Event::AgentMessage {
+                                                message: format!(
+                                                    "Saved to {}",
+                                                    save_path.display()
+                                                ),
+                                            })
+                                            .await;
                                     }
                                     let _ = tx_event.send(Event::TaskComplete).await;
                                 }
-                                Err(e) => { let _ = tx_event.send(Event::Error { message: e.to_string() }).await; }
+                                Err(e) => {
+                                    let _ = tx_event
+                                        .send(Event::Error {
+                                            message: e.to_string(),
+                                        })
+                                        .await;
+                                }
                             }
                             continue;
                         }
@@ -115,7 +172,8 @@ impl Codex {
                             approval_policy: crate::approval_manager::AskForApproval::default(),
                             sandbox_policy: crate::seatbelt::SandboxPolicy::default(),
                         });
-                        let tool_instructions = render_tools_instructions(&tools_cfg, approval_hint.as_deref());
+                        let tool_instructions =
+                            render_tools_instructions(&tools_cfg, approval_hint.as_deref());
                         // Append user message to conversation memory
                         convo.push(("user".to_string(), text.clone()));
                         // Cap memory to recent N entries to fit token budget
@@ -129,14 +187,21 @@ impl Codex {
                         if !convo.is_empty() {
                             history_block.push_str("\n\nConversation so far:\n");
                             for (role, msg) in &convo {
-                                let tag = if role == "assistant" { "Assistant" } else { "User" };
+                                let tag = if role == "assistant" {
+                                    "Assistant"
+                                } else {
+                                    "User"
+                                };
                                 history_block.push_str(tag);
                                 history_block.push_str(": ");
                                 history_block.push_str(msg);
-                                if !msg.ends_with('\n') { history_block.push('\n'); }
+                                if !msg.ends_with('\n') {
+                                    history_block.push('\n');
+                                }
                             }
                         }
-                        let composed = format!("{}{}\n\nUser: {}", tool_instructions, history_block, text);
+                        let composed =
+                            format!("{}{}\n\nUser: {}", tool_instructions, history_block, text);
                         // ツール実行エンジンを作成（ToolsConfigParamsから設定を取得）
                         let approval_policy = crate::approval_manager::AskForApproval::default();
                         let sandbox_policy = crate::seatbelt::SandboxPolicy::default();
@@ -160,35 +225,54 @@ impl Codex {
                                         }
                                         ResponseEvent::Completed => {
                                             // AIレスポンス完了時にツール実行を処理
-                                            match tool_executor.process_response(&assembled_resp).await {
+                                            match tool_executor
+                                                .process_response(&assembled_resp)
+                                                .await
+                                            {
                                                 Ok(processed_response) => {
                                                     // ツール実行結果があれば追加送信
                                                     if processed_response != assembled_resp {
-                                                        let tool_output = &processed_response[assembled_resp.len()..];
+                                                        let tool_output = &processed_response
+                                                            [assembled_resp.len()..];
                                                         let _ = tx_event
-                                                            .send(Event::AgentMessageDelta { delta: tool_output.to_string() })
+                                                            .send(Event::AgentMessageDelta {
+                                                                delta: tool_output.to_string(),
+                                                            })
                                                             .await;
                                                     }
 
                                                     // Store complete response (including tool results) into conversation
                                                     if !processed_response.is_empty() {
-                                                        convo.push(("assistant".to_string(), processed_response));
+                                                        convo.push((
+                                                            "assistant".to_string(),
+                                                            processed_response,
+                                                        ));
                                                         if convo.len() > MAX_HISTORY_MESSAGES {
-                                                            let drop = convo.len() - MAX_HISTORY_MESSAGES;
+                                                            let drop =
+                                                                convo.len() - MAX_HISTORY_MESSAGES;
                                                             convo.drain(0..drop);
                                                         }
                                                     }
                                                 }
                                                 Err(e) => {
-                                                    let _ = tx_event.send(Event::Error {
-                                                        message: format!("Tool execution failed: {}", e)
-                                                    }).await;
+                                                    let _ = tx_event
+                                                        .send(Event::Error {
+                                                            message: format!(
+                                                                "Tool execution failed: {}",
+                                                                e
+                                                            ),
+                                                        })
+                                                        .await;
 
                                                     // Store original response on error
                                                     if !assembled_resp.is_empty() {
-                                                        convo.push(("assistant".to_string(), assembled_resp.clone()));
+                                                        convo.push((
+                                                            "assistant".to_string(),
+                                                            assembled_resp.clone(),
+                                                        ));
                                                         if convo.len() > MAX_HISTORY_MESSAGES {
-                                                            let drop = convo.len() - MAX_HISTORY_MESSAGES;
+                                                            let drop =
+                                                                convo.len() - MAX_HISTORY_MESSAGES;
                                                             convo.drain(0..drop);
                                                         }
                                                     }
@@ -206,7 +290,9 @@ impl Codex {
                             }
                             Err(e) => {
                                 let _ = tx_event
-                                    .send(Event::Error { message: e.to_string() })
+                                    .send(Event::Error {
+                                        message: e.to_string(),
+                                    })
                                     .await;
                             }
                         }
@@ -228,8 +314,14 @@ impl Codex {
             }
         });
 
-        let inner = Arc::new(Inner { tx_submit, rx_event: Mutex::new(rx_event), conversation: Mutex::new(Vec::new()) });
-        Ok(CodexSpawnOk { codex: Codex { inner } })
+        let inner = Arc::new(Inner {
+            tx_submit,
+            rx_event: Mutex::new(rx_event),
+            conversation: Mutex::new(Vec::new()),
+        });
+        Ok(CodexSpawnOk {
+            codex: Codex { inner },
+        })
     }
 
     pub async fn submit(&self, op: Op) -> Result<()> {
