@@ -103,7 +103,13 @@ impl InteractiveApp {
                                         self.running = false;
                                     }
                                     KeyCode::Enter => {
-                                        self.submit_input().await;
+                                        if key.modifiers.intersects(
+                                            KeyModifiers::SHIFT | KeyModifiers::ALT,
+                                        ) {
+                                            self.input.push('\n');
+                                        } else {
+                                            self.submit_input().await;
+                                        }
                                     }
                                     KeyCode::Char(c) => {
                                         self.input.push(c);
