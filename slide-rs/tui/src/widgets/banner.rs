@@ -6,12 +6,15 @@ use ratatui::text::{Line, Span};
 pub const MESSAGE_PREFIX: &str = "__SLIDE_ASCII_BANNER__";
 
 const STARTUP_BANNER_LINES: &[&str] = &[
-    // "SLIDE" block letters, 5 lines tall, fixed column widths
-    " █████   █        ███████  ██████   ███████",
-    "█        █        █   █   █     █  █      ",
-    " █████   █        █   █   █     █  ██████ ",
-    "      █  █        █   █   █     █  █      ",
-    " █████   ███████  ███████  ██████   ███████",
+    // 8-line tall block ASCII for "SLIDE CODE" (inspired by AsciiArt.ts style)
+    " ███████   ███        ███████    ██████    ████████      ██████    ██████    ██████    ████████",
+    "███       ███        ███        ██   ███   ██           ██    ███ ██    ███ ██    ███ ██       ",
+    "███       ███        ███        ██    ███  ██           ██        ██        ██        ██       ",
+    " ██████   ███        ██████     ██    ███  ██████       ██        ██        ██        ██████   ",
+    "      ███ ███        ███        ██    ███  ██           ██        ██        ██        ██       ",
+    "      ███ ███        ███        ██   ███   ██           ██    ███ ██    ███ ██    ███ ██       ",
+    " ███████   ███████   ████████    ██████    ████████      ██████    ██████    ██████    ████████",
+    "                                                                                                 ",
 ];
 
 const RAINBOW_STOPS: &[Color] = &[
@@ -52,10 +55,12 @@ pub fn banner_lines() -> Vec<Line<'static>> {
                         0.0
                     };
                     let fg = rainbow_color(ratio);
-                    Span::styled(
-                        ch.to_string(),
-                        Style::default().fg(fg).add_modifier(Modifier::BOLD),
-                    )
+                    let style = if ch == '░' {
+                        Style::default().fg(fg).add_modifier(Modifier::DIM)
+                    } else {
+                        Style::default().fg(fg).add_modifier(Modifier::BOLD)
+                    };
+                    Span::styled(ch.to_string(), style)
                 })
                 .collect();
             Line::from(spans)
