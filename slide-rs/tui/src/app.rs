@@ -31,6 +31,11 @@ use crate::widgets::{
 use slide_core::codex::Event as CoreEvent;
 use slide_core::codex::Op;
 
+// Spinner frames for Thinking... indicator (radar-like feel)
+const THINK_SPINNER_FRAMES: [&str; 8] = [
+    "⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷",
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Normal,
@@ -101,6 +106,9 @@ pub struct App {
     // pending_history_lines removed - messages now insert directly
     // Assistant応答の行単位ストリーミング状態
     answer_stream: AnswerStreamState,
+    // Thinking... spinner state
+    thinking_frame_idx: usize,
+    thinking_last_change: Instant,
 }
 
 impl App {
@@ -168,6 +176,8 @@ impl App {
             app_event_tx: app_tx,
             // pending_history_lines removed
             answer_stream: AnswerStreamState::new(),
+            thinking_frame_idx: 0,
+            thinking_last_change: Instant::now(),
         };
         // Write a small banner to the log so the browser viewer has content
         append_log("[info] Slide TUI session started");
@@ -179,11 +189,12 @@ impl App {
     }
 
     fn on_tick(&mut self) {
-        // Simulate finishing a running task after 1.5s
-        if self.status == RunStatus::Running
-            && self.last_tick.elapsed() > Duration::from_millis(1500)
-        {
-            self.status = RunStatus::Idle;
+        // Spinner frame advance every ~140ms while running
+        if self.status == RunStatus::Running {
+            if self.thinking_last_change.elapsed() > Duration::from_millis(140) {
+                self.thinking_frame_idx = (self.thinking_frame_idx + 1) % THINK_SPINNER_FRAMES.len();
+                self.thinking_last_change = Instant::now();
+            }
         }
     }
 
@@ -217,9 +228,11 @@ impl App {
             agent.submit_text_bg(text);
         }
 
-        // Simulate agent response for now
+        // Mark generating state
         self.status = RunStatus::Running;
         self.last_tick = Instant::now();
+        self.thinking_frame_idx = 0;
+        self.thinking_last_change = Instant::now();
     }
 
     /// Codex風のシンプルなキーイベント処理
@@ -602,19 +615,35 @@ fn draw_input_ui(f: &mut Frame, app: &mut App, area: Rect, bottom_height: u16) {
         .constraints([Constraint::Length(1), Constraint::Length(bottom_height)])
         .split(area);
 
-    // Status bar
-    let status = match app.status {
-        RunStatus::Idle => "Idle",
-        RunStatus::Running => "Running…",
-        RunStatus::Error => "Error",
-    };
-    let mode = match app.mode {
-        Mode::Normal => "NORMAL",
-        Mode::Insert => "INSERT",
-        Mode::Help => "HELP",
-    };
-    let status_bar = StatusBar::new(mode, status, "i:insert  q:quit");
-    f.render_widget(status_bar, chunks[0]);
+    // Status bar (replace with Thinking... animation while running)
+    if app.status == RunStatus::Running {
+        let frame = THINK_SPINNER_FRAMES[app.thinking_frame_idx];
+        let line = Line::from(vec![
+            Span::styled(
+                " Thinking... ",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled(frame, Style::default().fg(Color::Green)),
+        ]);
+        let p = Paragraph::new(line);
+        f.render_widget(p, chunks[0]);
+    } else {
+        let status = match app.status {
+            RunStatus::Idle => "Idle",
+            RunStatus::Running => "Running…",
+            RunStatus::Error => "Error",
+        };
+        let mode = match app.mode {
+            Mode::Normal => "NORMAL",
+            Mode::Insert => "INSERT",
+            Mode::Help => "HELP",
+        };
+        let status_bar = StatusBar::new(mode, status, "i:insert  q:quit");
+        f.render_widget(status_bar, chunks[0]);
+    }
 
     // Bottom pane (input area) using render_ref
     app.bottom_pane.render_ref(chunks[1], f.buffer_mut());
