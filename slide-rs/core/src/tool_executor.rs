@@ -1,8 +1,11 @@
-use crate::exec_sandboxed::{SandboxedExecutor, ExecParams};
+use crate::exec::{SandboxedExecutor, ExecParams, ExecToolCallOutput};
 use crate::seatbelt::SandboxPolicy;
 use crate::approval_manager::AskForApproval;
 use crate::config_types::ShellEnvironmentPolicy;
+use crate::exec_env::create_env;
+use crate::tool_apply_patch::{parse_patch, apply_file_operation, ApplyPatchInput, tool_apply_patch};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use anyhow::Result;
 
@@ -41,6 +44,24 @@ impl ToolExecutor {
         }
 
         Ok(result)
+    }
+
+    /// 複数のツールを並列実行
+    pub async fn execute_multiple_tools(&mut self, tool_calls: Vec<ToolCall>) -> Result<Vec<String>> {
+        let mut results = Vec::new();
+
+        for tool_call in tool_calls {
+            let result = self.execute_tool_call(tool_call).await?;
+            results.push(result);
+        }
+
+        Ok(results)
+    }
+
+    /// OpenAI Function Calling形式のツール実行
+    pub async fn execute_function_call(&mut self, name: &str, arguments: &str) -> Result<String> {
+        let call = self.parse_function_call(name, arguments)?;
+        self.execute_tool_call(call).await
     }
 
     /// レスポンスからツール呼び出しを抽出
@@ -90,7 +111,7 @@ impl ToolExecutor {
                         .collect()
                 } else if let Some(cmd_str) = value["command"].as_str() {
                     // シンプルな文字列の場合は分割
-                    crate::parse_command::parse_command(cmd_str)
+                    crate::parse_command::parse_command_string(cmd_str)
                 } else {
                     return Err(anyhow::anyhow!("Invalid command format"));
                 };
@@ -128,6 +149,26 @@ impl ToolExecutor {
                     content: content.to_string(),
                 })
             }
+            "apply_patch" => {
+                let input = value["input"].as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Missing patch input"))?;
+                Ok(ToolCall::ApplyPatch {
+                    input: input.to_string(),
+                })
+            }
+            "list_files" => {
+                let path = value["path"].as_str().map(PathBuf::from);
+                Ok(ToolCall::ListFiles { path })
+            }
+            "search_files" => {
+                let query = value["query"].as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Missing search query"))?;
+                let path = value["path"].as_str().map(PathBuf::from);
+                Ok(ToolCall::SearchFiles {
+                    query: query.to_string(),
+                    path,
+                })
+            }
             _ => Err(anyhow::anyhow!("Unknown tool: {}", tool_name))
         }
     }
@@ -143,6 +184,45 @@ impl ToolExecutor {
         None
     }
 
+    /// OpenAI Function Call形式をToolCallに変換
+    fn parse_function_call(&self, name: &str, arguments: &str) -> Result<ToolCall> {
+        let value: Value = serde_json::from_str(arguments)?;
+
+        match name {
+            "shell" => {
+                let command = if let Some(cmd_array) = value["command"].as_array() {
+                    cmd_array.iter()
+                        .map(|v| v.as_str().unwrap_or_default().to_string())
+                        .collect()
+                } else {
+                    return Err(anyhow::anyhow!("Invalid command format"));
+                };
+
+                let working_dir = value["workdir"].as_str().map(PathBuf::from);
+                let timeout_ms = value["timeout_ms"].as_u64();
+                let with_escalated_permissions = value["with_escalated_permissions"]
+                    .as_bool().unwrap_or(false);
+                let justification = value["justification"].as_str().map(String::from);
+
+                Ok(ToolCall::Shell {
+                    command,
+                    working_dir,
+                    with_escalated_permissions,
+                    justification,
+                    timeout_ms,
+                })
+            }
+            "apply_patch" => {
+                let input = value["input"].as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Missing patch input"))?;
+                Ok(ToolCall::ApplyPatch {
+                    input: input.to_string(),
+                })
+            }
+            _ => Err(anyhow::anyhow!("Unknown function: {}", name))
+        }
+    }
+
     /// 個別のツール呼び出しを実行
     async fn execute_tool_call(&mut self, call: ToolCall) -> Result<String> {
         match call {
@@ -153,13 +233,14 @@ impl ToolExecutor {
                 justification,
                 timeout_ms
             } => {
+                let env = create_env(&self.shell_environment_policy);
                 let params = ExecParams {
                     command,
-                    working_dir: working_dir.or_else(|| Some(self.cwd.clone())),
+                    cwd: working_dir.unwrap_or_else(|| self.cwd.clone()),
                     timeout_ms,
-                    with_escalated_permissions,
+                    env,
+                    with_escalated_permissions: Some(with_escalated_permissions),
                     justification,
-                    environment_policy: self.shell_environment_policy.clone(),
                 };
 
                 match self.executor.execute(params).await {
@@ -207,7 +288,80 @@ impl ToolExecutor {
                     Err(e) => Ok(format!("Failed to write file {}: {}", full_path.display(), e)),
                 }
             }
+            ToolCall::ApplyPatch { input } => {
+                let result = tool_apply_patch(ApplyPatchInput { patch: input }, true);
+                Ok(result.message)
+            }
+            ToolCall::ListFiles { path } => {
+                let target_path = path.unwrap_or_else(|| self.cwd.clone());
+
+                match tokio::fs::read_dir(&target_path).await {
+                    Ok(mut entries) => {
+                        let mut files = Vec::new();
+                        while let Some(entry) = entries.next_entry().await.unwrap_or(None) {
+                            if let Ok(name) = entry.file_name().into_string() {
+                                files.push(name);
+                            }
+                        }
+                        files.sort();
+                        Ok(format!("Files in {}:\n{}", target_path.display(), files.join("\n")))
+                    }
+                    Err(e) => Ok(format!("Failed to list files in {}: {}", target_path.display(), e)),
+                }
+            }
+            ToolCall::SearchFiles { query, path } => {
+                let search_path = path.unwrap_or_else(|| self.cwd.clone());
+                // シンプルなファイル名検索（実際のプロジェクトではより高度な検索を実装）
+                match self.search_files_recursive(&search_path, &query).await {
+                    Ok(results) => {
+                        if results.is_empty() {
+                            Ok(format!("No files found matching '{}'", query))
+                        } else {
+                            Ok(format!("Found {} matches:\n{}", results.len(), results.join("\n")))
+                        }
+                    }
+                    Err(e) => Ok(format!("Search failed: {}", e)),
+                }
+            }
         }
+    }
+}
+
+impl ToolExecutor {
+    /// ファイルを再帰的に検索
+    async fn search_files_recursive(&self, dir: &PathBuf, query: &str) -> Result<Vec<String>> {
+        let mut results = Vec::new();
+        let mut stack = vec![dir.clone()];
+
+        while let Some(current_dir) = stack.pop() {
+            if let Ok(mut entries) = tokio::fs::read_dir(&current_dir).await {
+                while let Some(entry) = entries.next_entry().await.unwrap_or(None) {
+                    let path = entry.path();
+                    let file_name = entry.file_name();
+
+                    if let Some(name_str) = file_name.to_str() {
+                        if name_str.contains(query) {
+                            results.push(path.to_string_lossy().to_string());
+                        }
+                    }
+
+                    if path.is_dir() {
+                        stack.push(path);
+                    }
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// 設定の更新
+    pub fn update_working_directory(&mut self, new_cwd: PathBuf) {
+        self.cwd = new_cwd;
+    }
+
+    pub fn update_shell_environment_policy(&mut self, policy: ShellEnvironmentPolicy) {
+        self.shell_environment_policy = policy;
     }
 }
 
@@ -227,6 +381,16 @@ pub enum ToolCall {
     WriteFile {
         path: PathBuf,
         content: String,
+    },
+    ApplyPatch {
+        input: String,
+    },
+    ListFiles {
+        path: Option<PathBuf>,
+    },
+    SearchFiles {
+        query: String,
+        path: Option<PathBuf>,
     },
 }
 

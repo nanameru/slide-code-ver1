@@ -201,7 +201,9 @@ where
     /// Creates a new [`Terminal`] with the given [`Backend`].
     pub fn new(mut backend: B) -> io::Result<Self> {
         let screen_size = backend.size()?;
-        let cursor_pos = backend.get_cursor_position().unwrap_or(Position { x: 0, y: 0 });
+        let cursor_pos = backend
+            .get_cursor_position()
+            .unwrap_or(Position { x: 0, y: 0 });
         Ok(Self {
             backend,
             buffers: [

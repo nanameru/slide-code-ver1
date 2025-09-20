@@ -13,7 +13,11 @@ pub struct StatusBar<'a> {
 
 impl<'a> StatusBar<'a> {
     pub fn new(mode: &'a str, status: &'a str, hints: &'a str) -> Self {
-        Self { mode, status, hints }
+        Self {
+            mode,
+            status,
+            hints,
+        }
     }
 }
 
@@ -22,7 +26,10 @@ impl<'a> ratatui::widgets::Widget for StatusBar<'a> {
         let line = Line::from(vec![
             Span::styled(
                 format!(" {} ", self.mode),
-                Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
             Span::styled(
@@ -38,4 +45,3 @@ impl<'a> ratatui::widgets::Widget for StatusBar<'a> {
         widget.render(area, buf);
     }
 }
-

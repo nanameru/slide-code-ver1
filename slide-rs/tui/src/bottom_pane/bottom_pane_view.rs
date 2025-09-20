@@ -24,4 +24,3 @@ pub(crate) trait BottomPaneView {
     /// コンテンツの描画（コンポーザーの代わりに描画される）
     fn render(&self, area: Rect, buf: &mut Buffer);
 }
-

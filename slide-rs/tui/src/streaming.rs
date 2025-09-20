@@ -13,11 +13,15 @@ pub struct AnswerStreamState {
 }
 
 impl AnswerStreamState {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// デルタを反映し、完成した行を返す（最後の未完部分は保持）。
     pub fn push_delta(&mut self, delta: &str) -> Vec<Line<'static>> {
-        if delta.is_empty() { return Vec::new(); }
+        if delta.is_empty() {
+            return Vec::new();
+        }
         self.active = true;
         self.buffer.push_str(delta);
 
@@ -62,13 +66,11 @@ impl AnswerStreamState {
     }
 
     fn header_line(&self) -> Line<'static> {
-        Line::from(
-            Span::styled(
-                "slide",
-                Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        )
+        Line::from(Span::styled(
+            "slide",
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        ))
     }
 }

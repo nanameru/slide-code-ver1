@@ -1,30 +1,30 @@
 //! Bottom pane: shows the composer or an overlay view.
 use crossterm::event::KeyEvent;
+use ratatui::widgets::WidgetRef;
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
     text::Line,
     widgets::{Block, Borders, Paragraph, Wrap},
 };
-use ratatui::widgets::WidgetRef;
 
 mod bottom_pane_view;
 pub(crate) use bottom_pane_view::BottomPaneView;
+pub mod approval_modal_view;
 pub mod chat_composer;
 pub mod chat_composer_history;
-pub mod textarea;
 pub mod command_popup;
 pub mod file_search_popup;
 pub mod list_selection_view;
-pub mod selection_popup_common;
+pub mod paste_burst;
 pub mod popup_consts;
 pub mod scroll_state;
-pub mod approval_modal_view;
-pub mod paste_burst;
-pub use chat_composer::{ChatComposer, InputResult};
+pub mod selection_popup_common;
+pub mod textarea;
 use crate::app_event_sender::AppEventSender;
 use crate::user_approval_widget::ApprovalRequest;
 use approval_modal_view::ApprovalModalView;
+pub use chat_composer::{ChatComposer, InputResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancellationEvent {

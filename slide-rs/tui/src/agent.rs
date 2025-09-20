@@ -1,6 +1,6 @@
 use anyhow::Result;
-use slide_core::codex::{Codex, CodexSpawnOk, Event as CoreEvent, Op};
 use slide_core::client::{ModelClient, OpenAiAdapter, StubClient};
+use slide_core::codex::{Codex, CodexSpawnOk, Event as CoreEvent, Op};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -12,12 +12,18 @@ pub struct AgentHandle {
 impl AgentHandle {
     pub async fn spawn() -> Result<Self> {
         // Allow forcing Stub regardless of API key (for offline/dev/demo)
-        let force_stub = std::env::var("SLIDE_FORCE_STUB").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false);
+        let force_stub = std::env::var("SLIDE_FORCE_STUB")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
         // Prefer OpenAI if API key present; fallback to stub (unless forced)
         let client: Arc<dyn ModelClient + Send + Sync> = if !force_stub {
             if let Ok(key) = std::env::var("OPENAI_API_KEY") {
                 let model = std::env::var("SLIDE_MODEL").ok();
-                if let Some(m) = model { Arc::new(OpenAiAdapter::new_with_model(key, m)) } else { Arc::new(OpenAiAdapter::new(key)) }
+                if let Some(m) = model {
+                    Arc::new(OpenAiAdapter::new_with_model(key, m))
+                } else {
+                    Arc::new(OpenAiAdapter::new(key))
+                }
             } else {
                 Arc::new(StubClient)
             }
@@ -32,7 +38,9 @@ impl AgentHandle {
         let mut codex_ev = codex.clone();
         tokio::spawn(async move {
             while let Some(ev) = codex_ev.next_event().await {
-                if tx.send(ev).await.is_err() { break; }
+                if tx.send(ev).await.is_err() {
+                    break;
+                }
             }
         });
         Ok(Self { codex, rx })
@@ -50,4 +58,3 @@ impl AgentHandle {
         });
     }
 }
-

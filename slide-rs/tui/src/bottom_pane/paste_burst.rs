@@ -181,7 +181,10 @@ impl PasteBurst {
         if looks_pastey {
             // Note: caller is responsible for removing this slice from UI text.
             self.begin_with_retro_grabbed(grabbed.clone(), now);
-            Some(RetroGrab { start_byte, grabbed })
+            Some(RetroGrab {
+                start_byte,
+                grabbed,
+            })
         } else {
             None
         }
@@ -241,4 +244,3 @@ pub(crate) fn retro_start_index(before: &str, retro_chars: usize) -> usize {
         .map(|(idx, _)| idx)
         .unwrap_or(0)
 }
-

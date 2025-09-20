@@ -47,7 +47,7 @@ pub enum JsonSchema {
 
 /// Tool definition that matches OpenAI function calling format
 #[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct OpenAiTool {
+pub struct ResponsesApiTool {
     pub name: String,
     pub description: String,
     /// TODO: Validation. When strict is set to true, the JSON schema,
@@ -55,6 +55,34 @@ pub struct OpenAiTool {
     /// `properties` must be present in `required`.
     pub strict: bool,
     pub parameters: JsonSchema,
+}
+
+/// Freeform tool format for custom tools (GPT-5)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FreeformTool {
+    pub name: String,
+    pub description: String,
+    pub format: FreeformToolFormat,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FreeformToolFormat {
+    pub r#type: String,
+    pub syntax: String,
+    pub definition: String,
+}
+
+/// When serialized as JSON, this produces a valid "Tool" in the OpenAI
+/// Responses API.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(tag = "type")]
+pub enum OpenAiTool {
+    #[serde(rename = "function")]
+    Function(ResponsesApiTool),
+    #[serde(rename = "freeform")]
+    Freeform(FreeformTool),
+    #[serde(rename = "local_shell")]
+    LocalShell {},
 }
 
 #[derive(Debug, Clone)]
@@ -133,7 +161,7 @@ fn create_shell_tool() -> OpenAiTool {
         },
     );
 
-    OpenAiTool {
+    OpenAiTool::Function(ResponsesApiTool {
         name: "shell".to_string(),
         description: "Runs a shell command and returns its output".to_string(),
         strict: false,
@@ -142,7 +170,7 @@ fn create_shell_tool() -> OpenAiTool {
             required: Some(vec!["command".to_string()]),
             additional_properties: Some(false),
         },
-    }
+    })
 }
 
 /// Create the sandbox-aware shell tool with approval support
@@ -189,7 +217,7 @@ fn create_shell_tool_for_sandbox(sandbox_policy: &SandboxPolicy) -> OpenAiTool {
         // justification is required when with_escalated_permissions is used
     }
 
-    OpenAiTool {
+    OpenAiTool::Function(ResponsesApiTool {
         name: "shell".to_string(),
         description: format!(
             "Runs a shell command with sandbox policy: {}. {}",
@@ -210,7 +238,7 @@ fn create_shell_tool_for_sandbox(sandbox_policy: &SandboxPolicy) -> OpenAiTool {
             required: Some(required),
             additional_properties: Some(false),
         },
-    }
+    })
 }
 
 /// Create the plan tool
@@ -240,7 +268,7 @@ fn create_plan_tool() -> OpenAiTool {
     );
     properties.insert("plan".to_string(), plan_items_schema);
 
-    OpenAiTool {
+    OpenAiTool::Function(ResponsesApiTool {
         name: "update_plan".to_string(),
         description: "Updates the task plan. Provide an explanation and a list of plan items.".to_string(),
         strict: false,
@@ -249,7 +277,7 @@ fn create_plan_tool() -> OpenAiTool {
             required: Some(vec!["plan".to_string()]),
             additional_properties: Some(false),
         },
-    }
+    })
 }
 
 /// Create tools based on configuration
@@ -278,15 +306,95 @@ pub fn create_tools(config: &ToolsConfig, _mcp_tools: Option<Vec<String>>) -> Ve
         tools.push(create_plan_tool());
     }
 
-    // Note: Other tools (apply_patch, view_image, etc.) would be implemented similarly
+    // Add apply_patch tool if enabled
+    if config.include_apply_patch_tool {
+        tools.push(create_apply_patch_tool());
+    }
+
+    // Note: Other tools (view_image, etc.) would be implemented similarly
 
     tools
+}
+
+/// Create the apply_patch tool
+fn create_apply_patch_tool() -> OpenAiTool {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "input".to_string(),
+        JsonSchema::String {
+            description: Some(r#"The entire contents of the apply_patch command"#.to_string()),
+        },
+    );
+
+    OpenAiTool::Function(ResponsesApiTool {
+        name: "apply_patch".to_string(),
+        description: r#"Use the `apply_patch` tool to edit files.
+Your patch language is a stripped‑down, file‑oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high‑level envelope:
+
+*** Begin Patch
+[ one or more file sections ]
+*** End Patch
+
+Within that envelope, you get a sequence of file operations.
+You MUST include a header to specify the action you are taking.
+Each operation starts with one of three headers:
+
+*** Add File: <path> - create a new file. Every following line is a + line (the initial contents).
+*** Delete File: <path> - delete a file (no more lines after this header).
+*** Update File: <path> - edit an existing file. This supports:
+  1. Context lines (starting with a space).
+  2. Additions (starting with +).
+  3. Deletions (starting with -).
+  4. Optional context markers (@@ ... @@).
+  5. Optional end‑of‑file marker (*** End of File).
+
+Examples:
+
+*** Begin Patch
+*** Add File: hello.py
++print("Hello, world!")
++print("This is a new file")
+*** End Patch
+
+*** Begin Patch
+*** Update File: main.py
+ def main():
+-    print("Old message")
++    print("New message")
+     return 0
+*** End Patch
+
+*** Begin Patch
+*** Delete File: obsolete.py
+*** End Patch
+
+*** Begin Patch
+*** Update File: config.json
+@@ Adding new configuration @@
+ {
+   "version": "1.0",
++  "debug": true,
+   "name": "myapp"
+ }
+*** End Patch
+"#.to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["input".to_string()]),
+            additional_properties: Some(false),
+        },
+    })
 }
 
 /// Legacy function for compatibility - returns tool names
 pub fn get_openai_tools(cfg: &ToolsConfig, _mcp_tools: Option<Vec<String>>) -> Vec<String> {
     let tools = create_tools(cfg, _mcp_tools);
-    tools.into_iter().map(|t| t.name).collect()
+    tools.into_iter().map(|t| match t {
+        OpenAiTool::Function(f) => f.name,
+        OpenAiTool::Freeform(f) => f.name,
+        OpenAiTool::LocalShell {} => "local_shell".to_string(),
+    }).collect()
 }
 
 /// Render a concise instruction block that advertises available tools to the model.

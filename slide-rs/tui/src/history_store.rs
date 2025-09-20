@@ -1,12 +1,12 @@
 use std::fs::OpenOptions;
-use std::io::{Read, Write};
 use std::io::BufRead;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
-#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 #[derive(Clone, Debug)]
 pub(crate) struct HistoryStore {
@@ -56,9 +56,13 @@ impl HistoryStore {
         match std::fs::metadata(&self.path) {
             Ok(meta) => {
                 #[cfg(unix)]
-                { id = meta.ino(); }
+                {
+                    id = meta.ino();
+                }
                 #[cfg(not(unix))]
-                { let _ = meta; }
+                {
+                    let _ = meta;
+                }
             }
             Err(_) => return (id, 0),
         }
@@ -81,8 +85,12 @@ impl HistoryStore {
         #[cfg(unix)]
         {
             if let Ok(meta) = std::fs::metadata(&self.path) {
-                if meta.ino() != log_id { return None; }
-            } else { return None; }
+                if meta.ino() != log_id {
+                    return None;
+                }
+            } else {
+                return None;
+            }
         }
         let f = OpenOptions::new().read(true).open(&self.path).ok()?;
         let reader = std::io::BufReader::new(f);
@@ -102,7 +110,9 @@ impl HistoryStore {
 }
 
 fn home_dir() -> PathBuf {
-    if let Ok(h) = std::env::var("HOME") { return PathBuf::from(h); }
+    if let Ok(h) = std::env::var("HOME") {
+        return PathBuf::from(h);
+    }
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
@@ -129,10 +139,13 @@ fn extract_text_field(line: &str) -> Option<String> {
     let key = "\"text\":";
     let idx = line.find(key)? + key.len();
     let rest = line[idx..].trim_start();
-    if !rest.starts_with('"') { return None; }
+    if !rest.starts_with('"') {
+        return None;
+    }
     let mut out = String::new();
     let mut escaped = false;
-    for ch in rest[1..].chars() { // skip opening quote
+    for ch in rest[1..].chars() {
+        // skip opening quote
         if escaped {
             match ch {
                 '"' => out.push('"'),

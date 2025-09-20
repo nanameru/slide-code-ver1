@@ -9,13 +9,16 @@ use ratatui::{
 use std::cell::RefCell;
 use std::time::{Duration, Instant};
 
-use super::{chat_composer_history::ChatComposerHistory, textarea::{TextArea, TextAreaState}};
+use super::{
+    chat_composer_history::ChatComposerHistory,
+    textarea::{TextArea, TextAreaState},
+};
 
 /// 入力結果
 #[derive(Debug, PartialEq, Clone)]
 pub enum InputResult {
     Submitted(String),
-    None
+    None,
 }
 
 /// チャット入力コンポーネント（Codex風高機能版）
@@ -235,7 +238,10 @@ impl ChatComposer {
             }
             spans.push(Span::styled(*key, Style::default().fg(Color::Cyan)));
             spans.push(Span::raw(" "));
-            spans.push(Span::styled(*desc, Style::default().add_modifier(Modifier::DIM)));
+            spans.push(Span::styled(
+                *desc,
+                Style::default().add_modifier(Modifier::DIM),
+            ));
         }
 
         let hint_line = Line::from(spans);
@@ -277,9 +283,10 @@ impl WidgetRef for &ChatComposer {
 
         if self.textarea.is_empty() && !self.placeholder_text.is_empty() {
             // Show placeholder
-            let placeholder_line = Line::from(
-                Span::styled(&self.placeholder_text, Style::default().add_modifier(Modifier::DIM))
-            );
+            let placeholder_line = Line::from(Span::styled(
+                &self.placeholder_text,
+                Style::default().add_modifier(Modifier::DIM),
+            ));
             let placeholder_paragraph = Paragraph::new(vec![placeholder_line]);
             placeholder_paragraph.render_ref(content_area, buf);
         } else {

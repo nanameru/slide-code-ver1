@@ -1,68 +1,90 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-/// ASCII banner rendered at startup above the chat history.
-/// Keeping it ASCII-only ensures compatibility with our lint rules.
-pub const MESSAGE_PREFIX: &str = "__SLIDE_ASCII_BANNER__\n";
+/// Marker prefix embedded in chat history strings so the chat widget can
+/// recognise the banner entry and render it with full styling.
+pub const MESSAGE_PREFIX: &str = "__SLIDE_ASCII_BANNER__";
 
-pub const STARTUP_BANNER: &str = r"  _____    _         _____    _____     ______           _____     ____     _____     ______   
- / ____|  | |       |_   _|  |  __ \   |  ____|         / ____|   / __ \   |  __ \   |  ____|  
-| (___    | |         | |    | |  | |  | |__           | |       | |  | |  | |  | |  | |__     
- \___ \  | |         | |    | |  | |  |  __|          | |       | |  | |  | |  | |  |  __|    
- ____) |  | |____    _| |_   | |__| |  | |____         | |____   | |__| |  | |__| |  | |____   
-|_____/  |______|  |_____|  |_____/   |______|         \_____|   \____/   |_____/   |______|  
-";
+const STARTUP_BANNER_LINES: &[&str] = &[
+    " ██████  ██      ██ ██ ██████  ███████      ██████   ██████  ██████  ███████ ",
+    "██       ██      ██ ██ ██   ██ ██          ██   ██ ██    ██ ██   ██ ██      ",
+    "██   ███ ██      ██ ██ ██████  █████       ██████  ██    ██ ██████  █████   ",
+    "██    ██ ██      ██ ██ ██   ██ ██          ██   ██ ██    ██ ██   ██ ██      ",
+    " ██████   ██████ ██ ██ ██   ██ ███████     ██   ██  ██████  ██   ██ ███████ ",
+];
 
-const GRADIENT_START: Color = Color::Rgb(102, 204, 255); // sky blue
-const GRADIENT_MID: Color = Color::Rgb(128, 224, 176); // aqua mint
-const GRADIENT_END: Color = Color::Rgb(171, 148, 255); // lavender
+const RAINBOW_STOPS: &[Color] = &[
+    Color::Rgb(70, 235, 160), // mint green
+    Color::Rgb(50, 205, 255), // cyan
+    Color::Rgb(80, 120, 255), // blue
+    Color::Rgb(150, 90, 255), // violet
+    Color::Rgb(255, 85, 170), // magenta
+    Color::Rgb(255, 120, 70), // orange
+    Color::Rgb(255, 215, 70), // gold
+    Color::Rgb(160, 255, 90), // lime
+];
+
+const BANNER_BG: Color = Color::Rgb(18, 24, 38);
 
 /// Build the banner message that can be pushed into the chat history list.
+/// The message acts as a sentinel token that the chat widget expands into
+/// the richly styled banner at render time.
 pub fn banner_message() -> String {
-    format!("{MESSAGE_PREFIX}{STARTUP_BANNER}")
+    MESSAGE_PREFIX.to_string()
 }
 
-/// Lines rendered into the terminal scrollback at startup.
-pub fn banner_history_lines() -> Vec<Line<'static>> {
-    let max_width = STARTUP_BANNER
-        .lines()
+/// Lines used to render the banner both in terminal scrollback and inside the
+/// chat widget.
+pub fn banner_lines() -> Vec<Line<'static>> {
+    let max_width = STARTUP_BANNER_LINES
+        .iter()
         .map(|line| line.chars().count())
         .max()
-        .unwrap_or(0)
-        .max(1);
+        .unwrap_or(1);
 
-    let mut lines: Vec<Line> = STARTUP_BANNER
-        .lines()
+    let mut lines: Vec<Line> = STARTUP_BANNER_LINES
+        .iter()
         .map(|line| {
             let spans: Vec<Span> = line
                 .chars()
                 .enumerate()
                 .map(|(col, ch)| {
                     if ch == ' ' {
-                        return Span::raw(" ");
+                        return Span::styled(" ".to_string(), Style::default().bg(BANNER_BG));
                     }
-                    let ratio = col as f32 / (max_width as f32 - 1.0);
-                    let color = if ratio < 0.5 {
-                        lerp_color(GRADIENT_START, GRADIENT_MID, ratio * 2.0)
+                    let ratio = if max_width > 1 {
+                        col as f32 / (max_width as f32 - 1.0)
                     } else {
-                        lerp_color(GRADIENT_MID, GRADIENT_END, (ratio - 0.5) * 2.0)
+                        0.0
                     };
-                    let style = Style::default().fg(color).add_modifier(Modifier::BOLD);
-                    Span::styled(ch.to_string(), style)
+                    let fg = rainbow_color(ratio);
+                    Span::styled(
+                        ch.to_string(),
+                        Style::default()
+                            .fg(fg)
+                            .bg(BANNER_BG)
+                            .add_modifier(Modifier::BOLD),
+                    )
                 })
                 .collect();
             Line::from(spans)
         })
         .collect();
 
-    lines.push(Line::from(String::new()));
+    lines.push(Line::from(vec![Span::styled(
+        String::new(),
+        Style::default().bg(BANNER_BG),
+    )]));
 
     let accent = Style::default()
-        .fg(Color::Rgb(173, 216, 230))
+        .fg(Color::Rgb(192, 230, 255))
+        .bg(BANNER_BG)
         .add_modifier(Modifier::BOLD);
     let hint = Style::default()
-        .fg(Color::Rgb(160, 174, 192))
+        .fg(Color::Rgb(150, 170, 200))
+        .bg(BANNER_BG)
         .add_modifier(Modifier::DIM);
+
     lines.push(Line::from(vec![Span::styled(
         "Welcome to Slide TUI",
         accent,
@@ -77,6 +99,24 @@ pub fn banner_history_lines() -> Vec<Line<'static>> {
     )]));
 
     lines
+}
+
+/// Lines rendered into the terminal scrollback at startup.
+pub fn banner_history_lines() -> Vec<Line<'static>> {
+    banner_lines()
+}
+
+fn rainbow_color(ratio: f32) -> Color {
+    if RAINBOW_STOPS.len() < 2 {
+        return RAINBOW_STOPS.first().cloned().unwrap_or(Color::White);
+    }
+    let clamped = ratio.clamp(0.0, 1.0);
+    let scaled = clamped * (RAINBOW_STOPS.len() as f32 - 1.0);
+    let idx = scaled.floor() as usize;
+    let next_idx = idx.min(RAINBOW_STOPS.len() - 1);
+    let next = (idx + 1).min(RAINBOW_STOPS.len() - 1);
+    let local_t = scaled - idx as f32;
+    lerp_color(RAINBOW_STOPS[next_idx], RAINBOW_STOPS[next], local_t)
 }
 
 fn lerp(a: u8, b: u8, t: f32) -> u8 {

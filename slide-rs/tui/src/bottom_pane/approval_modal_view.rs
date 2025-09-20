@@ -15,9 +15,15 @@ pub(crate) struct ApprovalModalView {
 
 impl ApprovalModalView {
     pub fn new(request: ApprovalRequest, app_event_tx: AppEventSender) -> Self {
-        Self { current: UserApprovalWidget::new(request, app_event_tx.clone()), queue: Vec::new(), app_event_tx }
+        Self {
+            current: UserApprovalWidget::new(request, app_event_tx.clone()),
+            queue: Vec::new(),
+            app_event_tx,
+        }
     }
-    pub fn enqueue_request(&mut self, req: ApprovalRequest) { self.queue.push(req); }
+    pub fn enqueue_request(&mut self, req: ApprovalRequest) {
+        self.queue.push(req);
+    }
     fn maybe_advance(&mut self) {
         if self.current.is_complete() {
             if let Some(req) = self.queue.pop() {
@@ -37,9 +43,14 @@ impl BottomPaneView for ApprovalModalView {
         self.queue.clear();
         CancellationEvent::Handled
     }
-    fn is_complete(&self) -> bool { self.current.is_complete() && self.queue.is_empty() }
-    fn desired_height(&self, width: u16) -> u16 { self.current.desired_height(width) }
-    fn render(&self, area: Rect, buf: &mut Buffer) { (&self.current).render_ref(area, buf); }
+    fn is_complete(&self) -> bool {
+        self.current.is_complete() && self.queue.is_empty()
+    }
+    fn desired_height(&self, width: u16) -> u16 {
+        self.current.desired_height(width)
+    }
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        (&self.current).render_ref(area, buf);
+    }
     // Additional queuing API can be added to the trait in the future; for now, queue is internal
 }
-

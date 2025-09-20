@@ -109,8 +109,8 @@ impl SlidePreview {
 
         // Header with slide counter
         let title = format!(
-            "Slide Preview ({}/{})", 
-            self.current_slide + 1, 
+            "Slide Preview ({}/{})",
+            self.current_slide + 1,
             self.slides.len()
         );
         let header = Paragraph::new(title)
@@ -124,9 +124,13 @@ impl SlidePreview {
         } else {
             Text::from("No slides available")
         };
-        
+
         let slide = Paragraph::new(slide_content)
-            .block(Block::default().borders(Borders::ALL).title("Slide Content"))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Slide Content"),
+            )
             .wrap(ratatui::widgets::Wrap { trim: true });
         f.render_widget(slide, chunks[1]);
 
@@ -152,10 +156,13 @@ impl SlidePreview {
             f.render_widget(help, area);
         }
     }
-
 }
 
-fn centered_rect(percent_x: u16, percent_y: u16, r: ratatui::layout::Rect) -> ratatui::layout::Rect {
+fn centered_rect(
+    percent_x: u16,
+    percent_y: u16,
+    r: ratatui::layout::Rect,
+) -> ratatui::layout::Rect {
     use ratatui::layout::{Constraint, Direction, Layout};
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)

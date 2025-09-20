@@ -1,25 +1,25 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
-pub mod app;
-pub mod preview;
-pub mod interactive;
 pub mod agent;
-pub mod bottom_pane;
+pub mod app;
 pub mod app_event_sender;
+pub mod bottom_pane;
+pub mod custom_terminal;
+pub mod history_store;
+pub mod insert_history;
+pub mod interactive;
+pub mod preview;
+pub mod streaming;
 pub mod user_approval_widget;
 pub mod widgets;
-pub mod insert_history;
-pub mod custom_terminal;
-pub mod streaming;
-pub mod history_store;
 
 use anyhow::Result;
-use std::path::{Path, PathBuf};
 use clap::Parser;
+use std::path::{Path, PathBuf};
 
 pub use app::*;
-pub use preview::*;
 pub use interactive::*;
+pub use preview::*;
 
 #[derive(Debug, Parser, Default)]
 pub struct Cli {
@@ -42,7 +42,7 @@ pub async fn run_main(cli: Cli, _sandbox_exe: Option<PathBuf>) -> Result<()> {
     if let Some(mode) = cli.approval_mode.clone() {
         std::env::set_var("SLIDE_APPROVAL_MODE", mode);
     }
-    
+
     run_interactive().await
 }
 
@@ -50,7 +50,7 @@ pub async fn run_main(cli: Cli, _sandbox_exe: Option<PathBuf>) -> Result<()> {
 pub async fn run_preview<P: AsRef<Path>>(file_path: P) -> Result<()> {
     let content = tokio::fs::read_to_string(file_path).await?;
     let slides = parse_slides(&content);
-    
+
     let mut preview = SlidePreview::new(slides);
     preview.run().await
 }
@@ -65,7 +65,7 @@ pub async fn run_interactive() -> Result<()> {
 fn parse_slides(content: &str) -> Vec<String> {
     let mut slides = Vec::new();
     let mut current_slide = String::new();
-    
+
     for line in content.lines() {
         if line.starts_with("## ") && !current_slide.is_empty() {
             slides.push(current_slide.trim().to_string());
@@ -74,14 +74,14 @@ fn parse_slides(content: &str) -> Vec<String> {
         current_slide.push_str(line);
         current_slide.push('\n');
     }
-    
+
     if !current_slide.trim().is_empty() {
         slides.push(current_slide.trim().to_string());
     }
-    
+
     if slides.is_empty() {
         slides.push(content.to_string());
     }
-    
+
     slides
 }

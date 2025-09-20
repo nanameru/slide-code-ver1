@@ -31,29 +31,55 @@ pub(crate) fn render_rows(
         )))]));
     } else {
         let max_rows_from_area = area.height as usize;
-        let visible_rows = max_results.min(rows_all.len()).min(max_rows_from_area.max(1));
+        let visible_rows = max_results
+            .min(rows_all.len())
+            .min(max_rows_from_area.max(1));
         let mut start_idx = state.scroll_top.min(rows_all.len().saturating_sub(1));
         if let Some(sel) = state.selected_idx {
             if sel < start_idx {
                 start_idx = sel;
             } else if visible_rows > 0 {
                 let bottom = start_idx + visible_rows - 1;
-                if sel > bottom { start_idx = sel + 1 - visible_rows; }
+                if sel > bottom {
+                    start_idx = sel + 1 - visible_rows;
+                }
             }
         }
-        for (i, row) in rows_all.iter().enumerate().skip(start_idx).take(visible_rows) {
+        for (i, row) in rows_all
+            .iter()
+            .enumerate()
+            .skip(start_idx)
+            .take(visible_rows)
+        {
             let mut spans: Vec<Span> = Vec::new();
             if let Some(idxs) = row.match_indices.as_ref() {
                 let mut it = idxs.iter().peekable();
                 for (ci, ch) in row.name.chars().enumerate() {
                     let mut style = Style::default();
-                    if it.peek().is_some_and(|n| **n == ci) { it.next(); style = style.add_modifier(Modifier::BOLD); }
+                    if it.peek().is_some_and(|n| **n == ci) {
+                        it.next();
+                        style = style.add_modifier(Modifier::BOLD);
+                    }
                     spans.push(Span::styled(ch.to_string(), style));
                 }
-            } else { spans.push(Span::raw(row.name.clone())); }
-            if let Some(desc) = row.description.as_ref() { spans.push(Span::raw("  ")); spans.push(Span::styled(desc.clone(), Style::default().add_modifier(Modifier::DIM))); }
+            } else {
+                spans.push(Span::raw(row.name.clone()));
+            }
+            if let Some(desc) = row.description.as_ref() {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled(
+                    desc.clone(),
+                    Style::default().add_modifier(Modifier::DIM),
+                ));
+            }
             let mut cell = Cell::from(Line::from(spans));
-            if Some(i) == state.selected_idx { cell = cell.style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)); }
+            if Some(i) == state.selected_idx {
+                cell = cell.style(
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                );
+            }
             rows.push(Row::new(vec![cell]));
         }
     }
@@ -68,4 +94,3 @@ pub(crate) fn render_rows(
         .widths([Constraint::Percentage(100)]);
     table.render(area, buf);
 }
-

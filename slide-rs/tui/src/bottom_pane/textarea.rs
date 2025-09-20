@@ -1,6 +1,14 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::{buffer::Buffer, layout::Rect, style::{Color, Style}, widgets::{StatefulWidgetRef, WidgetRef}};
-use std::{cell::{Ref, RefCell}, ops::Range};
+use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::{Color, Style},
+    widgets::{StatefulWidgetRef, WidgetRef},
+};
+use std::{
+    cell::{Ref, RefCell},
+    ops::Range,
+};
 use textwrap::Options;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -153,7 +161,11 @@ impl TextArea {
         // partition_point returns the index of the first element for which
         // the predicate is false, i.e. the count of elements with start <= pos.
         let idx = lines.partition_point(|r| r.start <= pos);
-        if idx == 0 { None } else { Some(idx - 1) }
+        if idx == 0 {
+            None
+        } else {
+            Some(idx - 1)
+        }
     }
 
     fn move_to_display_col_on_line(

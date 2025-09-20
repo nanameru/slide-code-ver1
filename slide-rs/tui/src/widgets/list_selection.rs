@@ -1,10 +1,10 @@
+use crate::custom_terminal::Frame;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
-use crate::custom_terminal::Frame;
 
 pub struct ListSelection<'a> {
     pub title: &'a str,
@@ -15,8 +15,20 @@ pub struct ListSelection<'a> {
 }
 
 impl<'a> ListSelection<'a> {
-    pub fn new(title: &'a str, filter: &'a str, items: &'a [String], selected: usize, hint: &'a str) -> Self {
-        Self { title, filter, items, selected, hint }
+    pub fn new(
+        title: &'a str,
+        filter: &'a str,
+        items: &'a [String],
+        selected: usize,
+        hint: &'a str,
+    ) -> Self {
+        Self {
+            title,
+            filter,
+            items,
+            selected,
+            hint,
+        }
     }
 
     pub fn render(self, f: &mut Frame, area: Rect) {
@@ -39,7 +51,9 @@ impl<'a> ListSelection<'a> {
         let filter_line = Line::from(vec![
             Span::styled(
                 "Filter: ",
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(self.filter),
         ]);
@@ -53,7 +67,10 @@ impl<'a> ListSelection<'a> {
         for (idx, item) in self.items.iter().enumerate() {
             let selected = idx == self.selected;
             let style = if selected {
-                Style::default().fg(Color::Black).bg(Color::LightYellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::LightYellow)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
@@ -62,7 +79,9 @@ impl<'a> ListSelection<'a> {
         if lines.is_empty() {
             lines.push(Line::from(Span::styled(
                 "No results",
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC),
             )));
         }
         let list = Paragraph::new(lines).block(Block::default().borders(Borders::ALL));

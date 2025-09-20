@@ -1,4 +1,4 @@
-use crate::widgets::banner::MESSAGE_PREFIX as BANNER_PREFIX;
+use crate::widgets::banner::{banner_lines, MESSAGE_PREFIX as BANNER_PREFIX};
 use ratatui::{
     layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
@@ -38,10 +38,7 @@ impl<'a> ChatWidget<'a> {
         for (i, message) in self.messages.iter().enumerate() {
             let mut handled = false;
             if message.starts_with(BANNER_PREFIX) {
-                let art = message[BANNER_PREFIX.len()..].trim_matches('\n');
-                for line in art.lines() {
-                    lines.push(Line::from(Span::raw(line)));
-                }
+                lines.extend(banner_lines());
                 handled = true;
             }
 
@@ -50,7 +47,12 @@ impl<'a> ChatWidget<'a> {
                 if message.starts_with("You:") {
                     let content = message.strip_prefix("You:").unwrap_or(message).trim();
                     lines.push(Line::from(vec![
-                        Span::styled("You", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            "You",
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
+                        ),
                         Span::raw(": "),
                         Span::raw(content),
                     ]));
@@ -61,7 +63,12 @@ impl<'a> ChatWidget<'a> {
                         .unwrap_or(message)
                         .trim();
                     lines.push(Line::from(vec![
-                        Span::styled("Assistant", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            "Assistant",
+                            Style::default()
+                                .fg(Color::Green)
+                                .add_modifier(Modifier::BOLD),
+                        ),
                         Span::raw(": "),
                         Span::raw(content),
                     ]));
@@ -89,7 +96,9 @@ impl<'a> ChatWidget<'a> {
                     Span::styled("▌ ", Style::default().fg(Color::Cyan)),
                     Span::styled(
                         "Ask Slide Code to do anything",
-                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::DIM),
                     ),
                 ]));
             } else {
@@ -103,12 +112,12 @@ impl<'a> ChatWidget<'a> {
 
         // Show welcome message when no content
         if lines.is_empty() {
-            lines.push(Line::from(
-                Span::styled(
-                    "Welcome to Slide Code! Type your message below.",
-                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
-                ),
-            ));
+            lines.push(Line::from(Span::styled(
+                "Welcome to Slide Code! Type your message below.",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
+            )));
         }
 
         lines

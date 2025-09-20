@@ -24,4 +24,3 @@ impl<'a> ratatui::widgets::Widget for Modal<'a> {
         widget.render(area, buf);
     }
 }
-

@@ -2,7 +2,7 @@ use std::fmt;
 use std::io;
 use std::io::Write;
 
-use crossterm::Command;
+use crate::custom_terminal::Terminal;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
 use crossterm::style::Color as CColor;
@@ -12,13 +12,13 @@ use crossterm::style::SetAttribute;
 use crossterm::style::SetBackgroundColor;
 use crossterm::style::SetColors;
 use crossterm::style::SetForegroundColor;
+use crossterm::Command;
+use ratatui::backend::Backend;
 use ratatui::layout::Size;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use crate::custom_terminal::Terminal;
-use ratatui::backend::Backend;
 use textwrap::Options as TwOptions;
 use textwrap::WordSplitter;
 
