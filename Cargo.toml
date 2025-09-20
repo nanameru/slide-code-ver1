@@ -1,7 +1,5 @@
 [workspace]
 members = [
-    "tui",
-    "protocol",
     "file-search",
 ]
 resolver = "2"
