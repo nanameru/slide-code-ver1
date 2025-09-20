@@ -578,6 +578,7 @@ where
     let desired_bottom_height = app.bottom_pane.desired_height(size.width).max(1);
     let total_desired_height = status_height.saturating_add(desired_bottom_height);
     let input_height = total_desired_height.min(size.height.max(1));
+    let bottom_height = input_height.saturating_sub(status_height).max(1);
     let input_area = Rect {
         x: 0,
         y: size.height.saturating_sub(input_height),
@@ -589,16 +590,16 @@ where
     terminal.set_viewport_area(input_area);
 
     terminal.draw(|f| {
-        draw_input_ui(f, app, input_area);
+        draw_input_ui(f, app, input_area, bottom_height);
     })?;
 
     Ok(())
 }
 
-fn draw_input_ui(f: &mut Frame, app: &mut App, area: Rect) {
+fn draw_input_ui(f: &mut Frame, app: &mut App, area: Rect, bottom_height: u16) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .constraints([Constraint::Length(1), Constraint::Length(bottom_height)])
         .split(area);
 
     // Status bar

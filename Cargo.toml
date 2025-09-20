@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "common",
     "tui",
     "protocol",
     "file-search",
