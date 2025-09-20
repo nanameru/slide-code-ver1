@@ -27,8 +27,6 @@ const RADAR_FRAMES: [&str; 8] = [
     "レーダー [  *  ]",
     "レーダー [ *   ]",
 ];
-const STATUS_PREFIX: &str = "▌ /Users/kimurataiyou/slide-code-test";
-
 #[derive(Copy, Clone)]
 enum AssistantPhase {
     Thinking { started_at: Instant },
@@ -43,10 +41,12 @@ pub struct InteractiveApp {
     assistant_response_index: Option<usize>,
     assistant_phase: Option<AssistantPhase>,
     tool_blocks_in_current_message: Vec<String>,
+    status_prefix: String,
 }
 
 impl InteractiveApp {
     pub fn new() -> Self {
+        let status_prefix = resolve_status_prefix();
         Self {
             running: true,
             input: String::new(),
@@ -55,6 +55,7 @@ impl InteractiveApp {
             assistant_response_index: None,
             assistant_phase: None,
             tool_blocks_in_current_message: Vec::new(),
+            status_prefix,
         }
     }
 
@@ -323,7 +324,7 @@ impl InteractiveApp {
             AssistantPhase::Streaming { started_at } => ("generating...", started_at),
         };
         let frame = Self::radar_frame(started_at);
-        Some(format!("{} {} {}", STATUS_PREFIX, label, frame))
+        Some(format!("{} {} {}", self.status_prefix, label, frame))
     }
 
     fn radar_frame(started_at: Instant) -> &'static str {
@@ -394,4 +395,11 @@ fn normalize_tool_content(text: &str) -> String {
         .map(|line| line.trim_end())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn resolve_status_prefix() -> String {
+    match std::env::current_dir() {
+        Ok(path) => format!("▌ {}", path.display()),
+        Err(_) => "▌".to_string(),
+    }
 }

@@ -574,7 +574,10 @@ where
     B: ratatui::backend::Backend,
 {
     let size = terminal.size()?;
-    let input_height = 3; // Status bar + input area
+    let status_height: u16 = 1;
+    let desired_bottom_height = app.bottom_pane.desired_height(size.width).max(1);
+    let total_desired_height = status_height.saturating_add(desired_bottom_height);
+    let input_height = total_desired_height.min(size.height.max(1));
     let input_area = Rect {
         x: 0,
         y: size.height.saturating_sub(input_height),
