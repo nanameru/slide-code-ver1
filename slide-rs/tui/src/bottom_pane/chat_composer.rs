@@ -260,24 +260,11 @@ impl WidgetRef for &ChatComposer {
         ])
         .areas(area);
 
-        // Left border: always light green regardless of focus
-        // Using RGB for a soft light‑green tone.
-        let border_style = Style::default().fg(Color::Rgb(144, 238, 144));
-
-        Block::default()
-            .borders(Borders::LEFT)
-            .border_type(BorderType::QuadrantOutside)
-            .border_style(border_style)
-            .render_ref(
-                Rect::new(textarea_rect.x, textarea_rect.y, 1, textarea_rect.height),
-                buf,
-            );
-
-        // Content area (excluding left border)
+        // Content area (no left border)
         let content_area = Rect {
-            x: textarea_rect.x + 1,
+            x: textarea_rect.x,
             y: textarea_rect.y,
-            width: textarea_rect.width.saturating_sub(1),
+            width: textarea_rect.width,
             height: textarea_rect.height,
         };
 
