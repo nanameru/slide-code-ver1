@@ -16,7 +16,11 @@ pub struct SlideResponse {
 
 fn append_log(line: &str) {
     use std::io::Write;
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/slide.log") {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/slide.log")
+    {
         let _ = writeln!(f, "[chatgpt-client] {}", line);
     }
 }
@@ -30,7 +34,7 @@ impl ChatGptClient {
     pub fn new(api_key: String) -> Self {
         Self { api_key }
     }
-    
+
     pub async fn generate_slides(&self, request: SlideRequest) -> Result<SlideResponse> {
         // TODO: Implement actual OpenAI API call
         // For now, return a mock response
@@ -48,7 +52,7 @@ impl ChatGptClient {
 "#,
             request.prompt
         );
-        
+
         Ok(SlideResponse {
             markdown: mock_markdown,
         })
@@ -63,7 +67,10 @@ pub struct OpenAiModelClient {
 
 impl OpenAiModelClient {
     pub fn new(api_key: String) -> Self {
-        Self { api_key, model: "gpt-5".to_string() }
+        Self {
+            api_key,
+            model: "gpt-5".to_string(),
+        }
     }
 
     pub fn new_with_model(api_key: String, model: String) -> Self {
@@ -77,25 +84,28 @@ impl OpenAiModelClient {
             "messages": [{"role":"user","content": prompt}],
             "stream": true,
         });
-        append_log(&format!("Request Body: {}", serde_json::to_string_pretty(&body).unwrap_or_default()));
+        append_log(&format!(
+            "Request Body: {}",
+            serde_json::to_string_pretty(&body).unwrap_or_default()
+        ));
 
         let mut req = client
             .post("https://api.openai.com/v1/chat/completions")
             .bearer_auth(&self.api_key)
             .header("content-type", "application/json");
-        if let Ok(project) = std::env::var("OPENAI_PROJECT") { if !project.is_empty() {
-            append_log(&format!("Adding Header OpenAI-Project: {}", &project));
-            req = req.header("OpenAI-Project", project);
-        } }
-        if let Ok(org) = std::env::var("OPENAI_ORG") { if !org.is_empty() {
-            append_log(&format!("Adding Header OpenAI-Organization: {}", &org));
-            req = req.header("OpenAI-Organization", org);
-        } }
-        let resp = req
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| anyhow!(e))?;
+        if let Ok(project) = std::env::var("OPENAI_PROJECT") {
+            if !project.is_empty() {
+                append_log(&format!("Adding Header OpenAI-Project: {}", &project));
+                req = req.header("OpenAI-Project", project);
+            }
+        }
+        if let Ok(org) = std::env::var("OPENAI_ORG") {
+            if !org.is_empty() {
+                append_log(&format!("Adding Header OpenAI-Organization: {}", &org));
+                req = req.header("OpenAI-Organization", org);
+            }
+        }
+        let resp = req.json(&body).send().await.map_err(|e| anyhow!(e))?;
 
         let status = resp.status();
         append_log(&format!("Response Status: {}", status));
@@ -126,31 +136,64 @@ impl OpenAiModelClient {
                                     for line in text.lines() {
                                         let line = line.trim_start();
                                         if let Some(rest) = line.strip_prefix("data: ") {
-                                            if rest == "[DONE]" { let _ = tx.send(String::new()).await; return; }
-                                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) {
+                                            if rest == "[DONE]" {
+                                                let _ = tx.send(String::new()).await;
+                                                return;
+                                            }
+                                            if let Ok(v) =
+                                                serde_json::from_str::<serde_json::Value>(rest)
+                                            {
                                                 // Try Chat Completions: choices.0.delta.content as string
-                                                if let Some(s) = v["choices"][0]["delta"]["content"].as_str() {
-                                                    if !s.is_empty() { if tx.send(s.to_string()).await.is_err() { return; } }
+                                                if let Some(s) =
+                                                    v["choices"][0]["delta"]["content"].as_str()
+                                                {
+                                                    if !s.is_empty() {
+                                                        if tx.send(s.to_string()).await.is_err() {
+                                                            return;
+                                                        }
+                                                    }
                                                 } else {
                                                     // Try Responses-like: choices.0.delta.content as array of blocks
-                                                    if let Some(arr) = v["choices"][0]["delta"]["content"].as_array() {
+                                                    if let Some(arr) = v["choices"][0]["delta"]
+                                                        ["content"]
+                                                        .as_array()
+                                                    {
                                                         for item in arr {
-                                                            let t = item["text"].as_str().or_else(|| item["content"].as_str());
-                                                            if let Some(text) = t { if !text.is_empty() { if tx.send(text.to_string()).await.is_err() { return; } } }
+                                                            let t = item["text"].as_str().or_else(
+                                                                || item["content"].as_str(),
+                                                            );
+                                                            if let Some(text) = t {
+                                                                if !text.is_empty() {
+                                                                    if tx
+                                                                        .send(text.to_string())
+                                                                        .await
+                                                                        .is_err()
+                                                                    {
+                                                                        return;
+                                                                    }
+                                                                }
+                                                            }
                                                         }
                                                     }
                                                     // Minimal surfacing for tool_calls (show that a tool was requested)
-                                                    if v["choices"][0]["delta"]["tool_calls"].is_array() {
+                                                    if v["choices"][0]["delta"]["tool_calls"]
+                                                        .is_array()
+                                                    {
                                                         let _ = tx.send("[tool_call] model proposed a tool operation".to_string()).await;
                                                     }
                                                 }
                                             } else {
-                                                append_log(&format!("SSE JSON parse error on: {}", rest));
+                                                append_log(&format!(
+                                                    "SSE JSON parse error on: {}",
+                                                    rest
+                                                ));
                                             }
                                         }
                                     }
                                 }
-                            } else { break; }
+                            } else {
+                                break;
+                            }
                         }
                     }
                     Err(e) => {

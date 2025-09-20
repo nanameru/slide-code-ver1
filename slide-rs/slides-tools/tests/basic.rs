@@ -11,7 +11,14 @@ fn slides_write_create_markdown() {
     let status = Command::cargo_bin("slides_write")
         .expect("bin")
         .current_dir(root)
-        .args(["--path", "slides/test.md", "--mode", "create", "--content", "# Hello\n"])
+        .args([
+            "--path",
+            "slides/test.md",
+            "--mode",
+            "create",
+            "--content",
+            "# Hello\n",
+        ])
         .status()
         .unwrap();
     assert!(status.success());
@@ -33,4 +40,3 @@ fn slides_apply_patch_reject_outside_slides() {
         .unwrap();
     assert!(!output.status.success());
 }
-

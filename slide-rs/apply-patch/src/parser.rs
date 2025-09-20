@@ -394,5 +394,3 @@ fn parse_update_file_chunk(
 
     Ok((chunk, parsed_lines + start_index))
 }
-
-

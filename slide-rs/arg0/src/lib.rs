@@ -21,7 +21,7 @@ where
 
     // Run the main function
     let result = runtime.block_on(main_fn(None));
-    
+
     match result {
         Ok(()) => std::process::exit(0),
         Err(e) => {

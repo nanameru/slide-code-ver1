@@ -91,5 +91,3 @@ pub(crate) fn seek_sequence(
 
     None
 }
-
-

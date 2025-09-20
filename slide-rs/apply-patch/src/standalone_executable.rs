@@ -57,5 +57,3 @@ pub fn run_main() -> i32 {
         Err(_) => 1,
     }
 }
-
-

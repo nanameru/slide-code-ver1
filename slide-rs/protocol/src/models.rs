@@ -2,10 +2,10 @@ use std::collections::HashMap;
 
 use base64::Engine;
 use mcp_types::CallToolResult;
+use serde::ser::Serializer;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
-use serde::ser::Serializer;
 
 use crate::protocol::InputItem;
 
@@ -181,17 +181,25 @@ pub struct LocalShellExecAction {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WebSearchAction {
-    Search { query: String },
-    #[serde(other)] Other,
+    Search {
+        query: String,
+    },
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum ReasoningItemReasoningSummary { SummaryText { text: String } }
+pub enum ReasoningItemReasoningSummary {
+    SummaryText { text: String },
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum ReasoningItemContent { ReasoningText { text: String }, Text { text: String } }
+pub enum ReasoningItemContent {
+    ReasoningText { text: String },
+    Text { text: String },
+}
 
 impl From<Vec<InputItem>> for ResponseInputItem {
     fn from(items: Vec<InputItem>) -> Self {
@@ -234,41 +242,77 @@ pub struct ShellToolCallParams {
     pub workdir: Option<String>,
     #[serde(alias = "timeout")]
     pub timeout_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")] pub with_escalated_permissions: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")] pub justification: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub with_escalated_permissions: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub justification: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct FunctionCallOutputPayload { pub content: String, pub success: Option<bool> }
+pub struct FunctionCallOutputPayload {
+    pub content: String,
+    pub success: Option<bool>,
+}
 
 impl Serialize for FunctionCallOutputPayload {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where S: Serializer,
-    { serializer.serialize_str(&self.content) }
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.content)
+    }
 }
 
 impl<'de> Deserialize<'de> for FunctionCallOutputPayload {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where D: Deserializer<'de>,
-    { let s = String::deserialize(deserializer)?; Ok(FunctionCallOutputPayload { content: s, success: None }) }
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(FunctionCallOutputPayload {
+            content: s,
+            success: None,
+        })
+    }
 }
 
-impl std::fmt::Display for FunctionCallOutputPayload { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(&self.content) } }
-impl std::ops::Deref for FunctionCallOutputPayload { type Target = str; fn deref(&self) -> &Self::Target { &self.content } }
+impl std::fmt::Display for FunctionCallOutputPayload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.content)
+    }
+}
+impl std::ops::Deref for FunctionCallOutputPayload {
+    type Target = str;
+    fn deref(&self) -> &Self::Target {
+        &self.content
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn serializes_success_as_plain_string() {
-        let item = ResponseInputItem::FunctionCallOutput { call_id: "call1".into(), output: FunctionCallOutputPayload { content: "ok".into(), success: None } };
+        let item = ResponseInputItem::FunctionCallOutput {
+            call_id: "call1".into(),
+            output: FunctionCallOutputPayload {
+                content: "ok".into(),
+                success: None,
+            },
+        };
         let json = serde_json::to_string(&item).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v.get("output").unwrap().as_str().unwrap(), "ok");
     }
     #[test]
     fn serializes_failure_as_string() {
-        let item = ResponseInputItem::FunctionCallOutput { call_id: "call1".into(), output: FunctionCallOutputPayload { content: "bad".into(), success: Some(false) } };
+        let item = ResponseInputItem::FunctionCallOutput {
+            call_id: "call1".into(),
+            output: FunctionCallOutputPayload {
+                content: "bad".into(),
+                success: Some(false),
+            },
+        };
         let json = serde_json::to_string(&item).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v.get("output").unwrap().as_str().unwrap(), "bad");
@@ -277,7 +321,15 @@ mod tests {
     fn deserialize_shell_tool_call_params() {
         let json = r#"{ "command": ["ls", "-l"], "workdir": "/tmp", "timeout": 1000 }"#;
         let params: ShellToolCallParams = serde_json::from_str(json).unwrap();
-        assert_eq!(ShellToolCallParams { command: vec!["ls".to_string(), "-l".to_string()], workdir: Some("/tmp".to_string()), timeout_ms: Some(1000), with_escalated_permissions: None, justification: None }, params);
+        assert_eq!(
+            ShellToolCallParams {
+                command: vec!["ls".to_string(), "-l".to_string()],
+                workdir: Some("/tmp".to_string()),
+                timeout_ms: Some(1000),
+                with_escalated_permissions: None,
+                justification: None
+            },
+            params
+        );
     }
 }
-

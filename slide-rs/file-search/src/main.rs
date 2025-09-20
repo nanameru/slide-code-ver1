@@ -11,7 +11,10 @@ impl Reporter for JsonReporter {
         eprintln!("Warning: showing {shown_match_count} of {total_match_count} matches");
     }
     fn warn_no_search_pattern(&self, search_directory: &std::path::Path) {
-        eprintln!("No pattern provided; listing files in {}", search_directory.display());
+        eprintln!(
+            "No pattern provided; listing files in {}",
+            search_directory.display()
+        );
     }
 }
 
@@ -20,5 +23,3 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     run_main(cli, JsonReporter).await
 }
-
-

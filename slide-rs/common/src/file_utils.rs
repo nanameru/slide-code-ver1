@@ -8,7 +8,7 @@ pub fn generate_slide_filename(title: &str) -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    
+
     let slug = create_slug(title);
     format!("{}_{}.md", timestamp, slug)
 }
@@ -47,16 +47,16 @@ pub async fn ensure_slides_dir<P: AsRef<Path>>(slides_dir: P) -> Result<()> {
 
 /// Save slide content to file
 pub async fn save_slide<P: AsRef<Path>>(
-    slides_dir: P, 
-    filename: &str, 
-    content: &str
+    slides_dir: P,
+    filename: &str,
+    content: &str,
 ) -> Result<PathBuf> {
     let slides_dir = slides_dir.as_ref();
     ensure_slides_dir(slides_dir).await?;
-    
+
     let file_path = slides_dir.join(filename);
     tokio::fs::write(&file_path, content).await?;
-    
+
     Ok(file_path)
 }
 
@@ -67,11 +67,17 @@ mod tests {
     #[test]
     fn test_create_slug() {
         assert_eq!(create_slug("Hello World"), "hello-world");
-        assert_eq!(create_slug("Project Proposal 2025"), "project-proposal-2025");
-        assert_eq!(create_slug("Test!@# Multiple   Spaces"), "test-multiple-spaces");
+        assert_eq!(
+            create_slug("Project Proposal 2025"),
+            "project-proposal-2025"
+        );
+        assert_eq!(
+            create_slug("Test!@# Multiple   Spaces"),
+            "test-multiple-spaces"
+        );
         assert_eq!(create_slug("日本語タイトル"), "");
     }
-    
+
     #[test]
     fn test_generate_slide_filename() {
         let filename = generate_slide_filename("Test Presentation");

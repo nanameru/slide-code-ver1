@@ -13,7 +13,7 @@ enum Mode {
 }
 
 #[derive(Debug, Parser)]
-#[command(version, about = "Create or edit files under slides/ safely")] 
+#[command(version, about = "Create or edit files under slides/ safely")]
 struct Cli {
     /// Path relative to the repository root (must be under slides/)
     #[arg(long = "path", value_name = "RELATIVE_PATH")]
@@ -41,17 +41,21 @@ fn ensure_slides_path(root: &Path, rel: &str) -> Result<PathBuf> {
     let abs_tmp = full.absolutize().map_err(|e| anyhow!(e.to_string()))?;
     let abs = PathBuf::from(abs_tmp.as_ref());
     let slides_join = root.join("slides");
-    let slides_root_tmp = slides_join.absolutize().map_err(|e| anyhow!(e.to_string()))?;
+    let slides_root_tmp = slides_join
+        .absolutize()
+        .map_err(|e| anyhow!(e.to_string()))?;
     let slides_root = PathBuf::from(slides_root_tmp.as_ref());
     if !abs.starts_with(&slides_root) {
         return Err(anyhow!("path must be under slides/"));
     }
     // Restrict to common slide formats
-    let allowed = [".md", ".markdown", ".html", ".htm"]; 
+    let allowed = [".md", ".markdown", ".html", ".htm"];
     if let Some(ext) = abs.extension().and_then(|s| s.to_str()) {
         let dot_ext = format!(".{}", ext.to_lowercase());
         if !allowed.iter().any(|a| a.eq_ignore_ascii_case(&dot_ext)) {
-            return Err(anyhow!("unsupported extension: allowed: .md, .markdown, .html, .htm"));
+            return Err(anyhow!(
+                "unsupported extension: allowed: .md, .markdown, .html, .htm"
+            ));
         }
     } else {
         return Err(anyhow!("file must have an extension (.md/.html)"));
@@ -70,13 +74,20 @@ fn main() -> Result<()> {
     let cwd = std::env::current_dir()?;
     let target = ensure_slides_path(&cwd, &cli.path)?;
 
-    let mut content = if let Some(c) = cli.content { c } else { read_all_stdin()? };
+    let mut content = if let Some(c) = cli.content {
+        c
+    } else {
+        read_all_stdin()?
+    };
     // Normalize line endings
-    if !content.ends_with('\n') { content.push('\n'); }
+    if !content.ends_with('\n') {
+        content.push('\n');
+    }
 
     if cli.ensure_dir {
         if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).with_context(|| format!("failed to create dir: {}", parent.display()))?;
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create dir: {}", parent.display()))?;
         }
     }
 
@@ -85,13 +96,18 @@ fn main() -> Result<()> {
             if target.exists() {
                 return Err(anyhow!("file already exists: {}", target.display()));
             }
-            fs::write(&target, content).with_context(|| format!("failed to write {}", target.display()))?;
+            fs::write(&target, content)
+                .with_context(|| format!("failed to write {}", target.display()))?;
         }
         Mode::Overwrite => {
-            fs::write(&target, content).with_context(|| format!("failed to write {}", target.display()))?;
+            fs::write(&target, content)
+                .with_context(|| format!("failed to write {}", target.display()))?;
         }
         Mode::Append => {
-            let mut f = fs::OpenOptions::new().create(true).append(true).open(&target)
+            let mut f = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&target)
                 .with_context(|| format!("failed to open {}", target.display()))?;
             f.write_all(content.as_bytes())?;
             f.flush()?;

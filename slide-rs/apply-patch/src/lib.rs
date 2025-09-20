@@ -9,11 +9,11 @@ use std::str::Utf8Error;
 
 use anyhow::Context;
 use anyhow::Result;
+pub use parser::parse_patch;
 pub use parser::Hunk;
 pub use parser::ParseError;
 use parser::ParseError::*;
 use parser::UpdateFileChunk;
-pub use parser::parse_patch;
 use similar::TextDiff;
 use thiserror::Error;
 use tree_sitter::LanguageError;
@@ -372,7 +372,10 @@ fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
                     if let Some(parent) = dest.parent() {
                         if !parent.as_os_str().is_empty() {
                             std::fs::create_dir_all(parent).with_context(|| {
-                                format!("Failed to create parent directories for {}", dest.display())
+                                format!(
+                                    "Failed to create parent directories for {}",
+                                    dest.display()
+                                )
                             })?;
                         }
                     }
@@ -512,8 +515,14 @@ fn apply_replacements(
     for (start_idx, old_len, new_segment) in replacements.iter().rev() {
         let start_idx = *start_idx;
         let old_len = *old_len;
-        for _ in 0..old_len { if start_idx < lines.len() { lines.remove(start_idx); } }
-        for (offset, new_line) in new_segment.iter().enumerate() { lines.insert(start_idx + offset, new_line.clone()); }
+        for _ in 0..old_len {
+            if start_idx < lines.len() {
+                lines.remove(start_idx);
+            }
+        }
+        for (offset, new_line) in new_segment.iter().enumerate() {
+            lines.insert(start_idx + offset, new_line.clone());
+        }
     }
     lines
 }
@@ -527,17 +536,25 @@ pub struct ApplyPatchFileUpdate {
 pub fn unified_diff_from_chunks(
     path: &Path,
     chunks: &[UpdateFileChunk],
-) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> { unified_diff_from_chunks_with_context(path, chunks, 1) }
+) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
+    unified_diff_from_chunks_with_context(path, chunks, 1)
+}
 
 pub fn unified_diff_from_chunks_with_context(
     path: &Path,
     chunks: &[UpdateFileChunk],
     context: usize,
 ) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
-    let AppliedPatch { original_contents, new_contents } = derive_new_contents_from_chunks(path, chunks)?;
+    let AppliedPatch {
+        original_contents,
+        new_contents,
+    } = derive_new_contents_from_chunks(path, chunks)?;
     let text_diff = TextDiff::from_lines(&original_contents, &new_contents);
     let unified_diff = text_diff.unified_diff().context_radius(context).to_string();
-    Ok(ApplyPatchFileUpdate { unified_diff, content: new_contents })
+    Ok(ApplyPatchFileUpdate {
+        unified_diff,
+        content: new_contents,
+    })
 }
 
 pub fn print_summary(
@@ -545,9 +562,15 @@ pub fn print_summary(
     out: &mut impl std::io::Write,
 ) -> std::io::Result<()> {
     writeln!(out, "Success. Updated the following files:")?;
-    for path in &affected.added { writeln!(out, "A {}", path.display())?; }
-    for path in &affected.modified { writeln!(out, "M {}", path.display())?; }
-    for path in &affected.deleted { writeln!(out, "D {}", path.display())?; }
+    for path in &affected.added {
+        writeln!(out, "A {}", path.display())?;
+    }
+    for path in &affected.modified {
+        writeln!(out, "M {}", path.display())?;
+    }
+    for path in &affected.deleted {
+        writeln!(out, "D {}", path.display())?;
+    }
     Ok(())
 }
 

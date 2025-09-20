@@ -28,7 +28,7 @@ impl SlideConfig {
         let config_dir = dirs::config_dir()
             .ok_or_else(|| anyhow::anyhow!("Cannot find config directory"))?
             .join("slide");
-        
+
         std::fs::create_dir_all(&config_dir)?;
         Ok(config_dir.join("config.json"))
     }
@@ -36,7 +36,7 @@ impl SlideConfig {
     /// Load configuration from file
     pub async fn load() -> Result<Self> {
         let path = Self::config_path()?;
-        
+
         if path.exists() {
             let content = tokio::fs::read_to_string(&path).await?;
             let config: SlideConfig = serde_json::from_str(&content)?;

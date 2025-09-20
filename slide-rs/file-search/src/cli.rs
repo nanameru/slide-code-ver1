@@ -3,7 +3,7 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 #[derive(Debug, Parser, Clone)]
-#[command(name = "slide-file-search")] 
+#[command(name = "slide-file-search")]
 #[command(about = "Fuzzy file search (ripgrep walker + nucleo-matcher)")]
 pub struct Cli {
     /// Search pattern (fuzzy)
@@ -33,5 +33,3 @@ pub struct Cli {
     #[arg(long, default_value_t = NonZeroUsize::new(4).unwrap())]
     pub threads: NonZeroUsize,
 }
-
-
