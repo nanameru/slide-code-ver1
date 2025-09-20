@@ -225,32 +225,96 @@ impl Codex {
                                         }
                                         ResponseEvent::Completed => {
                                             // AIレスポンス完了時にツール実行を処理
-                                            match tool_executor
-                                                .process_response(&assembled_resp)
-                                                .await
+                                            match tool_executor.extract_tool_calls(&assembled_resp)
                                             {
-                                                Ok(processed_response) => {
-                                                    // ツール実行結果があれば追加送信
-                                                    if processed_response != assembled_resp {
-                                                        let tool_output = &processed_response
-                                                            [assembled_resp.len()..];
-                                                        let _ = tx_event
-                                                            .send(Event::AgentMessageDelta {
-                                                                delta: tool_output.to_string(),
-                                                            })
-                                                            .await;
-                                                    }
+                                                Ok(tool_calls) => {
+                                                    if tool_calls.is_empty() {
+                                                        if !assembled_resp.is_empty() {
+                                                            convo.push((
+                                                                "assistant".to_string(),
+                                                                assembled_resp.clone(),
+                                                            ));
+                                                            if convo.len() > MAX_HISTORY_MESSAGES {
+                                                                let drop = convo.len()
+                                                                    - MAX_HISTORY_MESSAGES;
+                                                                convo.drain(0..drop);
+                                                            }
+                                                        }
+                                                    } else {
+                                                        let mut appended = String::new();
 
-                                                    // Store complete response (including tool results) into conversation
-                                                    if !processed_response.is_empty() {
-                                                        convo.push((
-                                                            "assistant".to_string(),
-                                                            processed_response,
-                                                        ));
-                                                        if convo.len() > MAX_HISTORY_MESSAGES {
-                                                            let drop =
-                                                                convo.len() - MAX_HISTORY_MESSAGES;
-                                                            convo.drain(0..drop);
+                                                        for tool_call in tool_calls {
+                                                            let announce = format!(
+                                                                "\n\n[Tool Execution]\n▶ {}",
+                                                                tool_call.summary()
+                                                            );
+                                                            let _ = tx_event
+                                                                .send(Event::AgentMessageDelta {
+                                                                    delta: announce.clone(),
+                                                                })
+                                                                .await;
+                                                            appended.push_str(&announce);
+
+                                                            match tool_executor
+                                                                .execute_tool_call(tool_call)
+                                                                .await
+                                                            {
+                                                                Ok(exec_output) => {
+                                                                    let block = format!(
+                                                                        "\n\n[Tool Execution Result]\n{}",
+                                                                        exec_output
+                                                                    );
+                                                                    let _ = tx_event
+                                                                        .send(
+                                                                            Event::AgentMessageDelta {
+                                                                                delta: block.clone(),
+                                                                            },
+                                                                        )
+                                                                        .await;
+                                                                    appended.push_str(&block);
+                                                                }
+                                                                Err(err) => {
+                                                                    let err_text = err.to_string();
+                                                                    let block = format!(
+                                                                        "\n\n[Tool Execution Result]\nFailed: {}",
+                                                                        err_text
+                                                                    );
+                                                                    let _ = tx_event
+                                                                        .send(
+                                                                            Event::AgentMessageDelta {
+                                                                                delta: block.clone(),
+                                                                            },
+                                                                        )
+                                                                        .await;
+                                                                    let _ = tx_event
+                                                                        .send(Event::Error {
+                                                                            message: format!(
+                                                                                "Tool execution failed: {}",
+                                                                                err_text
+                                                                            ),
+                                                                        })
+                                                                        .await;
+                                                                    appended.push_str(&block);
+                                                                    break;
+                                                                }
+                                                            }
+                                                        }
+
+                                                        let enriched = format!(
+                                                            "{}{}",
+                                                            assembled_resp, appended
+                                                        );
+
+                                                        if !enriched.is_empty() {
+                                                            convo.push((
+                                                                "assistant".to_string(),
+                                                                enriched,
+                                                            ));
+                                                            if convo.len() > MAX_HISTORY_MESSAGES {
+                                                                let drop = convo.len()
+                                                                    - MAX_HISTORY_MESSAGES;
+                                                                convo.drain(0..drop);
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -258,13 +322,12 @@ impl Codex {
                                                     let _ = tx_event
                                                         .send(Event::Error {
                                                             message: format!(
-                                                                "Tool execution failed: {}",
+                                                                "Tool parsing failed: {}",
                                                                 e
                                                             ),
                                                         })
                                                         .await;
 
-                                                    // Store original response on error
                                                     if !assembled_resp.is_empty() {
                                                         convo.push((
                                                             "assistant".to_string(),

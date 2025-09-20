@@ -107,6 +107,18 @@ impl AnswerStreamState {
                     .fg(Color::Magenta)
                     .add_modifier(Modifier::BOLD),
             ))
+        } else if trimmed.starts_with("[Tool Execution]") {
+            Line::from(Span::styled(
+                line.to_string(),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ))
+        } else if trimmed.starts_with("▶") {
+            Line::from(Span::styled(
+                line.to_string(),
+                Style::default().fg(Color::Yellow),
+            ))
         // 差分表示の色分け
         } else if trimmed.starts_with("+") {
             Line::from(Span::styled(

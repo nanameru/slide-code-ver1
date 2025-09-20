@@ -32,7 +32,7 @@ impl<'a> ChatWidget<'a> {
     }
 
     /// メッセージを行に変換（ツール実行結果を含むCodex風フォーマット）
-    fn build_lines(&self) -> Vec<Line> {
+    fn build_lines(&self) -> Vec<Line<'_>> {
         let mut lines: Vec<Line> = Vec::with_capacity(self.messages.len() * 2);
 
         for (i, message) in self.messages.iter().enumerate() {
@@ -132,13 +132,14 @@ impl<'a> ChatWidget<'a> {
             || message.contains("Proposed Change")
             || message.contains("Change Approved")
             || message.contains("Explored")
+            || message.contains("[Tool Execution]")
             || message.contains("[Tool Execution Result]")
             || message.contains("*** Begin Patch")
             || message.contains("*** End Patch")
     }
 
     /// ツール実行結果をフォーマット
-    fn format_tool_execution(&self, message: &str) -> Vec<Line> {
+    fn format_tool_execution(&self, message: &str) -> Vec<Line<'_>> {
         let mut lines = Vec::new();
         let content_lines: Vec<&str> = message.lines().collect();
 
@@ -188,12 +189,24 @@ impl<'a> ChatWidget<'a> {
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 )]));
+            } else if trimmed.starts_with("[Tool Execution]") {
+                lines.push(Line::from(vec![Span::styled(
+                    "[Tool Execution]",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )]));
             } else if trimmed.starts_with("[Tool Execution Result]") {
                 lines.push(Line::from(vec![Span::styled(
                     "[Tool Execution Result]",
                     Style::default()
                         .fg(Color::Magenta)
                         .add_modifier(Modifier::BOLD),
+                )]));
+            } else if trimmed.starts_with("▶") {
+                lines.push(Line::from(vec![Span::styled(
+                    line.to_string(),
+                    Style::default().fg(Color::Yellow),
                 )]));
             // 差分表示の色分け
             } else if trimmed.starts_with("+") {

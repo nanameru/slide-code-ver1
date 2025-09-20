@@ -33,7 +33,8 @@ impl ToolExecutor {
         let mut result = response.to_string();
 
         // JSON形式のツール呼び出しを検出
-        if let Some(tool_calls) = self.extract_tool_calls(response)? {
+        let tool_calls = self.extract_tool_calls(response)?;
+        if !tool_calls.is_empty() {
             for tool_call in tool_calls {
                 let execution_result = self.execute_tool_call(tool_call).await?;
                 result.push_str(&format!(
@@ -68,7 +69,7 @@ impl ToolExecutor {
     }
 
     /// レスポンスからツール呼び出しを抽出
-    fn extract_tool_calls(&self, response: &str) -> Result<Option<Vec<ToolCall>>> {
+    pub fn extract_tool_calls(&self, response: &str) -> Result<Vec<ToolCall>> {
         let mut tool_calls = Vec::new();
 
         // JSON形式のツール呼び出しパターンを検索
@@ -92,11 +93,7 @@ impl ToolExecutor {
             }
         }
 
-        if tool_calls.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(tool_calls))
-        }
+        Ok(tool_calls)
     }
 
     /// JSON形式のツール呼び出しをパース
@@ -236,7 +233,7 @@ impl ToolExecutor {
     }
 
     /// 個別のツール呼び出しを実行
-    async fn execute_tool_call(&mut self, call: ToolCall) -> Result<String> {
+    pub async fn execute_tool_call(&mut self, call: ToolCall) -> Result<String> {
         match call {
             ToolCall::Shell {
                 command,
@@ -515,6 +512,49 @@ pub enum ToolCall {
     },
 }
 
+impl ToolCall {
+    /// Short human-readable summary for logging or UI display.
+    pub fn summary(&self) -> String {
+        match self {
+            ToolCall::Shell {
+                command,
+                working_dir,
+                ..
+            } => {
+                let joined = command.join(" ");
+                if let Some(dir) = working_dir {
+                    format!("shell {} (cwd: {})", joined, dir.display())
+                } else {
+                    format!("shell {}", joined)
+                }
+            }
+            ToolCall::ReadFile { path } => {
+                format!("read_file {}", path.display())
+            }
+            ToolCall::WriteFile { path, content } => {
+                format!("write_file {} ({} bytes)", path.display(), content.len())
+            }
+            ToolCall::ApplyPatch { input } => {
+                format!("apply_patch ({} bytes)", input.len())
+            }
+            ToolCall::ListFiles { path } => {
+                let target = path
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| ".".to_string());
+                format!("list_files {}", target)
+            }
+            ToolCall::SearchFiles { query, path } => {
+                let target = path
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| ".".to_string());
+                format!("search_files '{}' in {}", query, target)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -539,8 +579,6 @@ This command will display the contents of test.txt.
         "#;
 
         let calls = executor.extract_tool_calls(response).unwrap();
-        assert!(calls.is_some());
-        let calls = calls.unwrap();
         assert_eq!(calls.len(), 1);
 
         match &calls[0] {
