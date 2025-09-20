@@ -586,8 +586,8 @@ where
     B: ratatui::backend::Backend,
 {
     let size = terminal.size()?;
-    // Status row height is dynamic (0 unless Running)
-    let status_height: u16 = if app.status == RunStatus::Running { 1 } else { 0 };
+    // Status row is fully hidden (no Thinking... line)
+    let status_height: u16 = 0;
     let desired_bottom_height = app.bottom_pane.desired_height(size.width).max(1);
     let total_desired_height = status_height.saturating_add(desired_bottom_height);
     let input_height = total_desired_height.min(size.height.max(1));
@@ -617,39 +617,7 @@ fn draw_input_ui(f: &mut Frame, app: &mut App, area: Rect, bottom_height: u16) {
         .constraints([Constraint::Length(status_height), Constraint::Length(bottom_height)])
         .split(area);
 
-    // Status bar (replace with Thinking... animation while running)
-    if app.status == RunStatus::Running && chunks[0].height > 0 {
-        // Radar-like sweep over the text "Thinking..." (green gradient)
-        let text = "Thinking...";
-        let chars: Vec<char> = text.chars().collect();
-        let len = chars.len() as i32;
-        let depth = ((len as f32 * 0.35).floor() as i32).clamp(2, len.max(2));
-        let step = (255 / depth.max(1)) as i32;
-        let global_pos = (app.thinking_frame_idx as i32) % (len + depth);
-
-        let mut spans: Vec<Span> = Vec::with_capacity(chars.len());
-        for i in 0..len {
-            let pos = -(i - global_pos);
-            if pos > 0 && pos <= depth - 1 {
-                let shade = ((depth - pos) * step).clamp(0, 255) as u8;
-                spans.push(Span::styled(
-                    chars[i as usize].to_string(),
-                    Style::default()
-                        .fg(Color::Rgb(0, shade, 0))
-                        .add_modifier(Modifier::BOLD),
-                ));
-            } else {
-                // Show as space (hide non-illuminated characters) to mimic chalk-animation radar
-                spans.push(Span::raw(" "));
-            }
-        }
-
-        let line = Line::from(spans);
-        let p = Paragraph::new(line);
-        f.render_widget(p, chunks[0]);
-    } else {
-        // Not running: render nothing (status hidden)
-    }
+    // Status bar: fully hidden
 
     // Bottom pane (input area) using render_ref
     app.bottom_pane.render_ref(chunks[1], f.buffer_mut());
