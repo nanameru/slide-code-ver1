@@ -185,6 +185,7 @@ impl App {
         {
             self.status = RunStatus::Idle;
         }
+
     }
 
     fn submit_message<B>(&mut self, text: String, terminal: &mut Terminal<B>)
@@ -575,10 +576,39 @@ where
 {
     let size = terminal.size()?;
     let status_height: u16 = 1;
+    let radar_pref_height: u16 = RadarAnimation::HEIGHT as u16;
     let desired_bottom_height = app.bottom_pane.desired_height(size.width).max(1);
-    let total_desired_height = status_height.saturating_add(desired_bottom_height);
+    let total_desired_height = status_height
+        .saturating_add(radar_pref_height)
+        .saturating_add(desired_bottom_height);
     let input_height = total_desired_height.min(size.height.max(1));
-    let bottom_height = input_height.saturating_sub(status_height).max(1);
+
+    let mut radar_height =
+        radar_pref_height.min(input_height.saturating_sub(status_height).saturating_sub(1));
+    let mut bottom_height = input_height
+        .saturating_sub(status_height)
+        .saturating_sub(radar_height)
+        .max(1);
+
+    let total_allocated = status_height
+        .saturating_add(radar_height)
+        .saturating_add(bottom_height);
+    if total_allocated > input_height {
+        bottom_height = input_height
+            .saturating_sub(status_height)
+            .saturating_sub(radar_height);
+        if bottom_height == 0 && input_height > status_height {
+            bottom_height = 1;
+            let overflow = status_height
+                .saturating_add(radar_height)
+                .saturating_add(bottom_height)
+                .saturating_sub(input_height);
+            if overflow > 0 {
+                radar_height = radar_height.saturating_sub(overflow);
+            }
+        }
+    }
+
     let input_area = Rect {
         x: 0,
         y: size.height.saturating_sub(input_height),
@@ -590,17 +620,31 @@ where
     terminal.set_viewport_area(input_area);
 
     terminal.draw(|f| {
-        draw_input_ui(f, app, input_area, bottom_height);
+        draw_input_ui(f, app, input_area, bottom_height, radar_height);
     })?;
 
     Ok(())
 }
 
-fn draw_input_ui(f: &mut Frame, app: &mut App, area: Rect, bottom_height: u16) {
+fn draw_input_ui(f: &mut Frame, app: &mut App, area: Rect, bottom_height: u16, radar_height: u16) {
+    let mut constraints = Vec::new();
+    if radar_height > 0 {
+        constraints.push(Constraint::Length(radar_height));
+    }
+    constraints.push(Constraint::Length(1));
+    constraints.push(Constraint::Length(bottom_height));
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Length(bottom_height)])
+        .constraints(constraints)
         .split(area);
+
+    let mut index = 0;
+    if radar_height > 0 {
+        let radar = RadarAnimation::new(app.radar_frame);
+        f.render_widget(radar, chunks[index]);
+        index += 1;
+    }
 
     // Status bar
     let status = match app.status {
@@ -614,12 +658,14 @@ fn draw_input_ui(f: &mut Frame, app: &mut App, area: Rect, bottom_height: u16) {
         Mode::Help => "HELP",
     };
     let status_bar = StatusBar::new(mode, status, "i:insert  q:quit");
-    f.render_widget(status_bar, chunks[0]);
+    f.render_widget(status_bar, chunks[index]);
+    index += 1;
 
     // Bottom pane (input area) using render_ref
-    app.bottom_pane.render_ref(chunks[1], f.buffer_mut());
+    let bottom_rect = chunks[index];
+    app.bottom_pane.render_ref(bottom_rect, f.buffer_mut());
 
-    if let Some((x, y)) = app.bottom_pane.cursor_pos(chunks[1]) {
+    if let Some((x, y)) = app.bottom_pane.cursor_pos(bottom_rect) {
         f.set_cursor_position((x, y));
     }
 }

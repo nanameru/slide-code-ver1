@@ -146,9 +146,9 @@ impl ChatComposer {
         .areas(area);
 
         let content_area = Rect {
-            x: textarea_rect.x + 1, // Account for left border
+            x: textarea_rect.x + 2, // Account for double left border
             y: textarea_rect.y,
-            width: textarea_rect.width.saturating_sub(1),
+            width: textarea_rect.width.saturating_sub(2),
             height: textarea_rect.height,
         };
 
@@ -273,11 +273,21 @@ impl WidgetRef for &ChatComposer {
                 buf,
             );
 
+        // Second column to make the border appear 2x thicker
+        Block::default()
+            .borders(Borders::LEFT)
+            .border_type(BorderType::Plain)
+            .border_style(border_style)
+            .render_ref(
+                Rect::new(textarea_rect.x + 1, textarea_rect.y, 1, textarea_rect.height),
+                buf,
+            );
+
         // Content area (excluding left border)
         let content_area = Rect {
-            x: textarea_rect.x + 1,
+            x: textarea_rect.x + 2,
             y: textarea_rect.y,
-            width: textarea_rect.width.saturating_sub(1),
+            width: textarea_rect.width.saturating_sub(2),
             height: textarea_rect.height,
         };
 

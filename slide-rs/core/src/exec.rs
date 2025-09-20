@@ -1,3 +1,6 @@
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
+
 use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
@@ -5,13 +8,13 @@ use std::process::ExitStatus;
 use std::time::Duration;
 use std::time::Instant;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncRead;
-use tokio::io::AsyncReadExt;
-use tokio::io::BufReader;
-use tokio::process::Child;
-use tokio::sync::mpsc::Sender;
+use serde_bytes::ByteBuf;
+use async_channel::Sender as AsyncSender;
+use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
+use tokio::process::{Child, Command};
+use tokio::sync::mpsc::{self, Sender};
 
 use crate::approval_manager::{ApprovalManager, ApprovalRequest, ApprovalResponse, AskForApproval};
 use crate::config_types::ShellEnvironmentPolicy;
@@ -66,13 +69,70 @@ pub enum SandboxType {
 pub struct StdoutStream {
     pub sub_id: String,
     pub call_id: String,
-    pub tx_event: Sender<ExecEvent>,
+    pub tx_event: AsyncSender<Event>,
+}
+
+/// Protocol event types for streaming
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Event {
+    pub event_type: String,
+    pub data: EventMsg,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExecEvent {
-    pub event_type: String,
-    pub data: String,
+#[serde(tag = "type")]
+pub enum EventMsg {
+    ExecCommandOutputDelta(ExecCommandOutputDeltaEvent),
+    ExecComplete(ExecCompleteEvent),
+    ExecApprovalRequest(ExecApprovalRequestEvent),
+    TaskComplete(TaskCompleteEvent),
+    AgentMessage(AgentMessageEvent),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecCommandOutputDeltaEvent {
+    pub sub_id: String,
+    pub call_id: String,
+    pub stream: ExecOutputStream,
+    pub delta: ByteBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecCompleteEvent {
+    pub sub_id: String,
+    pub call_id: String,
+    pub exit_code: i32,
+    pub duration_ms: u64,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecApprovalRequestEvent {
+    pub sub_id: String,
+    pub call_id: String,
+    pub command: Vec<String>,
+    pub justification: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskCompleteEvent {
+    pub sub_id: String,
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentMessageEvent {
+    pub sub_id: String,
+    pub message: String,
+    pub level: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ExecOutputStream {
+    Stdout,
+    Stderr,
 }
 
 #[derive(Debug, Clone)]
@@ -108,27 +168,43 @@ pub async fn process_exec_tool_call(
         match sandbox_type {
             SandboxType::None => exec(params, sandbox_policy, stdout_stream.clone()).await,
             SandboxType::MacosSeatbelt => {
-                let timeout = params.timeout_duration();
-                let ExecParams {
-                    command, cwd, env, ..
-                } = params;
-
-                // For now, fall back to normal execution
-                // TODO: Implement macOS Seatbelt sandbox
-                let params = ExecParams {
-                    command,
-                    cwd,
-                    timeout_ms: Some(timeout.as_millis() as u64),
-                    env,
-                    with_escalated_permissions: None,
-                    justification: None,
-                };
-                exec(params, sandbox_policy, stdout_stream.clone()).await
+                #[cfg(target_os = "macos")]
+                {
+                    let timeout = params.timeout_duration();
+                    spawn_command_under_seatbelt(
+                        params.command.clone(),
+                        sandbox_policy,
+                        params.cwd.clone(),
+                        params.env.clone(),
+                        timeout,
+                        stdout_stream.clone(),
+                    )
+                    .await
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    // Fall back to normal execution on non-macOS
+                    exec(params, sandbox_policy, stdout_stream.clone()).await
+                }
             }
             SandboxType::LinuxSeccomp => {
-                // For now, fall back to normal execution
-                // TODO: Implement Linux Seccomp sandbox
-                exec(params, sandbox_policy, stdout_stream.clone()).await
+                #[cfg(target_os = "linux")]
+                {
+                    spawn_command_under_linux_sandbox(
+                        params.command.clone(),
+                        sandbox_policy,
+                        params.cwd.clone(),
+                        params.env.clone(),
+                        params.timeout_duration(),
+                        stdout_stream.clone(),
+                    )
+                    .await
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    // Fall back to normal execution on non-Linux
+                    exec(params, sandbox_policy, stdout_stream.clone()).await
+                }
             }
         };
 
@@ -267,10 +343,14 @@ async fn collect_output(
 
                     // Stream output if requested
                     if let Some(ref stream) = stdout_stream {
-                        let chunk = String::from_utf8_lossy(&temp_buffer[..n]);
-                        let event = ExecEvent {
-                            event_type: "stdout_delta".to_string(),
-                            data: chunk.to_string(),
+                        let event = Event {
+                            event_type: "exec_command_output_delta".to_string(),
+                            data: EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+                                sub_id: stream.sub_id.clone(),
+                                call_id: stream.call_id.clone(),
+                                stream: ExecOutputStream::Stdout,
+                                delta: ByteBuf::from(temp_buffer[..n].to_vec()),
+                            }),
                         };
                         let _ = stream.tx_event.send(event).await;
                     }
@@ -293,6 +373,20 @@ async fn collect_output(
                 Ok(0) => break, // EOF
                 Ok(n) => {
                     buffer.extend_from_slice(&temp_buffer[..n]);
+
+                    // Stream stderr output if requested
+                    if let Some(ref stream) = stdout_stream {
+                        let event = Event {
+                            event_type: "exec_command_output_delta".to_string(),
+                            data: EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+                                sub_id: stream.sub_id.clone(),
+                                call_id: stream.call_id.clone(),
+                                stream: ExecOutputStream::Stderr,
+                                delta: ByteBuf::from(temp_buffer[..n].to_vec()),
+                            }),
+                        };
+                        let _ = stream.tx_event.send(event).await;
+                    }
                 }
                 Err(e) => return Err(anyhow::anyhow!("Failed to read stderr: {}", e)),
             }
@@ -449,4 +543,162 @@ pub async fn exec_command(cmd: &str, _sandbox: bool, _network: bool) -> Result<E
         stdout: result.stdout,
         stderr: result.stderr,
     })
+}
+
+/// macOS Seatbelt sandbox implementation
+#[cfg(target_os = "macos")]
+pub async fn spawn_command_under_seatbelt(
+    command: Vec<String>,
+    sandbox_policy: &SandboxPolicy,
+    cwd: PathBuf,
+    env: HashMap<String, String>,
+    timeout: Duration,
+    stdout_stream: Option<StdoutStream>,
+) -> Result<RawExecToolCallOutput> {
+    use crate::seatbelt::build_seatbelt_policy;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    let start = Instant::now();
+
+    // Create seatbelt policy file
+    let policy_content = build_seatbelt_policy(sandbox_policy.clone(), Some(&cwd));
+    let mut policy_file = NamedTempFile::new()?;
+    policy_file.write_all(policy_content.as_bytes())?;
+    policy_file.flush()?;
+
+    // Build sandboxed command
+    let mut cmd = Command::new("sandbox-exec");
+    cmd.arg("-f");
+    cmd.arg(policy_file.path());
+    cmd.arg(&command[0]);
+    if command.len() > 1 {
+        cmd.args(&command[1..]);
+    }
+
+    cmd.current_dir(&cwd)
+        .envs(&env)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .stdin(std::process::Stdio::null());
+
+    let child = cmd.spawn()
+        .with_context(|| format!("Failed to spawn sandboxed command: {:?}", command))?;
+
+    match tokio::time::timeout(timeout, collect_output(child, stdout_stream)).await {
+        Ok(result) => {
+            let duration_ms = start.elapsed().as_millis() as u64;
+            match result {
+                Ok((stdout, stderr, exit_status)) => {
+                    let exit_code = exit_status_to_code(exit_status);
+                    Ok(RawExecToolCallOutput {
+                        stdout,
+                        stderr,
+                        exit_code,
+                        duration_ms,
+                        timed_out: false,
+                    })
+                }
+                Err(e) => Err(anyhow::anyhow!("Sandboxed command execution failed: {}", e)),
+            }
+        }
+        Err(_) => {
+            let duration_ms = start.elapsed().as_millis() as u64;
+            Ok(RawExecToolCallOutput {
+                stdout: String::new(),
+                stderr: format!("Sandboxed command timed out after {}ms", timeout.as_millis()),
+                exit_code: TIMEOUT_CODE,
+                duration_ms,
+                timed_out: true,
+            })
+        }
+    }
+}
+
+/// Linux Landlock/Seccomp sandbox implementation
+#[cfg(target_os = "linux")]
+pub async fn spawn_command_under_linux_sandbox(
+    command: Vec<String>,
+    sandbox_policy: &SandboxPolicy,
+    cwd: PathBuf,
+    env: HashMap<String, String>,
+    timeout: Duration,
+    stdout_stream: Option<StdoutStream>,
+) -> Result<RawExecToolCallOutput> {
+    // For now, implement basic bwrap sandbox
+    // In production, this would use proper Landlock/Seccomp
+    use std::path::Path;
+
+    let start = Instant::now();
+
+    let writable_roots = sandbox_policy.get_writable_roots_with_cwd(&cwd);
+    let allows_network = sandbox_policy.allows_network();
+
+    // Build bwrap command for basic sandboxing
+    let mut cmd = Command::new("bwrap");
+
+    // Basic sandbox setup
+    cmd.arg("--unshare-all");
+    cmd.arg("--ro-bind").arg("/").arg("/");
+
+    // Add writable mounts
+    for root in &writable_roots {
+        if root.exists() {
+            cmd.arg("--bind").arg(root).arg(root);
+        }
+    }
+
+    // Network policy
+    if allows_network {
+        cmd.arg("--share-net");
+    } else {
+        cmd.arg("--unshare-net");
+    }
+
+    // Working directory
+    cmd.arg("--chdir").arg(&cwd);
+
+    // Add the actual command
+    cmd.arg("--");
+    cmd.arg(&command[0]);
+    if command.len() > 1 {
+        cmd.args(&command[1..]);
+    }
+
+    cmd.envs(&env)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .stdin(std::process::Stdio::null());
+
+    let child = cmd.spawn()
+        .with_context(|| format!("Failed to spawn sandboxed command: {:?}", command))?;
+
+    match tokio::time::timeout(timeout, collect_output(child, stdout_stream)).await {
+        Ok(result) => {
+            let duration_ms = start.elapsed().as_millis() as u64;
+            match result {
+                Ok((stdout, stderr, exit_status)) => {
+                    let exit_code = exit_status_to_code(exit_status);
+                    Ok(RawExecToolCallOutput {
+                        stdout,
+                        stderr,
+                        exit_code,
+                        duration_ms,
+                        timed_out: false,
+                    })
+                }
+                Err(e) => Err(anyhow::anyhow!("Sandboxed command execution failed: {}", e)),
+            }
+        }
+        Err(_) => {
+            let duration_ms = start.elapsed().as_millis() as u64;
+            Ok(RawExecToolCallOutput {
+                stdout: String::new(),
+                stderr: format!("Sandboxed command timed out after {}ms", timeout.as_millis()),
+                exit_code: TIMEOUT_CODE,
+                duration_ms,
+                timed_out: true,
+            })
+        }
+    }
 }

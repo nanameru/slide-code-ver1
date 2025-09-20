@@ -39,8 +39,7 @@ impl<'a> ratatui::widgets::Widget for StatusBar<'a> {
             Span::raw("  |  "),
             Span::styled(self.hints, Style::default().fg(Color::Gray)),
         ]);
-        let widget = Paragraph::new(line)
-            .alignment(Alignment::Left);
+        let widget = Paragraph::new(line).alignment(Alignment::Left);
         widget.render(area, buf);
     }
 }
