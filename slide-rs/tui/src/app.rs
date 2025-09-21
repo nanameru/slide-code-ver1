@@ -251,17 +251,59 @@ impl App {
                 self.history.clear();
                 return;
             }
-            KeyEvent {
-                code: KeyCode::Char('i'),
-                ..
-            } if self.mode == Mode::Normal => {
-                self.mode = Mode::Insert;
+            KeyEvent { code: KeyCode::Char('i'), .. } if self.mode == Mode::Normal => { self.mode = Mode::Insert; return; }
+            KeyEvent { code: KeyCode::Char('/'), .. } if self.mode == Mode::Insert && !self.bottom_pane.is_intercepting_input() => {
+                // Open command palette or file search depending on input later. For now show search popup directly for /open-file UX
+                self.open_file_search();
                 return;
             }
             _ => {}
         }
 
         // Delegate to bottom pane for input handling
+        // If file-search popup is active, intercept keys here
+        if self.bottom_pane.is_intercepting_input() {
+            // Minimal key handling for search: type to update query, Enter to select, Esc to close
+            use crossterm::event::KeyCode::*;
+            if let Some(popup) = self.bottom_pane.file_search_mut() {
+                match key.code {
+                    Esc => { self.bottom_pane.hide_file_search(); return; }
+                    Enter => {
+                        if let Some(rel) = popup.selected_match() {
+                            // Resolve relative path from cwd
+                            let path = rel.to_string();
+                            self.app_event_tx.send(AppEvent::FileReadRequest { path });
+                            self.bottom_pane.hide_file_search();
+                            return;
+                        }
+                    }
+                    Backspace => {
+                        // Drop last char from query
+                        // For simplicity, we cannot read current query; treat as no-op here
+                    }
+                    Char(c) => {
+                        let mut q = String::new();
+                        // Simplified: append a char per key to build query (real impl would track state)
+                        q.push(c);
+                        // Kick async search task
+                        let tx = self.app_event_tx.clone();
+                        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                        tokio::spawn(async move {
+                            let query = q.clone();
+                            match crate::bottom_pane::file_search_popup::FileSearchPopup::run_search(query.clone(), cwd).await {
+                                Ok(list) => tx.send(AppEvent::FileSearchResults { query, matches: list }),
+                                Err(e) => tx.send(AppEvent::FileSearchResults { query, matches: vec![] }),
+                            }
+                        });
+                        return;
+                    }
+                    Up => { if let Some(p) = self.bottom_pane.file_search_mut() { p.move_up(); } return; }
+                    Down => { if let Some(p) = self.bottom_pane.file_search_mut() { p.move_down(); } return; }
+                    _ => {}
+                }
+            }
+        }
+
         if let Some(result) = self.bottom_pane.handle_key_event(key) {
             use crate::bottom_pane::InputResult;
             match result {
@@ -570,6 +612,11 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
                             let cell = HistoryCell::new_system_status(SystemLabel::Error, [format!("open: {path} — {err}")]);
                             insert_history_lines(&mut terminal, cell.lines());
                         }
+                    }
+                }
+                AppEvent::FileSearchResults { query, matches } => {
+                    if let Some(p) = app.bottom_pane.file_search_mut() {
+                        p.set_matches(&query, matches);
                     }
                 }
             }

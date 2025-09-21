@@ -24,6 +24,7 @@ use crate::status_indicator_widget::StatusIndicatorWidget;
 use crate::user_approval_widget::ApprovalRequest;
 use approval_modal_view::ApprovalModalView;
 pub use chat_composer::{ChatComposer, InputResult};
+use file_search_popup::FileSearchPopup;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancellationEvent {
@@ -38,6 +39,7 @@ pub(crate) struct BottomPane {
 
     /// アクティブビュー（ある場合はコンポーザーの代わりに描画）
     active_view: Option<Box<dyn BottomPaneView>>,
+    file_search: Option<FileSearchPopup>,
 
     has_input_focus: bool,
     is_task_running: bool,
@@ -64,6 +66,7 @@ impl BottomPane {
         Self {
             composer,
             active_view: None,
+            file_search: None,
             has_input_focus: params.has_input_focus,
             is_task_running: false,
             status: None,
@@ -204,14 +207,30 @@ impl BottomPane {
                 status.render_ref(status_area, buf);
             }
 
-            // Render the composer in the remaining area.
-            (&self.composer).render_ref(content, buf);
+            // Render the composer or the file-search popup
+            if let Some(p) = self.file_search.as_ref() {
+                p.render_ref(content, buf);
+            } else {
+                (&self.composer).render_ref(content, buf);
+            }
         }
     }
 
     /// Whether there is an active overlay view that should intercept input
     pub fn is_intercepting_input(&self) -> bool {
-        self.active_view.is_some()
+        self.active_view.is_some() || self.file_search.is_some()
+    }
+
+    pub fn show_file_search(&mut self) {
+        self.file_search = Some(FileSearchPopup::new());
+    }
+
+    pub fn hide_file_search(&mut self) {
+        self.file_search = None;
+    }
+
+    pub fn file_search_mut(&mut self) -> Option<&mut FileSearchPopup> {
+        self.file_search.as_mut()
     }
 }
 

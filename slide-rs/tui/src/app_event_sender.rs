@@ -20,6 +20,11 @@ pub enum AppEvent {
         path: String,
         content: Result<String, String>,
     },
+    /// Async result for file search popup
+    FileSearchResults {
+        query: String,
+        matches: Vec<crate::bottom_pane::file_search_popup::FileMatch>,
+    },
 }
 
 #[derive(Clone, Default)]
