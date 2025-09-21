@@ -165,6 +165,17 @@ impl BottomPane {
                     }
                 }
             }
+            // If popup is visible and user hits Enter without navigating, accept selection and
+            // insert selected path into the composer at cursor.
+            if let Some(p) = self.file_search.as_mut() {
+                if let crossterm::event::KeyEvent { code: crossterm::event::KeyCode::Enter, .. } = key_event {
+                    if let Some(sel) = p.selected_match() {
+                        self.composer.insert_str(sel);
+                        self.hide_file_search();
+                        return Some(InputResult::None);
+                    }
+                }
+            }
             match res {
                 InputResult::Submitted(_) => Some(res),
                 _ => None,

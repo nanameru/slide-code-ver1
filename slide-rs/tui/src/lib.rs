@@ -3,6 +3,7 @@
 pub mod agent;
 pub mod app;
 pub mod app_event_sender;
+pub mod clipboard_paste;
 pub mod bottom_pane;
 pub mod custom_terminal;
 pub mod history_cell;

@@ -32,6 +32,13 @@ impl FileSearchPopup {
             state: ScrollState::new(),
         }
     }
+    pub(crate) fn current_query(&self) -> &str {
+        if self.waiting {
+            &self.pending_query
+        } else {
+            &self.display_query
+        }
+    }
     pub(crate) fn set_query(&mut self, query: &str) {
         if query == self.pending_query {
             return;
