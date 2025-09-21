@@ -521,6 +521,12 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
         // Drain app events from UI widgets
         while let Ok(ev) = app.app_event_rx.try_recv() {
             match ev {
+                AppEvent::StartFileSearch { query } => {
+                    app.bottom_pane.show_file_search();
+                    if let Some(p) = app.bottom_pane.file_search_mut() {
+                        p.set_query(&query);
+                    }
+                }
                 AppEvent::InsertHistoryCell(cell) => {
                     insert_history_lines(&mut terminal, cell.lines());
                 }

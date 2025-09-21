@@ -155,6 +155,16 @@ impl BottomPane {
                 return None;
             }
             let (res, _redraw) = self.composer.handle_key_event(key_event);
+            // Detect @query and open file search popup with that query.
+            // We keep this logic simple: if popup not open and composer text contains '@...'
+            if self.file_search.is_none() {
+                if let Some(q) = crate::bottom_pane::chat_composer::extract_at_search_query(self.composer.text()) {
+                    self.show_file_search();
+                    if let Some(p) = self.file_search.as_mut() {
+                        p.set_query(&q);
+                    }
+                }
+            }
             match res {
                 InputResult::Submitted(_) => Some(res),
                 _ => None,

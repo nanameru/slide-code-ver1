@@ -25,6 +25,10 @@ pub enum AppEvent {
         query: String,
         matches: Vec<crate::bottom_pane::file_search_popup::FileMatch>,
     },
+    /// Start file search popup with initial query; inline insert mode
+    StartFileSearch {
+        query: String,
+    },
     /// Generic tool execution textual output to display in history
     ToolOutput {
         text: String,

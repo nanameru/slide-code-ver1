@@ -125,6 +125,17 @@ impl ChatComposer {
                 (InputResult::None, true)
             }
             other => {
+                // Before mutating textarea, capture @search short pattern for immediate popup
+                if let KeyEvent { code: KeyCode::Char(c), modifiers: KeyModifiers::NONE, .. } = other {
+                    // Append char locally to inspect pattern without committing state first
+                    let mut preview = self.textarea.text().to_string();
+                    preview.push(c);
+                    if extract_at_search_query(&preview).is_some() {
+                        // Store back the key into textarea and ask caller to redraw
+                        self.textarea.input(other);
+                        return (InputResult::None, true);
+                    }
+                }
                 self.textarea.input(other);
                 (InputResult::None, true)
             }
@@ -244,6 +255,25 @@ impl ChatComposer {
             .wrap(Wrap { trim: false })
             .render_ref(area, buf);
     }
+}
+
+/// Extract `@query` at the end of the input for file search trigger.
+pub(crate) fn extract_at_search_query(input: &str) -> Option<String> {
+    // Find last '@' and take trailing token (letters, digits, separators '-', '_', '.', '/')
+    let last_at = input.rfind('@')?;
+    let tail = &input[(last_at + 1)..];
+    if tail.is_empty() {
+        return None;
+    }
+    // Stop on whitespace
+    let mut end = tail.len();
+    for (i, ch) in tail.char_indices() {
+        if ch.is_whitespace() {
+            end = i; break;
+        }
+    }
+    let q = &tail[..end];
+    if q.is_empty() { None } else { Some(q.to_string()) }
 }
 
 impl WidgetRef for &ChatComposer {
