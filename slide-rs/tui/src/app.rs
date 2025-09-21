@@ -272,6 +272,10 @@ impl App {
                     // まず画面に表示（競合するエージェントイベントより先に出す）
                     let cell = HistoryCell::new_user_prompt(text.clone());
                     insert_history_lines(terminal, cell.lines());
+                    let _ = std::io::stdout().flush();
+                    let cell = HistoryCell::new_user_prompt(text.clone());
+                    insert_history_lines(terminal, cell.lines());
+                    let _ = std::io::stdout().flush();
                     // その後に内部状態更新と送信
                     self.submit_message(text);
                 }
