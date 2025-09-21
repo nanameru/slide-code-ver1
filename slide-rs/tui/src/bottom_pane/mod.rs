@@ -298,6 +298,10 @@ impl BottomPane {
         }
     }
 
+    pub(crate) fn set_composer_placeholder(&mut self, text: String) {
+        self.composer.set_placeholder_text(text);
+    }
+
     /// Update the queued messages shown under the status header.
     pub(crate) fn set_queued_user_messages(&mut self, queued: Vec<String>) {
         self.queued_user_messages = queued.clone();

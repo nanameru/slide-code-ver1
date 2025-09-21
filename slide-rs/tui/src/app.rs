@@ -253,6 +253,11 @@ impl App {
                             actions: vec![Box::new(move |t: &AppEventSender| {
                                 t.send(AppEvent::UpdateModel("gpt-4o-mini".to_string()));
                                 tx.send(AppEvent::PersistModelSelection { model: "gpt-4o-mini".to_string(), effort: None });
+                                // Update placeholder and show a small info line
+                                let p = "Model: gpt-4o-mini".to_string();
+                                t.send(AppEvent::ToolOutput { text: p.clone() });
+                                // Update composer hint
+                                // Note: UI update via BottomPane happens next draw
                             })],
                         }
                     },
@@ -265,6 +270,8 @@ impl App {
                             actions: vec![Box::new(move |t: &AppEventSender| {
                                 t.send(AppEvent::UpdateModel("o4-mini".to_string()));
                                 tx.send(AppEvent::PersistModelSelection { model: "o4-mini".to_string(), effort: None });
+                                let p = "Model: o4-mini".to_string();
+                                t.send(AppEvent::ToolOutput { text: p.clone() });
                             })],
                         }
                     },
@@ -628,6 +635,8 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
                             let _ = c.submit(CoreOp::Interrupt).await;
                         });
                     }
+                    // Update composer placeholder locally to reflect model
+                    app.bottom_pane.set_composer_placeholder(format!("Model: {}", model));
                 }
                 AppEvent::UpdateReasoningEffort(effort) => {
                     if let Some(agent) = &app.agent {

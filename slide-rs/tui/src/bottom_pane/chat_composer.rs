@@ -198,6 +198,10 @@ impl ChatComposer {
         self.show_hints = show;
     }
 
+    pub fn set_placeholder_text(&mut self, text: String) {
+        self.placeholder_text = text;
+    }
+
     pub fn show_ctrl_c_quit_hint(&mut self) {
         self.ctrl_c_quit_hint = true;
     }
