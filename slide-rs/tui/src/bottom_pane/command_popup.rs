@@ -12,6 +12,7 @@ pub(crate) enum SlashCommand {
     Init,
     Compact,
     Mention,
+    OpenFile,
 }
 impl SlashCommand {
     pub fn command(&self) -> &'static str {
@@ -19,6 +20,7 @@ impl SlashCommand {
             SlashCommand::Init => "init",
             SlashCommand::Compact => "compact",
             SlashCommand::Mention => "mention",
+            SlashCommand::OpenFile => "open-file",
         }
     }
     pub fn description(&self) -> &'static str {
@@ -26,6 +28,7 @@ impl SlashCommand {
             SlashCommand::Init => "initialize",
             SlashCommand::Compact => "compact transcript",
             SlashCommand::Mention => "insert mention",
+            SlashCommand::OpenFile => "open a file (read-only)",
         }
     }
 }
@@ -34,6 +37,7 @@ pub(crate) fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
         ("init", SlashCommand::Init),
         ("compact", SlashCommand::Compact),
         ("mention", SlashCommand::Mention),
+        ("open-file", SlashCommand::OpenFile),
     ]
 }
 

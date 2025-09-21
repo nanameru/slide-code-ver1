@@ -11,6 +11,15 @@ pub enum AppEvent {
         id: String,
         decision: ReviewDecision,
     },
+    /// Request to read a file (path is absolute or repo-relative)
+    FileReadRequest {
+        path: String,
+    },
+    /// Result of an async file read (content may be truncated)
+    FileReadResult {
+        path: String,
+        content: Result<String, String>,
+    },
 }
 
 #[derive(Clone, Default)]

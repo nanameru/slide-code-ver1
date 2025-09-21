@@ -499,6 +499,79 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
                         });
                     }
                 }
+                AppEvent::FileReadRequest { path } => {
+                    let tx = app.app_event_tx.clone();
+                    tokio::spawn(async move {
+                        use tokio::io::AsyncReadExt;
+                        // Canonicalize & bound size
+                        let pathbuf = std::path::PathBuf::from(&path);
+                        let canonical = match tokio::fs::canonicalize(&pathbuf).await {
+                            Ok(p) => p,
+                            Err(e) => {
+                                tx.send(AppEvent::FileReadResult { path, content: Err(format!("canonicalize failed: {e}")) });
+                                return;
+                            }
+                        };
+                        let meta = match tokio::fs::metadata(&canonical).await {
+                            Ok(m) => m,
+                            Err(e) => {
+                                tx.send(AppEvent::FileReadResult { path, content: Err(format!("metadata failed: {e}")) });
+                                return;
+                            }
+                        };
+                        if !meta.is_file() {
+                            tx.send(AppEvent::FileReadResult { path, content: Err("not a regular file".to_string()) });
+                            return;
+                        }
+                        let max_bytes: u64 = 256 * 1024; // 256KB
+                        let truncated = meta.len() > max_bytes;
+                        let mut file = match tokio::fs::File::open(&canonical).await {
+                            Ok(f) => f,
+                            Err(e) => {
+                                tx.send(AppEvent::FileReadResult { path, content: Err(format!("open failed: {e}")) });
+                                return;
+                            }
+                        };
+                        let mut buf = Vec::with_capacity((max_bytes as usize).min(262144));
+                        let to_read = max_bytes.min(meta.len());
+                        let mut reader = tokio::io::BufReader::new(file);
+                        let mut handle = reader.take(to_read);
+                        if let Err(e) = handle.read_to_end(&mut buf).await {
+                            tx.send(AppEvent::FileReadResult { path, content: Err(format!("read failed: {e}")) });
+                            return;
+                        }
+                        let mut content = String::from_utf8_lossy(&buf).to_string();
+                        if truncated {
+                            content.push_str("\n…[truncated]\n");
+                        }
+                        tx.send(AppEvent::FileReadResult { path, content: Ok(content) });
+                    });
+                }
+                AppEvent::FileReadResult { path, content } => {
+                    match content {
+                        Ok(text) => {
+                            let header = format!("{}", path);
+                            let mut lines = Vec::new();
+                            lines.push(ratatui::text::Line::from(""));
+                            lines.push(ratatui::text::Line::from(
+                                ratatui::text::Span::styled(
+                                    header,
+                                    ratatui::style::Style::default()
+                                        .fg(ratatui::style::Color::LightBlue)
+                                        .add_modifier(ratatui::style::Modifier::BOLD),
+                                ),
+                            ));
+                            for l in text.lines() {
+                                lines.push(crate::history_cell::format_content_line(l));
+                            }
+                            insert_history_lines(&mut terminal, lines);
+                        }
+                        Err(err) => {
+                            let cell = HistoryCell::new_system_status(SystemLabel::Error, [format!("open: {path} — {err}")]);
+                            insert_history_lines(&mut terminal, cell.lines());
+                        }
+                    }
+                }
             }
         }
 

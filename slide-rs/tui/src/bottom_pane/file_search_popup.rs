@@ -1,4 +1,5 @@
 use ratatui::{buffer::Buffer, layout::Rect, widgets::WidgetRef};
+use slide_file_search as sfs;
 
 use super::{
     popup_consts::MAX_POPUP_ROWS,
@@ -42,6 +43,20 @@ impl FileSearchPopup {
             self.matches.clear();
             self.state.reset();
         }
+    }
+    pub(crate) async fn run_search(query: String, cwd: std::path::PathBuf) -> anyhow::Result<Vec<FileMatch>> {
+        // Use library run() directly for in-process results
+        use std::num::NonZero;
+        let exclude: Vec<String> = vec!["**/target/**".to_string(), "**/.git/**".to_string()];
+        let threads = NonZero::new(4).unwrap();
+        let limit = NonZero::new(200).unwrap();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let sfs::FileSearchResults { matches, .. } = sfs::run(&query, limit, &cwd, exclude, threads, cancel, true)?;
+        let out = matches
+            .into_iter()
+            .map(|m| FileMatch { path: m.path, indices: m.indices.map(|v| v.into_iter().map(|u| u as usize).collect()) })
+            .collect();
+        Ok(out)
     }
     pub(crate) fn set_empty_prompt(&mut self) {
         self.display_query.clear();
