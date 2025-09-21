@@ -25,6 +25,7 @@ use crate::user_approval_widget::ApprovalRequest;
 use approval_modal_view::ApprovalModalView;
 pub use chat_composer::{ChatComposer, InputResult};
 use file_search_popup::FileSearchPopup;
+use list_selection_view::{ListSelectionView, SelectionAction, SelectionItem};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancellationEvent {
@@ -229,7 +230,7 @@ impl BottomPane {
     /// 簡易描画（Paragraph ベース）
     pub fn render_ref(&mut self, area: Rect, buf: &mut Buffer) {
         let composer_has_focus = self.has_input_focus && self.active_view.is_none();
-        self.composer.set_focus(composer_has_focus);
+        self.composer.set_focus(composer_has_focus && self.status.is_none());
         let [status_area, content] = self.layout(area);
 
         // When a modal view is active, it owns the whole content area.
@@ -266,6 +267,19 @@ impl BottomPane {
 
     pub fn file_search_mut(&mut self) -> Option<&mut FileSearchPopup> {
         self.file_search.as_mut()
+    }
+
+    pub fn show_selection_view(
+        &mut self,
+        title: String,
+        subtitle: Option<String>,
+        footer_hint: Option<String>,
+        items: Vec<SelectionItem>,
+        app_event_tx: AppEventSender,
+    ) {
+        self.active_view = Some(Box::new(ListSelectionView::new(
+            title, subtitle, footer_hint, items, app_event_tx,
+        )));
     }
 }
 

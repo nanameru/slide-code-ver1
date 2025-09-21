@@ -1,4 +1,5 @@
 use slide_core::codex::ReviewDecision;
+use slide_core::protocol::ReasoningEffort as ReasoningEffortConfig;
 use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Debug, Clone)]
@@ -41,6 +42,13 @@ pub enum AppEvent {
     CommitTick,
     /// Stop commit animation ticks
     StopCommitAnimation,
+
+    /// Update model preset for subsequent turns
+    UpdateModel(String),
+    /// Update reasoning effort for subsequent turns
+    UpdateReasoningEffort(Option<ReasoningEffortConfig>),
+    /// Persist model selection (no-op placeholder)
+    PersistModelSelection { model: String, effort: Option<ReasoningEffortConfig> },
 }
 
 #[derive(Clone, Default)]

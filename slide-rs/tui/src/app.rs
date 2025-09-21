@@ -4,7 +4,7 @@ use crossterm::{
     cursor::{self, MoveTo},
     event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, ScrollUp},
+    terminal::{disable_raw_mode, enable_raw_mode, ScrollUp, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
     backend::CrosstermBackend,
@@ -25,6 +25,8 @@ use crate::widgets::banner::banner_history_lines;
 use slide_core::codex::Event as CoreEvent;
 use slide_core::codex::Op;
 use slide_core::protocol::InputItem;
+use slide_core::codex::Op as CoreOp;
+use slide_core::protocol::ReasoningEffort as ReasoningEffortConfig;
 
 // (leftover from earlier spinner impl) — intentionally removed
 
@@ -101,6 +103,8 @@ pub struct App {
     // Thinking... spinner state
     thinking_frame_idx: usize,
     thinking_last_change: Instant,
+    // Preview of last assistant message (for notifications)
+    last_agent_preview: String,
 }
 
 impl App {
@@ -168,6 +172,7 @@ impl App {
             answer_stream: AnswerStreamState::new(),
             thinking_frame_idx: 0,
             thinking_last_change: Instant::now(),
+            last_agent_preview: String::new(),
         };
         // Write a small banner to the log so the browser viewer has content
         append_log("[info] Slide TUI session started");
@@ -233,6 +238,44 @@ impl App {
                 } else {
                     self.quit();
                 }
+                return;
+            }
+            KeyEvent { code: KeyCode::Char('m'), modifiers: KeyModifiers::CONTROL, .. } => {
+                // Model selection popup with actions wired to UpdateModel and PersistModelSelection
+                let tx = self.app_event_tx.clone();
+                let items: Vec<crate::bottom_pane::list_selection_view::SelectionItem> = vec![
+                    {
+                        let tx = tx.clone();
+                        crate::bottom_pane::list_selection_view::SelectionItem {
+                            name: "gpt-4o-mini".to_string(),
+                            description: Some("fast, cost-effective".to_string()),
+                            is_current: false,
+                            actions: vec![Box::new(move |t: &AppEventSender| {
+                                t.send(AppEvent::UpdateModel("gpt-4o-mini".to_string()));
+                                tx.send(AppEvent::PersistModelSelection { model: "gpt-4o-mini".to_string(), effort: None });
+                            })],
+                        }
+                    },
+                    {
+                        let tx = tx.clone();
+                        crate::bottom_pane::list_selection_view::SelectionItem {
+                            name: "o4-mini".to_string(),
+                            description: Some("reasoning optimized".to_string()),
+                            is_current: false,
+                            actions: vec![Box::new(move |t: &AppEventSender| {
+                                t.send(AppEvent::UpdateModel("o4-mini".to_string()));
+                                tx.send(AppEvent::PersistModelSelection { model: "o4-mini".to_string(), effort: None });
+                            })],
+                        }
+                    },
+                ];
+                self.bottom_pane.show_selection_view(
+                    "Select model and reasoning level".to_string(),
+                    Some("Switch model for this session".to_string()),
+                    Some("Enter to confirm, Esc to dismiss".to_string()),
+                    items,
+                    self.app_event_tx.clone(),
+                );
                 return;
             }
             KeyEvent {
@@ -512,8 +555,12 @@ impl App {
 pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
     // 通常スクリーン＋インラインビューポート（Codex と同等の初期化）
     enable_raw_mode()?;
-    // 代替スクリーンへ移行し、既存出力とレイヤを分離
     let mut stdout = io::stdout();
+    // オプションの alt-screen モード
+    let use_alt = std::env::var("SLIDE_ALT_SCREEN").ok().map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false);
+    if use_alt {
+        let _ = execute!(stdout, EnterAlternateScreen);
+    }
     // 念のため通常スクリーン由来の残骸を上に押し上げ、(0,0) から描画開始する
     if let Ok((_x, y)) = cursor::position() {
         if y > 0 {
@@ -571,6 +618,27 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
                 }
                 AppEvent::StopCommitAnimation => {
                     app.bottom_pane.set_task_running(false);
+                }
+                AppEvent::UpdateModel(model) => {
+                    if let Some(agent) = &app.agent {
+                        let c = agent.codex.clone();
+                        tokio::spawn(async move {
+                            // In this minimal core, we don't support OverrideTurnContext yet.
+                            // No-op for backend; UI will reflect in future when core supports it.
+                            let _ = c.submit(CoreOp::Interrupt).await;
+                        });
+                    }
+                }
+                AppEvent::UpdateReasoningEffort(effort) => {
+                    if let Some(agent) = &app.agent {
+                        let c = agent.codex.clone();
+                        tokio::spawn(async move {
+                            let _ = c.submit(CoreOp::Interrupt).await;
+                        });
+                    }
+                }
+                AppEvent::PersistModelSelection { .. } => {
+                    // Placeholder: No persistent config system in slide-code-test yet.
                 }
                 AppEvent::ExecApproval { id, decision } => {
                     if let Some(agent) = &app.agent {
@@ -726,6 +794,10 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
     } else {
         AppExit::Quit
     };
+    // leave alt screen if used
+    if use_alt {
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+    }
     Ok(RunResult {
         exit,
         recent_files: app.recent_files,
@@ -786,6 +858,17 @@ where
             let mut pending = Vec::new();
             if !message.is_empty() {
                 pending.extend(app.answer_stream.push_delta(&message));
+                // keep a short preview for notification
+                use unicode_segmentation::UnicodeSegmentation;
+                let mut preview = String::new();
+                let mut count = 0usize;
+                for g in message.graphemes(true) {
+                    let next = count + g.len();
+                    if next > 200 { break; }
+                    preview.push_str(g);
+                    count = next;
+                }
+                app.last_agent_preview = preview;
             }
             let mut tail = app.answer_stream.finalize();
             pending.append(&mut tail);
@@ -853,6 +936,14 @@ where
             }
             append_log("[task] complete");
             app.app_event_tx.send(AppEvent::StopCommitAnimation);
+            // simple inline notification (one-line)
+            let should_show_note = !app.bottom_pane.is_intercepting_input();
+            if should_show_note && !app.last_agent_preview.is_empty() {
+                let note = format!("✓ {}", app.last_agent_preview);
+                let cell = HistoryCell::new_system_status(SystemLabel::Info, [note]);
+                insert_history_lines(terminal, cell.lines());
+                app.last_agent_preview.clear();
+            }
         }
         CoreEvent::Error { message } => {
             let cell = HistoryCell::new_system_status(SystemLabel::Error, [message.clone()]);
