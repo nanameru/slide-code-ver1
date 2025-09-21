@@ -209,8 +209,11 @@ impl App {
         self.thinking_last_change = Instant::now();
     }
 
-    /// Codex風のシンプルなキーイベント処理
-    pub fn handle_key_event(&mut self, key: KeyEvent) {
+    /// Codex風のシンプルなキーイベント処理（user送信時は上側へ差し込み）
+    pub fn handle_key_event<B>(&mut self, key: KeyEvent, terminal: &mut Terminal<B>)
+    where
+        B: ratatui::backend::Backend,
+    {
         if key.kind != KeyEventKind::Press {
             return;
         }
@@ -263,7 +266,11 @@ impl App {
             use crate::bottom_pane::InputResult;
             match result {
                 InputResult::Submitted(text) => {
-                    self.submit_message(text);
+                    // 内部状態を更新
+                    self.submit_message(text.clone());
+                    // 画面表示（上側へ差し込み）
+                    let cell = HistoryCell::new_user_prompt(text);
+                    insert_history_lines(terminal, cell.lines());
                 }
                 InputResult::None => {}
             }
@@ -500,7 +507,7 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
                     _ => {}
                 },
                 Event::Key(key) => {
-                    app.handle_key_event(key);
+                    app.handle_key_event(key, &mut terminal);
                 }
                 Event::Resize(_, _) => {
                     // Keep latest visible on resize only when follow-bottom is enabled
