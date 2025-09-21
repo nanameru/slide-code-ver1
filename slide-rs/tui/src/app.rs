@@ -266,6 +266,9 @@ impl App {
             use crate::bottom_pane::InputResult;
             match result {
                 InputResult::Submitted(text) => {
+                    if text.trim().is_empty() {
+                        return;
+                    }
                     // 内部状態を更新
                     self.submit_message(text.clone());
                     // 画面表示（上側へ差し込み）
