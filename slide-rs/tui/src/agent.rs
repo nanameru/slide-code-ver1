@@ -1,6 +1,7 @@
 use anyhow::Result;
 use slide_core::client::{ModelClient, OpenAiAdapter, StubClient};
 use slide_core::codex::{Codex, CodexSpawnOk, Event as CoreEvent, Op};
+use slide_core::protocol::InputItem;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -55,6 +56,13 @@ impl AgentHandle {
         let c = self.codex.clone();
         tokio::spawn(async move {
             let _ = c.submit(Op::UserInput { text }).await;
+        });
+    }
+
+    pub fn submit_items_bg(&self, items: Vec<InputItem>) {
+        let c = self.codex.clone();
+        tokio::spawn(async move {
+            let _ = c.submit(Op::UserInputItems { items }).await;
         });
     }
 }

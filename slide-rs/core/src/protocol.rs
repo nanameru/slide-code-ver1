@@ -1,6 +1,6 @@
 // Re-export the standalone `protocol` crate so existing `crate::protocol::*`
 // imports continue to work within the `core` crate and downstream crates.
-pub use protocol::*;
+pub use ::protocol::*;
 
 // Export our enhanced types for compatibility
 pub use crate::approval_manager::{AskForApproval as CoreAskForApproval, ApprovalManager, ApprovalRequest, ApprovalResponse};

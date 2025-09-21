@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 
 use crate::client::{ModelClient, ResponseEvent};
 use crate::openai_tools::{render_tools_instructions, ToolsConfig, ToolsConfigParams};
+use protocol::protocol::InputItem;
 use crate::tool_executor::ToolExecutor;
 use slide_chatgpt::client::{ChatGptClient, SlideRequest};
 
@@ -64,6 +65,10 @@ pub enum Event {
 pub enum Op {
     UserInput {
         text: String,
+    },
+    /// Rich user input including local image attachments (TUI parity with codex-1)
+    UserInputItems {
+        items: Vec<InputItem>,
     },
     Interrupt,
     ExecApproval {
@@ -212,6 +217,19 @@ impl Codex {
                             crate::config_types::ShellEnvironmentPolicy::default(),
                         );
 
+                        let mut tool_executor = ToolExecutor::new(
+                            crate::approval_manager::AskForApproval::default(),
+                            crate::seatbelt::SandboxPolicy::default(),
+                            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                            crate::config_types::ShellEnvironmentPolicy::default(),
+                        );
+
+                        let mut tool_executor = ToolExecutor::new(
+                            crate::approval_manager::AskForApproval::default(),
+                            crate::seatbelt::SandboxPolicy::default(),
+                            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                            crate::config_types::ShellEnvironmentPolicy::default(),
+                        );
                         match client.stream(composed).await {
                             Ok(mut rx) => {
                                 let mut assembled_resp = String::new();
@@ -357,6 +375,132 @@ impl Codex {
                                         message: e.to_string(),
                                     })
                                     .await;
+                            }
+                        }
+                    }
+                    Op::UserInputItems { items } => {
+                        let _ = tx_event.send(Event::TaskStarted).await;
+                        // Build a prompt similar to above; for parity we include text and note images
+                        let approval_hint = std::env::var("SLIDE_APPROVAL_MODE").ok();
+                        let tools_cfg = ToolsConfig::new(&ToolsConfigParams {
+                            include_plan_tool: true,
+                            include_apply_patch_tool: true,
+                            include_view_image_tool: true,
+                            include_web_search_request: false,
+                            use_streamable_shell_tool: true,
+                            include_slides_tools: true,
+                            approval_policy: crate::approval_manager::AskForApproval::default(),
+                            sandbox_policy: crate::seatbelt::SandboxPolicy::default(),
+                        });
+                        let tool_instructions =
+                            render_tools_instructions(&tools_cfg, approval_hint.as_deref());
+
+                        let text_part = items.iter().find_map(|it| if let InputItem::Text { text } = it { Some(text.clone()) } else { None }).unwrap_or_default();
+                        let img_count = items.iter().filter(|it| matches!(it, InputItem::LocalImage { .. } | InputItem::Image { .. })).count();
+
+                        convo.push(("user".to_string(), text_part.clone()));
+                        const MAX_HISTORY_MESSAGES: usize = 12;
+                        if convo.len() > MAX_HISTORY_MESSAGES {
+                            let drop = convo.len() - MAX_HISTORY_MESSAGES;
+                            convo.drain(0..drop);
+                        }
+                        let mut history_block = String::new();
+                        if !convo.is_empty() {
+                            history_block.push_str("\n\nConversation so far:\n");
+                            for (role, msg) in &convo {
+                                let tag = if role == "assistant" { "Assistant" } else { "User" };
+                                history_block.push_str(tag);
+                                history_block.push_str(": ");
+                                history_block.push_str(msg);
+                                if !msg.ends_with('\n') { history_block.push('\n'); }
+                            }
+                        }
+                        let mut composed = format!("{}{}\n\nUser: {}", tool_instructions, history_block, text_part);
+                        if img_count > 0 { composed.push_str(&format!("\n\n[{} image attachment(s)]", img_count)); }
+
+                        let mut tool_executor = ToolExecutor::new(
+                            crate::approval_manager::AskForApproval::default(),
+                            crate::seatbelt::SandboxPolicy::default(),
+                            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                            crate::config_types::ShellEnvironmentPolicy::default(),
+                        );
+                        match client.stream(composed).await {
+                            Ok(mut rx) => {
+                                let mut assembled_resp = String::new();
+                                while let Some(ev) = rx.recv().await {
+                                    match ev {
+                                        ResponseEvent::TextDelta(delta) => {
+                                            assembled_resp.push_str(&delta);
+                                            let _ = tx_event.send(Event::AgentMessageDelta { delta }).await;
+                                        }
+                                        ResponseEvent::Completed => {
+                                            // Process tools as usual
+                                            // (same as above branch)
+                                            match tool_executor.extract_tool_calls(&assembled_resp) {
+                                                Ok(tool_calls) => {
+                                                    if tool_calls.is_empty() {
+                                                        if !assembled_resp.is_empty() {
+                                                            convo.push(("assistant".to_string(), assembled_resp.clone()));
+                                                            if convo.len() > MAX_HISTORY_MESSAGES {
+                                                                let drop = convo.len() - MAX_HISTORY_MESSAGES;
+                                                                convo.drain(0..drop);
+                                                            }
+                                                        }
+                                                    } else {
+                                                        let mut appended = String::new();
+                                                        for tool_call in tool_calls {
+                                                            let announce = format!("\n\n[Tool Execution]\n▶ {}", tool_call.summary());
+                                                            let _ = tx_event.send(Event::AgentMessageDelta { delta: announce.clone() }).await;
+                                                            appended.push_str(&announce);
+                                                            match tool_executor.execute_tool_call(tool_call).await {
+                                                                Ok(exec_output) => {
+                                                                    let block = format!("\n\n[Tool Execution Result]\n{}", exec_output);
+                                                                    let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
+                                                                    appended.push_str(&block);
+                                                                }
+                                                                Err(err) => {
+                                                                    let err_text = err.to_string();
+                                                                    let block = format!("\n\n[Tool Execution Result]\nFailed: {}", err_text);
+                                                                    let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
+                                                                    let _ = tx_event.send(Event::Error { message: format!("Tool execution failed: {}", err_text) }).await;
+                                                                    appended.push_str(&block);
+                                                                    break;
+                                                                }
+                                                            }
+                                                        }
+                                                        let enriched = format!("{}{}", assembled_resp, appended);
+                                                        if !enriched.is_empty() {
+                                                            convo.push(("assistant".to_string(), enriched));
+                                                            if convo.len() > MAX_HISTORY_MESSAGES {
+                                                                let drop = convo.len() - MAX_HISTORY_MESSAGES;
+                                                                convo.drain(0..drop);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    let _ = tx_event.send(Event::Error { message: format!("Tool parsing failed: {}", e) }).await;
+                                                    if !assembled_resp.is_empty() {
+                                                        convo.push(("assistant".to_string(), assembled_resp.clone()));
+                                                        if convo.len() > MAX_HISTORY_MESSAGES {
+                                                            let drop = convo.len() - MAX_HISTORY_MESSAGES;
+                                                            convo.drain(0..drop);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            let _ = tx_event.send(Event::TaskComplete).await;
+                                            break;
+                                        }
+                                        ResponseEvent::Error(message) => {
+                                            let _ = tx_event.send(Event::Error { message }).await;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                let _ = tx_event.send(Event::Error { message: e.to_string() }).await;
                             }
                         }
                     }

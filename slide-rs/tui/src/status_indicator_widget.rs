@@ -23,6 +23,9 @@ pub(crate) struct StatusIndicatorWidget {
     /// Queued user messages to display under the status line.
     queued_messages: Vec<String>,
 
+    /// Number of images currently attached (pending submission)
+    attachments_count: usize,
+
     start_time: Instant,
 }
 
@@ -31,6 +34,7 @@ impl StatusIndicatorWidget {
         Self {
             header: String::from("Working"),
             queued_messages: Vec::new(),
+            attachments_count: 0,
             start_time: Instant::now(),
         }
     }
@@ -74,6 +78,11 @@ impl StatusIndicatorWidget {
     pub(crate) fn set_queued_messages(&mut self, queued: Vec<String>) {
         self.queued_messages = queued;
     }
+
+    /// Update count of pending image attachments to show inline next to timer.
+    pub(crate) fn set_attachments_count(&mut self, n: usize) {
+        self.attachments_count = n;
+    }
 }
 
 impl WidgetRef for StatusIndicatorWidget {
@@ -93,6 +102,10 @@ impl WidgetRef for StatusIndicatorWidget {
             "Esc".dim().bold(),
             " to interrupt)".dim(),
         ]);
+        if self.attachments_count > 0 {
+            let label = if self.attachments_count == 1 { " image" } else { " images" };
+            spans.extend(vec!["  ".into(), format!("{}{}", self.attachments_count, label).dim()]);
+        }
 
         // Build lines: status, then queued messages, then spacer.
         let mut lines: Vec<Line<'static>> = Vec::new();

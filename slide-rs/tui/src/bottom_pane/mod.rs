@@ -161,7 +161,9 @@ impl BottomPane {
             if let KeyEvent { code: crossterm::event::KeyCode::Char('v'), modifiers: crossterm::event::KeyModifiers::CONTROL, .. } = key_event {
                 if let Ok((path, _info)) = crate::clipboard_paste::paste_image_to_temp_png() {
                     self.recent_submission_images.push(path);
-                    // Optional: we could surface a hint via status; keep silent for now
+                    if let Some(status) = self.status.as_mut() {
+                        status.set_attachments_count(self.recent_submission_images.len());
+                    }
                     return None;
                 }
             }
@@ -298,6 +300,9 @@ impl BottomPane {
     pub(crate) fn take_recent_submission_images(&mut self) -> Vec<std::path::PathBuf> {
         let mut out = Vec::new();
         std::mem::swap(&mut out, &mut self.recent_submission_images);
+        if let Some(status) = self.status.as_mut() {
+            status.set_attachments_count(0);
+        }
         out
     }
 }

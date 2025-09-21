@@ -24,6 +24,7 @@ use crate::user_approval_widget::ApprovalRequest;
 use crate::widgets::banner::banner_history_lines;
 use slide_core::codex::Event as CoreEvent;
 use slide_core::codex::Op;
+use slide_core::protocol::InputItem;
 
 // (leftover from earlier spinner impl) — intentionally removed
 
@@ -321,10 +322,22 @@ impl App {
                         if images.is_empty() {
                             self.submit_message(text);
                         } else {
-                            self.submit_message(text.clone());
-                            let info = format!("attached {} image(s)", images.len());
-                            let cell = HistoryCell::new_system_status(SystemLabel::Info, [info]);
-                            self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+                            // Build items: text then LocalImage(s)
+                            let mut items: Vec<InputItem> = Vec::new();
+                            if !text.is_empty() {
+                                items.push(InputItem::Text { text: text.clone() });
+                            }
+                            for p in images {
+                                items.push(InputItem::LocalImage { path: p });
+                            }
+                            if let Some(agent) = &self.agent {
+                                agent.submit_items_bg(items);
+                            }
+                            // Mark generating state similarly to submit_message
+                            self.status = RunStatus::Running;
+                            self.last_tick = Instant::now();
+                            self.thinking_frame_idx = 0;
+                            self.thinking_last_change = Instant::now();
                         }
                     }
                 }

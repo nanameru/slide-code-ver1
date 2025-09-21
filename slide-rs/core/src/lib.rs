@@ -15,4 +15,5 @@ pub mod seatbelt;
 pub mod shell;
 pub mod tool_apply_patch;
 pub mod tool_executor;
+pub mod protocol; // re-export protocol crate types under crate::protocol
 pub use codex2 as codex;

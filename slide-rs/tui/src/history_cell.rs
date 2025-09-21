@@ -210,6 +210,17 @@ pub(crate) fn format_content_line(line: &str) -> Line<'static> {
         return Line::from(String::new());
     }
 
+    // Basic markdown-ish affordances to improve readability (codex-1 風)
+    if trimmed.starts_with("### ") {
+        return Line::from(line.to_string().cyan().bold());
+    } else if trimmed.starts_with("## ") {
+        return Line::from(line.to_string().cyan().bold());
+    } else if trimmed.starts_with("# ") {
+        return Line::from(line.to_string().cyan().bold());
+    } else if trimmed.starts_with("```") {
+        return Line::from(line.to_string().magenta());
+    }
+
     if trimmed.starts_with("Updated Plan") {
         Line::from(line.to_string().blue().bold())
     } else if trimmed.starts_with("Proposed Change") {
@@ -232,8 +243,10 @@ pub(crate) fn format_content_line(line: &str) -> Line<'static> {
         Line::from(line.to_string().cyan().bold())
     } else if trimmed.starts_with('□') || trimmed.starts_with('☑') {
         format_checkbox_line(trimmed)
-    } else if trimmed.contains(".rs") || trimmed.contains(".toml") || trimmed.contains(".md") {
+    } else if looks_like_path(trimmed) {
         Line::from(line.to_string().light_blue())
+    } else if trimmed.starts_with("- ") || trimmed.starts_with("* ") || looks_like_numbered_list(trimmed) {
+        Line::from(line.to_string().dim())
     } else {
         Line::from(line.to_string())
     }
@@ -263,4 +276,26 @@ fn line_to_plain(line: Line<'static>) -> String {
         .iter()
         .map(|span| span.content.to_string())
         .collect()
+}
+
+fn looks_like_path(s: &str) -> bool {
+    // simple heuristic: contains a directory separator and a dot-extension-like token
+    (s.contains('/') || s.contains('\\')) && s.split_whitespace().any(|tok| tok.contains('.') )
+}
+
+fn looks_like_numbered_list(s: &str) -> bool {
+    // e.g., "1. item" / "10. item"
+    let mut it = s.chars();
+    let mut saw_digit = false;
+    while let Some(ch) = it.next() {
+        if ch.is_ascii_digit() {
+            saw_digit = true;
+            continue;
+        }
+        if ch == '.' {
+            return saw_digit && it.next().map(|c| c == ' ').unwrap_or(false);
+        }
+        break;
+    }
+    false
 }
