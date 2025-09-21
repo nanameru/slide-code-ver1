@@ -1,13 +1,13 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Layout, Margin, Rect},
+    style::Stylize,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph, StatefulWidgetRef, WidgetRef, Wrap},
 };
 use std::cell::RefCell;
-use std::time::{Duration, Instant};
 
 use super::{
     chat_composer_history::ChatComposerHistory,
@@ -31,7 +31,6 @@ pub struct ChatComposer {
     ctrl_c_quit_hint: bool,
     esc_backtrack_hint: bool,
     use_shift_enter_hint: bool,
-    last_activity: Instant,
     show_hints: bool,
 }
 
@@ -46,8 +45,7 @@ impl ChatComposer {
             ctrl_c_quit_hint: false,
             esc_backtrack_hint: false,
             use_shift_enter_hint: true,
-            last_activity: Instant::now(),
-            show_hints: false,
+            show_hints: true,
         }
     }
 
@@ -72,7 +70,6 @@ impl ChatComposer {
             return (InputResult::None, false);
         }
 
-        self.last_activity = Instant::now();
         self.clear_hints();
 
         match key_event {
@@ -184,6 +181,10 @@ impl ChatComposer {
         self.textarea.set_text("");
     }
 
+    pub fn set_show_hints(&mut self, show: bool) {
+        self.show_hints = show;
+    }
+
     pub fn show_ctrl_c_quit_hint(&mut self) {
         self.ctrl_c_quit_hint = true;
     }
@@ -205,50 +206,43 @@ impl ChatComposer {
         self.esc_backtrack_hint = false;
     }
 
-    fn should_show_inactive_hints(&self) -> bool {
-        self.last_activity.elapsed() > Duration::from_secs(3)
-    }
-
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
-        let mut hints = Vec::new();
+        let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
 
         if self.ctrl_c_quit_hint {
-            hints.push(("Ctrl+C", "quit"));
-        } else if self.esc_backtrack_hint {
-            hints.push(("Esc", "back"));
-        } else if self.should_show_inactive_hints() {
+            spans.push("Ctrl+C".cyan().bold());
+            spans.push(Span::raw(" again to quit"));
+        } else {
+            spans.push("⏎".cyan());
+            spans.push(Span::raw(" send"));
+            spans.push(Span::raw("   "));
+
             if self.use_shift_enter_hint {
-                hints.push(("Enter", "send"));
-                hints.push(("Shift+Enter", "newline"));
+                spans.push("Shift+⏎".cyan());
             } else {
-                hints.push(("Enter", "send"));
-                hints.push(("Ctrl+J/M", "newline"));
+                spans.push("Ctrl+J".cyan());
             }
-            hints.push(("↑/↓", "history"));
-        }
+            spans.push(Span::raw(" newline"));
+            spans.push(Span::raw("   "));
 
-        if hints.is_empty() {
-            return;
-        }
+            spans.push("Ctrl+T".cyan());
+            spans.push(Span::raw(" transcript"));
+            spans.push(Span::raw("   "));
 
-        let mut spans = vec![Span::raw(" ")];
-        for (i, (key, desc)) in hints.iter().enumerate() {
-            if i > 0 {
-                spans.push(Span::raw("  "));
+            spans.push("Ctrl+C".cyan());
+            spans.push(Span::raw(" quit"));
+
+            if self.esc_backtrack_hint {
+                spans.push(Span::raw("   "));
+                spans.push("Esc".cyan());
+                spans.push(Span::raw(" edit prev"));
             }
-            spans.push(Span::styled(*key, Style::default().fg(Color::Cyan)));
-            spans.push(Span::raw(" "));
-            spans.push(Span::styled(
-                *desc,
-                Style::default().add_modifier(Modifier::DIM),
-            ));
         }
 
-        let hint_line = Line::from(spans);
-        let paragraph = Paragraph::new(vec![hint_line])
+        let hint_line = Line::from(spans).style(Style::default().add_modifier(Modifier::DIM));
+        Paragraph::new(vec![hint_line])
             .wrap(Wrap { trim: false })
-            .style(Style::default().add_modifier(Modifier::DIM));
-        paragraph.render_ref(area, buf);
+            .render_ref(area, buf);
     }
 }
 
@@ -260,9 +254,11 @@ impl WidgetRef for &ChatComposer {
         ])
         .areas(area);
 
-        // Left border: always light green regardless of focus
-        // Using RGB for a soft light‑green tone.
-        let border_style = Style::default().fg(Color::Rgb(144, 238, 144));
+        let border_style = if self.has_focus {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().add_modifier(Modifier::DIM)
+        };
 
         Block::default()
             .borders(Borders::LEFT)
@@ -281,18 +277,16 @@ impl WidgetRef for &ChatComposer {
             height: textarea_rect.height,
         };
 
-        if self.textarea.is_empty() && !self.placeholder_text.is_empty() {
-            // Show placeholder
-            let placeholder_line = Line::from(Span::styled(
-                &self.placeholder_text,
-                Style::default().add_modifier(Modifier::DIM),
-            ));
-            let placeholder_paragraph = Paragraph::new(vec![placeholder_line]);
-            placeholder_paragraph.render_ref(content_area, buf);
-        } else {
-            // Render textarea with state
+        {
             let mut state = self.textarea_state.borrow_mut();
             StatefulWidgetRef::render_ref(&&self.textarea, content_area, buf, &mut *state);
+        }
+
+        if self.textarea.is_empty() && !self.placeholder_text.is_empty() {
+            let placeholder_line = Line::from(self.placeholder_text.as_str())
+                .style(Style::default().add_modifier(Modifier::DIM));
+            Paragraph::new(vec![placeholder_line])
+                .render_ref(content_area.inner(Margin::new(1, 0)), buf);
         }
 
         // Render hints if enabled

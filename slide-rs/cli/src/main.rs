@@ -38,7 +38,8 @@ async fn cli_main(
         };
         // Record the initial size of the log file so we only show logs from this run.
         // If the file does not exist yet, lazily set the offset when it first appears.
-        let mut initial_len: Option<u64> = std::fs::metadata("/tmp/slide.log").ok().map(|m| m.len());
+        let mut initial_len: Option<u64> =
+            std::fs::metadata("/tmp/slide.log").ok().map(|m| m.len());
         loop {
             if let Ok(Some(req)) = server.recv_timeout(Duration::from_millis(200)) {
                 // Refresh initial_len lazily and handle truncation/rotation
@@ -47,7 +48,8 @@ async fn cli_main(
                         initial_len = Some(meta.len());
                     }
                 }
-                if let (Some(offset), Ok(meta)) = (initial_len, std::fs::metadata("/tmp/slide.log")) {
+                if let (Some(offset), Ok(meta)) = (initial_len, std::fs::metadata("/tmp/slide.log"))
+                {
                     if meta.len() < offset {
                         // File truncated/rotated; reset baseline to current size
                         initial_len = Some(meta.len());

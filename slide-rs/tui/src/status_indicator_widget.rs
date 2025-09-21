@@ -14,9 +14,7 @@ use textwrap::WordSplitter;
 
 /// Simple shimmer effect for animated text (radar-like sweep)
 pub(crate) fn shimmer_spans(text: &str) -> Vec<ratatui::text::Span<'static>> {
-    // Simple implementation - just return the text with shimmer color
-    // For full radar effect, this would need to be animated with time
-    vec![text.to_string().into()]
+    vec![text.to_string().cyan().bold()]
 }
 
 pub(crate) struct StatusIndicatorWidget {
@@ -128,8 +126,8 @@ impl WidgetRef for StatusIndicatorWidget {
 mod tests {
     use super::*;
     use insta::assert_snapshot;
-    use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
 
     #[test]
     fn renders_with_working_header() {

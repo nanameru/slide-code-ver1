@@ -5,6 +5,7 @@ pub mod app;
 pub mod app_event_sender;
 pub mod bottom_pane;
 pub mod custom_terminal;
+pub mod history_cell;
 pub mod history_store;
 pub mod insert_history;
 pub mod interactive;

@@ -1,15 +1,14 @@
-use crate::custom_terminal::{Frame, Terminal};
+use crate::custom_terminal::Terminal;
 use anyhow::Result;
 use crossterm::{
+    cursor::{self, MoveTo},
     event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind},
-    terminal::{disable_raw_mode, enable_raw_mode},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, ScrollUp},
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Clear, Paragraph},
+    layout::Rect,
 };
 use std::io::Write as _;
 use std::{io, path::PathBuf, time::Instant};
@@ -18,16 +17,11 @@ use tokio::time::{sleep, Duration};
 use crate::agent::AgentHandle;
 use crate::app_event_sender::{AppEvent, AppEventSender};
 use crate::bottom_pane::{BottomPane, BottomPaneParams};
+use crate::history_cell::{HistoryCell, SystemLabel};
 use crate::insert_history::insert_history_lines;
 use crate::streaming::AnswerStreamState;
 use crate::user_approval_widget::ApprovalRequest;
-use crate::widgets::{
-    banner::{banner_history_lines, banner_message},
-    chat::ChatWidget,
-    list_selection::ListSelection,
-    modal::Modal,
-    status_bar::StatusBar,
-};
+use crate::widgets::banner::banner_history_lines;
 use slide_core::codex::Event as CoreEvent;
 use slide_core::codex::Op;
 
@@ -71,8 +65,8 @@ pub struct App {
     mode: Mode,
     status: RunStatus,
     last_tick: Instant,
-    // Chat state (簡略化)
-    messages: Vec<String>,
+    // Chat state represented as history cells
+    history: Vec<HistoryCell>,
     // Chat scroll state
     chat_scroll_top: usize,
     chat_follow_bottom: bool,
@@ -133,15 +127,12 @@ impl App {
     }
 
     fn total_chat_lines(&self) -> usize {
-        // messages rendered as: for each message add a blank line after, except last; then prompt line
-        // number of lines from messages = if empty 0 else messages*2 - 1
-        let msg_lines = if self.messages.is_empty() {
-            0
-        } else {
-            self.messages.len() * 2 - 1
-        };
+        let mut history_lines: usize = self.history.iter().map(HistoryCell::line_count).sum();
+        if !self.history.is_empty() {
+            history_lines = history_lines.saturating_sub(1);
+        }
         // plus one prompt line always
-        msg_lines + 1
+        history_lines + 1
     }
 
     pub fn new_with_recents(recent_files: Vec<String>) -> Self {
@@ -152,7 +143,7 @@ impl App {
             mode: Mode::Normal,
             status: RunStatus::Idle,
             last_tick: Instant::now(),
-            messages: vec![banner_message()],
+            history: vec![HistoryCell::banner()],
             chat_scroll_top: 0,
             chat_follow_bottom: true,
             chat_viewport_height: 0,
@@ -172,7 +163,7 @@ impl App {
             bottom_pane: BottomPane::new(BottomPaneParams{ has_input_focus: true, placeholder_text: "".into()}),
             app_event_rx: app_rx,
             app_event_tx: app_tx,
-            // pending_history_lines removed
+            // pending_history_lines removed - history cells now insert directly
             answer_stream: AnswerStreamState::new(),
             thinking_frame_idx: 0,
             thinking_last_change: Instant::now(),
@@ -197,38 +188,15 @@ impl App {
         }
     }
 
-    fn submit_message<B>(&mut self, text: String, terminal: &mut Terminal<B>)
-    where
-        B: ratatui::backend::Backend,
-    {
+    fn submit_message(&mut self, text: String) {
         if text.trim().is_empty() {
             return;
         }
 
-        // 空行 + "You: " メッセージを履歴へ追加
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from(""));
-        let mut iter = text.lines();
-        if let Some(first) = iter.next() {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "You",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(": "),
-                Span::raw(first.to_string()),
-            ]));
-        }
-        for rest in iter {
-            lines.push(Line::from(rest.to_string()));
-        }
-        insert_history_lines(terminal, lines);
-
-        // Keep in messages for compatibility
-        self.messages.push(format!("You: {}", text));
-        append_log(&format!("You: {}", text));
+        let cell = HistoryCell::new_user_prompt(text.clone());
+        self.history.push(cell);
+        self.follow_bottom_after_change();
+        append_log(&format!("user: {}", text));
 
         if let Some(agent) = &self.agent {
             agent.submit_text_bg(text);
@@ -242,10 +210,7 @@ impl App {
     }
 
     /// Codex風のシンプルなキーイベント処理
-    pub fn handle_key_event<B>(&mut self, key: KeyEvent, terminal: &mut Terminal<B>)
-    where
-        B: ratatui::backend::Backend,
-    {
+    pub fn handle_key_event(&mut self, key: KeyEvent) {
         if key.kind != KeyEventKind::Press {
             return;
         }
@@ -280,7 +245,7 @@ impl App {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                self.messages.clear();
+                self.history.clear();
                 return;
             }
             KeyEvent {
@@ -298,7 +263,7 @@ impl App {
             use crate::bottom_pane::InputResult;
             match result {
                 InputResult::Submitted(text) => {
-                    self.submit_message(text, terminal);
+                    self.submit_message(text);
                 }
                 InputResult::None => {}
             }
@@ -418,7 +383,7 @@ impl App {
                 self.modal_body = "File search functionality not yet implemented".into();
                 self.show_modal = true;
             }
-            "Save Chat to slides/draft.md" => match save_chat_as_draft(&self.messages) {
+            "Save Chat to slides/draft.md" => match save_chat_as_draft(&self.history) {
                 Ok(path) => {
                     self.modal_title = "Saved".into();
                     self.modal_body = format!("Saved to {}", path);
@@ -435,7 +400,7 @@ impl App {
                 self.show_modal = !self.show_modal;
             }
             "Clear Messages" => {
-                self.messages.clear();
+                self.history.clear();
             }
             "Quit" => {
                 self.quit();
@@ -469,9 +434,18 @@ impl App {
 }
 
 pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
-    // 通常スクリーン＋インラインビューポート（下部だけ描画）
+    // 通常スクリーン＋インラインビューポート（Codex と同等の初期化）
     enable_raw_mode()?;
-    let stdout = io::stdout();
+    // 代替スクリーンへ移行し、既存出力とレイヤを分離
+    let mut stdout = io::stdout();
+    // 念のため通常スクリーン由来の残骸を上に押し上げ、(0,0) から描画開始する
+    if let Ok((_x, y)) = cursor::position() {
+        if y > 0 {
+            let _ = execute!(stdout, ScrollUp(y));
+        }
+    }
+    let _ = execute!(stdout, MoveTo(0, 0));
+
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::with_options(backend)?;
 
@@ -480,12 +454,14 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
     match crate::agent::AgentHandle::spawn().await {
         Ok(agent) => app.agent = Some(agent),
         Err(_e) => {
-            app.messages
-                .push("(failed to start agent; using local demo)".into());
+            app.history.push(HistoryCell::new_system_status(
+                SystemLabel::Info,
+                ["(failed to start agent; using local demo)"],
+            ));
         }
     }
 
-    // Prepare inline viewport and emit startup banner into scrollback
+    // 初回: 下部だけ描画 → バナーをスクロールバックへ
     draw_input_area_only(&mut terminal, &mut app)?;
     insert_history_lines(&mut terminal, banner_history_lines());
 
@@ -512,13 +488,7 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
             }
         }
 
-        // Update chat viewport height based on terminal size (header=1, status=1)
-        if let Ok(sz) = terminal.size() {
-            let h = sz.height.saturating_sub(1 + 1) as usize;
-            // Chat height handled by layout
-        }
-
-        // 下部の入力エリアのみ描画（履歴はスクロールバックに積む）
+        // 下部の入力エリアのみ描画（履歴はスクロールバックへ差し込み）
         draw_input_area_only(&mut terminal, &mut app)?;
 
         // Handle events with timeout
@@ -530,20 +500,11 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
                     _ => {}
                 },
                 Event::Key(key) => {
-                    app.handle_key_event(key, &mut terminal);
+                    app.handle_key_event(key);
                 }
                 Event::Resize(_, _) => {
-                    // Recompute viewport height and snap to bottom so latest is visible
-                    if let Ok(sz) = terminal.size() {
-                        let h = sz.height.saturating_sub(1 + 1) as usize;
-                        // Chat height handled by layout
-                    }
                     // Keep latest visible on resize only when follow-bottom is enabled
-                    if app.chat_follow_bottom {
-                        app.chat_scroll_top = usize::MAX; // レンダでクランプ
-                    } else {
-                        app.clamp_scroll_top();
-                    }
+                    // Inline ビューポートは毎描画で再計算するため、ここでは何もしない
                 }
                 _ => {}
             }
@@ -561,7 +522,7 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
             }
         }
         for ev in drained_events {
-            handle_core_event(&mut app, ev, &mut terminal);
+            handle_core_event(&mut terminal, &mut app, ev);
         }
 
         if app.should_quit {
@@ -573,9 +534,11 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
         sleep(Duration::from_millis(16)).await;
     }
 
-    // Cleanup terminal (inline viewport)
+    // Cleanup terminal
     disable_raw_mode()?;
     terminal.show_cursor()?;
+    terminal.clear()?;
+    terminal.backend_mut().flush()?;
 
     let exit = if let Some(path) = app.preview_path {
         AppExit::Preview(path)
@@ -587,13 +550,12 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
         recent_files: app.recent_files,
     })
 }
-
 fn draw_input_area_only<B>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()>
 where
     B: ratatui::backend::Backend,
 {
     let size = terminal.size()?;
-    // Status row is fully hidden (no Thinking... line)
+    // ステータス行は描画しない（必要ならここで高さを足す）
     let status_height: u16 = 0;
     let desired_bottom_height = app.bottom_pane.desired_height(size.width).max(1);
     let total_desired_height = status_height.saturating_add(desired_bottom_height);
@@ -610,150 +572,17 @@ where
     terminal.set_viewport_area(input_area);
 
     terminal.draw(|f| {
-        draw_input_ui(f, app, input_area, bottom_height);
+        // Bottom pane (input area) using render_ref
+        app.bottom_pane.render_ref(Rect { x: input_area.x, y: input_area.y + status_height, width: input_area.width, height: bottom_height }, f.buffer_mut());
+        if let Some((x, y)) = app.bottom_pane.cursor_pos(Rect { x: input_area.x, y: input_area.y + status_height, width: input_area.width, height: bottom_height }) {
+            f.set_cursor_position((x, y));
+        }
     })?;
 
     Ok(())
 }
 
-fn draw_input_ui(f: &mut Frame, app: &mut App, area: Rect, bottom_height: u16) {
-    // Hide status row unless Running (allocate 0 height when not running)
-    let status_height = if app.status == RunStatus::Running { 1 } else { 0 };
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(status_height), Constraint::Length(bottom_height)])
-        .split(area);
-
-    // Status bar: fully hidden
-
-    // Bottom pane (input area) using render_ref
-    app.bottom_pane.render_ref(chunks[1], f.buffer_mut());
-
-    if let Some((x, y)) = app.bottom_pane.cursor_pos(chunks[1]) {
-        f.set_cursor_position((x, y));
-    }
-}
-
-// Old full-screen UI function (kept for reference)
-fn _ui_fullscreen(f: &mut Frame, app: &mut App) {
-    // Layout: header | body | status
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
-        .split(f.area());
-
-    // Header
-    let header = Paragraph::new(Line::from(vec![
-        Span::styled(
-            "Slide TUI ",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("— Interactive Mode"),
-    ]));
-    f.render_widget(header, chunks[0]);
-
-    // Body: Codex風の統合UI（チャット履歴 + BottomPane）
-    let body_height = chunks[1].height;
-    let bottom_pane_height = app.bottom_pane.desired_height(chunks[1].width);
-    let chat_height = body_height.saturating_sub(bottom_pane_height);
-
-    let body_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(chat_height),
-            Constraint::Length(bottom_pane_height),
-        ])
-        .split(chunks[1]);
-
-    // Chat history (simplified, no custom scrollbar)
-    let chat_widget = ChatWidget::new(&app.messages);
-    f.render_widget(chat_widget, body_layout[0]);
-
-    // Bottom pane (integrated input)
-    app.bottom_pane.render_ref(body_layout[1], f.buffer_mut());
-
-    // Set cursor position if bottom pane has focus
-    if let Some((x, y)) = app.bottom_pane.cursor_pos(body_layout[1]) {
-        f.set_cursor_position((x, y));
-    }
-
-    // Status bar
-    let status = match app.status {
-        RunStatus::Idle => "Idle",
-        RunStatus::Running => "Running…",
-        RunStatus::Error => "Error",
-    };
-    let mode = match app.mode {
-        Mode::Normal => "NORMAL",
-        Mode::Insert => "INSERT",
-        Mode::Help => "HELP",
-    };
-    let status_bar = StatusBar::new(mode, status, "i:insert  q:quit");
-    f.render_widget(status_bar, chunks[2]);
-
-    // Modal overlay
-    if app.show_modal {
-        let area = centered_rect(60, 60, f.area());
-        let modal = Modal::new(&app.modal_title, &app.modal_body);
-        f.render_widget(Clear, area);
-        f.render_widget(modal, area);
-    }
-
-    // Popups (render only if there is enough space to avoid stray borders at the bottom)
-    if let Some(_kind) = app.active_popup {
-        let screen = f.area();
-        let area = centered_rect(70, 70, screen);
-        // Require a minimum height and full containment within the screen
-        let fits_vertically = area.height >= 6 && area.y + area.height <= screen.y + screen.height;
-        let fits_horizontally = area.width >= 10 && area.x + area.width <= screen.x + screen.width;
-        if fits_vertically && fits_horizontally {
-            // Build filtered view
-            let items: Vec<String> = app
-                .popup_filtered_indices
-                .iter()
-                .map(|&i| app.popup_items[i].clone())
-                .collect();
-            let widget = ListSelection::new(
-                &app.popup_title,
-                &app.popup_filter,
-                &items,
-                app.popup_selected,
-                "Type to filter • Esc: close • Enter: select • ↑/↓: move",
-            );
-            widget.render(f, area);
-        }
-    }
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
-
-    let horizontal = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1]);
-
-    horizontal[1]
-}
-
-fn handle_core_event<B>(app: &mut App, ev: CoreEvent, terminal: &mut Terminal<B>)
+fn handle_core_event<B>(terminal: &mut Terminal<B>, app: &mut App, ev: CoreEvent)
 where
     B: ratatui::backend::Backend,
 {
@@ -765,63 +594,35 @@ where
             append_log("[task] started");
         }
         CoreEvent::AgentMessageDelta { delta } => {
-            // デルタをストリーミング状態に反映し、完成行のみ履歴へ積む
             let lines = app.answer_stream.push_delta(&delta);
             if !lines.is_empty() {
-                // streaming.rsで既にヘッダー処理されているため、ここでは直接挿入
                 insert_history_lines(terminal, lines);
             }
-            // 互換目的でメモリ上のメッセージも更新
-            if let Some(last) = app.messages.last_mut() {
-                if last.starts_with("Assistant:") {
-                    last.push_str(&delta);
-                } else {
-                    app.messages.push(format!("Assistant: {}", delta));
-                }
-            } else {
-                app.messages.push(format!("Assistant: {}", delta));
-            }
-            append_log(&format!("AssistantΔ: {}", delta));
+            append_log(&format!("assistantΔ: {}", delta));
         }
         CoreEvent::AgentMessage { message } => {
-            // 受信済みデルタがあれば残りをflush。なければ全文を1回で表示。
             let mut pending = Vec::new();
             if !message.is_empty() {
-                // 末尾改行がなければ push → finalize で1行にする
                 pending.extend(app.answer_stream.push_delta(&message));
             }
             let mut tail = app.answer_stream.finalize();
             pending.append(&mut tail);
             if !pending.is_empty() {
-                // デルタが未処理でヘッダが未表示の場合のみヘッダを付与
-                // （通常のストリーミングでは既にAgentMessageDeltaでヘッダ表示済み）
-                let need_header = app
-                    .messages
-                    .last()
-                    .map(|m| !m.starts_with("Assistant:"))
-                    .unwrap_or(true) && !app.answer_stream.has_received_delta();
-                if need_header {
-                    insert_history_lines(terminal, vec![Line::from(""), Line::from(vec![
-                        Span::styled(
-                            "Assistant",
-                            Style::default()
-                                .fg(Color::Green)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                    ])]);
-                }
                 insert_history_lines(terminal, pending);
             }
-            app.messages.push(format!("Assistant: {}", message));
-            append_log(&format!("Assistant: {}", message));
+            append_log(&format!("assistant: {}", message));
         }
         CoreEvent::ExecCommandBegin { command, .. } => {
-            app.messages.push(format!("[exec] $ {}", command.join(" ")));
-            append_log(&format!("[exec] $ {}", command.join(" ")));
+            let display = format!("$ {}", command.join(" "));
+            let cell = HistoryCell::new_system_status(SystemLabel::Exec, [display.clone()]);
+            insert_history_lines(terminal, cell.lines());
+            append_log(&format!("[exec] {}", display));
         }
         CoreEvent::ExecCommandEnd { exit_code, .. } => {
-            app.messages.push(format!("[exec] exit {}", exit_code));
-            append_log(&format!("[exec] exit {}", exit_code));
+            let display = format!("exit {}", exit_code);
+            let cell = HistoryCell::new_system_status(SystemLabel::Exec, [display.clone()]);
+            insert_history_lines(terminal, cell.lines());
+            append_log(&format!("[exec] {}", display));
         }
         CoreEvent::ApplyPatchApprovalRequest {
             id,
@@ -844,19 +645,20 @@ where
             append_log("[approve] apply_patch requested");
         }
         CoreEvent::PatchApplyBegin { .. } => {
-            app.messages.push("[patch] applying...".into());
+            let cell = HistoryCell::new_system_status(SystemLabel::Patch, ["applying..."]);
+            insert_history_lines(terminal, cell.lines());
             append_log("[patch] applying...");
         }
         CoreEvent::PatchApplyEnd { success, .. } => {
-            app.messages
-                .push(format!("[patch] {}", if success { "ok" } else { "failed" }));
-            append_log(&format!(
-                "[patch] {}",
-                if success { "ok" } else { "failed" }
-            ));
+            let status = if success { "ok" } else { "failed" };
+            let cell = HistoryCell::new_system_status(SystemLabel::Patch, [status.to_string()]);
+            insert_history_lines(terminal, cell.lines());
+            append_log(&format!("[patch] {}", status));
         }
         CoreEvent::TurnDiff { unified_diff } => {
-            app.messages.push(format!("[diff]\n{}", unified_diff));
+            let diff_lines: Vec<String> = unified_diff.split('\n').map(|s| s.to_string()).collect();
+            let cell = HistoryCell::new_system_status(SystemLabel::Diff, diff_lines);
+            insert_history_lines(terminal, cell.lines());
             append_log("[diff] updated");
         }
         CoreEvent::TaskComplete => {
@@ -870,7 +672,8 @@ where
             append_log("[task] complete");
         }
         CoreEvent::Error { message } => {
-            app.messages.push(format!("[error] {}", message));
+            let cell = HistoryCell::new_system_status(SystemLabel::Error, [message.clone()]);
+            insert_history_lines(terminal, cell.lines());
             app.status = RunStatus::Error;
             app.bottom_pane.set_task_running(false);
             append_log(&format!("[error] {}", message));
@@ -955,7 +758,7 @@ fn create_slide_from_template() -> std::io::Result<String> {
     Ok(path.to_string_lossy().to_string())
 }
 
-fn save_chat_as_draft(messages: &[String]) -> std::io::Result<String> {
+fn save_chat_as_draft(history: &[HistoryCell]) -> std::io::Result<String> {
     use std::io::Write;
     let dir = std::path::Path::new("slides");
     if !dir.exists() {
@@ -963,8 +766,18 @@ fn save_chat_as_draft(messages: &[String]) -> std::io::Result<String> {
     }
     let path = dir.join("draft.md");
     let mut file = std::fs::File::create(&path)?;
-    for m in messages {
-        writeln!(file, "- {}", m)?;
+    for cell in history {
+        let lines = cell.plain_text_lines();
+        if lines.is_empty() {
+            continue;
+        }
+        let mut iter = lines.into_iter();
+        if let Some(first) = iter.next() {
+            writeln!(file, "- {}", first)?;
+        }
+        for rest in iter {
+            writeln!(file, "  {}", rest)?;
+        }
     }
     Ok(path.to_string_lossy().to_string())
 }

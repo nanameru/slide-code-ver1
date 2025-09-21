@@ -1,3 +1,4 @@
+use crate::history_cell::format_content_line;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -40,8 +41,7 @@ impl AnswerStreamState {
                     out.push(self.header_line());
                     self.header_emitted = true;
                 }
-                // ツール実行結果のスタイリングを適用
-                out.push(self.format_line(line));
+                out.push(format_content_line(line));
             }
             self.buffer.push_str(tail);
         }
@@ -58,8 +58,7 @@ impl AnswerStreamState {
                 out.push(self.header_line());
                 self.header_emitted = true;
             }
-            // ツール実行結果のスタイリングを適用
-            out.push(self.format_line(tail));
+            out.push(format_content_line(tail));
         }
         self.buffer.clear();
         self.header_emitted = false;
@@ -70,99 +69,6 @@ impl AnswerStreamState {
     /// デルタを受信済みかどうかを確認
     pub fn has_received_delta(&self) -> bool {
         self.header_emitted || self.active
-    }
-
-    /// 行のスタイリングを適用（ツール実行結果の色分け）
-    fn format_line(&self, line: &str) -> Line<'static> {
-        let trimmed = line.trim();
-
-        // セクションヘッダーの色分け
-        if trimmed.starts_with("Updated Plan") {
-            Line::from(Span::styled(
-                line.to_string(),
-                Style::default()
-                    .fg(Color::Blue)
-                    .add_modifier(Modifier::BOLD),
-            ))
-        } else if trimmed.starts_with("Proposed Change") {
-            Line::from(Span::styled(
-                line.to_string(),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ))
-        } else if trimmed.starts_with("Change Approved") {
-            Line::from(Span::styled(
-                line.to_string(),
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ))
-        } else if trimmed.starts_with("Explored") {
-            Line::from(Span::styled(
-                line.to_string(),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ))
-        } else if trimmed.starts_with("[Tool Execution Result]") {
-            Line::from(Span::styled(
-                line.to_string(),
-                Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
-            ))
-        } else if trimmed.starts_with("[Tool Execution]") {
-            Line::from(Span::styled(
-                line.to_string(),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ))
-        } else if trimmed.starts_with("▶") {
-            Line::from(Span::styled(
-                line.to_string(),
-                Style::default().fg(Color::Yellow),
-            ))
-        // 差分表示の色分け
-        } else if trimmed.starts_with("+") {
-            Line::from(Span::styled(
-                line.to_string(),
-                Style::default().fg(Color::Green),
-            ))
-        } else if trimmed.starts_with("-") {
-            Line::from(Span::styled(
-                line.to_string(),
-                Style::default().fg(Color::Red),
-            ))
-        } else if trimmed.starts_with("@@") {
-            Line::from(Span::styled(
-                line.to_string(),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ))
-        // チェックボックス付きタスクリスト
-        } else if trimmed.starts_with("□") || trimmed.starts_with("☑") {
-            let checkbox_color = if trimmed.starts_with("☑") {
-                Color::Green
-            } else {
-                Color::Gray
-            };
-            Line::from(Span::styled(
-                line.to_string(),
-                Style::default().fg(checkbox_color),
-            ))
-        // ファイルパスのハイライト
-        } else if trimmed.contains(".rs") || trimmed.contains(".toml") || trimmed.contains(".md") {
-            Line::from(Span::styled(
-                line.to_string(),
-                Style::default().fg(Color::LightBlue),
-            ))
-        // その他の行
-        } else {
-            Line::from(String::from(line))
-        }
     }
 
     fn header_line(&self) -> Line<'static> {

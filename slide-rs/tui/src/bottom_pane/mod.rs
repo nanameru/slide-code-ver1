@@ -20,8 +20,8 @@ pub mod scroll_state;
 pub mod selection_popup_common;
 pub mod textarea;
 use crate::app_event_sender::AppEventSender;
-use crate::user_approval_widget::ApprovalRequest;
 use crate::status_indicator_widget::StatusIndicatorWidget;
+use crate::user_approval_widget::ApprovalRequest;
 use approval_modal_view::ApprovalModalView;
 pub use chat_composer::{ChatComposer, InputResult};
 
@@ -57,8 +57,12 @@ impl BottomPane {
     const BOTTOM_PAD_LINES: u16 = 1;
 
     pub fn new(params: BottomPaneParams) -> Self {
+        let mut composer =
+            ChatComposer::new_minimal(params.has_input_focus, params.placeholder_text);
+        composer.set_show_hints(true);
+
         Self {
-            composer: ChatComposer::new_minimal(params.has_input_focus, params.placeholder_text),
+            composer,
             active_view: None,
             has_input_focus: params.has_input_focus,
             is_task_running: false,
@@ -97,11 +101,18 @@ impl BottomPane {
             0
         };
 
+        let top_margin = if self.active_view.is_some() { 0 } else { 1 };
+        let bottom_pad = if area.height > 0 {
+            Self::BOTTOM_PAD_LINES.min(area.height)
+        } else {
+            0
+        };
+
         let [_, status, content, _] = Layout::vertical([
-            Constraint::Max(0),
+            Constraint::Max(top_margin),
             Constraint::Max(status_height),
             Constraint::Min(1),
-            Constraint::Max(Self::BOTTOM_PAD_LINES),
+            Constraint::Max(bottom_pad),
         ])
         .areas(area);
 
@@ -117,9 +128,8 @@ impl BottomPane {
         if self.active_view.is_some() {
             None
         } else {
-            let [_, _content] = self.layout(area);
-            // For now, just return None as cursor positioning is not implemented
-            None
+            let [_, content] = self.layout(area);
+            self.composer.cursor_pos(content)
         }
     }
 
@@ -179,16 +189,18 @@ impl BottomPane {
     }
 
     /// 簡易描画（Paragraph ベース）
-    pub fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+    pub fn render_ref(&mut self, area: Rect, buf: &mut Buffer) {
+        let composer_has_focus = self.has_input_focus && self.active_view.is_none();
+        self.composer.set_focus(composer_has_focus);
         let [status_area, content] = self.layout(area);
 
         // When a modal view is active, it owns the whole content area.
-        if let Some(view) = &self.active_view {
+        if let Some(view) = self.active_view.as_mut() {
             view.render(content, buf);
         } else {
             // No active modal:
             // If a status indicator is active, render it above the composer.
-            if let Some(status) = &self.status {
+            if let Some(status) = self.status.as_ref() {
                 status.render_ref(status_area, buf);
             }
 
