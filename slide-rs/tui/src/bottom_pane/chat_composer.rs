@@ -13,8 +13,7 @@ use super::{
     chat_composer_history::ChatComposerHistory,
     textarea::{TextArea, TextAreaState},
 };
-use crate::clipboard_paste::paste_image_to_temp_png;
-use crate::clipboard_paste::pasted_image_format;
+// Clipboard paste is intercepted at BottomPane to enqueue images (codex-1 準拠)
 
 /// 入力結果
 #[derive(Debug, PartialEq, Clone)]
@@ -75,25 +74,7 @@ impl ChatComposer {
         self.clear_hints();
 
         match key_event {
-            // Ctrl+V: paste image from clipboard (if available). Insert normalized path.
-            KeyEvent {
-                code: KeyCode::Char('v'),
-                modifiers: KeyModifiers::CONTROL,
-                kind: KeyEventKind::Press,
-                ..
-            } => {
-                if let Ok((path, _info)) = paste_image_to_temp_png() {
-                    // Insert a space if needed, then the quoted path to preserve spaces
-                    let to_insert = if self.text().ends_with(' ') || self.text().is_empty() {
-                        format!("{}", path.display())
-                    } else {
-                        format!(" {}", path.display())
-                    };
-                    self.textarea.insert_str(&to_insert);
-                    return (InputResult::None, true);
-                }
-                (InputResult::None, false)
-            }
+            // Ctrl+V is handled at BottomPane level to enqueue image attachments.
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,

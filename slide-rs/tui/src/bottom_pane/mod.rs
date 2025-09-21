@@ -48,6 +48,8 @@ pub(crate) struct BottomPane {
     status: Option<StatusIndicatorWidget>,
     /// Queued user messages to show under the status indicator.
     queued_user_messages: Vec<String>,
+    /// Pending local images to attach with the next submission
+    recent_submission_images: Vec<std::path::PathBuf>,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -71,6 +73,7 @@ impl BottomPane {
             is_task_running: false,
             status: None,
             queued_user_messages: Vec::new(),
+            recent_submission_images: Vec::new(),
         }
     }
 
@@ -154,6 +157,15 @@ impl BottomPane {
                 // TODO: Send Op::Interrupt when we have the event sender
                 return None;
             }
+            // Intercept Ctrl+V here to enqueue an image attachment (codex-1 準拠)
+            if let KeyEvent { code: crossterm::event::KeyCode::Char('v'), modifiers: crossterm::event::KeyModifiers::CONTROL, .. } = key_event {
+                if let Ok((path, _info)) = crate::clipboard_paste::paste_image_to_temp_png() {
+                    self.recent_submission_images.push(path);
+                    // Optional: we could surface a hint via status; keep silent for now
+                    return None;
+                }
+            }
+
             let (res, _redraw) = self.composer.handle_key_event(key_event);
             // Detect @query and open file search popup with that query.
             // We keep this logic simple: if popup not open and composer text contains '@...'
@@ -280,5 +292,12 @@ impl BottomPane {
 
     pub(crate) fn is_task_running(&self) -> bool {
         self.is_task_running
+    }
+
+    /// Drain and return images queued for the most recent submission.
+    pub(crate) fn take_recent_submission_images(&mut self) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        std::mem::swap(&mut out, &mut self.recent_submission_images);
+        out
     }
 }

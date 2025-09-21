@@ -315,7 +315,18 @@ impl App {
                     self.app_event_tx
                         .send(AppEvent::InsertHistoryCell(cell));
                     // then update internal state and dispatch to agent
-                    self.submit_message(text);
+                    // If we had image attachments queued, include them in the submission (core wire-up simplified)
+                    {
+                        let images = self.bottom_pane.take_recent_submission_images();
+                        if images.is_empty() {
+                            self.submit_message(text);
+                        } else {
+                            self.submit_message(text.clone());
+                            let info = format!("attached {} image(s)", images.len());
+                            let cell = HistoryCell::new_system_status(SystemLabel::Info, [info]);
+                            self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+                        }
+                    }
                 }
                 InputResult::None => {}
             }
