@@ -12,7 +12,6 @@ use ratatui::{
 };
 use std::io::Write as _;
 use std::{io, path::PathBuf, time::Instant};
-use std::collections::VecDeque;
 use tokio::time::{sleep, Duration};
 
 use crate::agent::AgentHandle;
@@ -101,8 +100,6 @@ pub struct App {
     // Thinking... spinner state
     thinking_frame_idx: usize,
     thinking_last_change: Instant,
-    // Queued user messages while a task is running
-    queued_user_messages: VecDeque<String>,
 }
 
 impl App {
@@ -170,7 +167,6 @@ impl App {
             answer_stream: AnswerStreamState::new(),
             thinking_frame_idx: 0,
             thinking_last_change: Instant::now(),
-            queued_user_messages: VecDeque::new(),
         };
         // Write a small banner to the log so the browser viewer has content
         append_log("[info] Slide TUI session started");
@@ -273,20 +269,15 @@ impl App {
                     if text.trim().is_empty() {
                         return;
                     }
-                    if self.status == RunStatus::Running {
-                        // 実行中は上部履歴へは出さず、キューへ溜める（Working 中は user を見せない）
-                        self.queued_user_messages.push_back(text.clone());
-                        self.bottom_pane
-                            .set_queued_user_messages(self.queued_user_messages.clone().into());
-                        self.submit_message(text);
-                    } else {
-                        // まず画面に表示（競合するエージェントイベントより先に出す）
-                        let cell = HistoryCell::new_user_prompt(text.clone());
-                        insert_history_lines(terminal, cell.lines());
-                        let _ = std::io::stdout().flush();
-                        // その後に内部状態更新と送信
-                        self.submit_message(text);
-                    }
+                    // まず画面に表示（競合するエージェントイベントより先に出す）
+                    let cell = HistoryCell::new_user_prompt(text.clone());
+                    insert_history_lines(terminal, cell.lines());
+                    let _ = std::io::stdout().flush();
+                    let cell = HistoryCell::new_user_prompt(text.clone());
+                    insert_history_lines(terminal, cell.lines());
+                    let _ = std::io::stdout().flush();
+                    // その後に内部状態更新と送信
+                    self.submit_message(text);
                 }
                 InputResult::None => {}
             }
@@ -691,11 +682,6 @@ where
             let tail = app.answer_stream.finalize();
             if !tail.is_empty() {
                 insert_history_lines(terminal, tail);
-            }
-            // Working 中にキューされた user を 1 件だけ表示
-            if let Some(next) = app.queued_user_messages.pop_front() {
-                let cell = HistoryCell::new_user_prompt(next);
-                insert_history_lines(terminal, cell.lines());
             }
             append_log("[task] complete");
         }
