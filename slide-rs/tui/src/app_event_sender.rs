@@ -31,6 +31,12 @@ pub enum AppEvent {
     },
     /// Insert a history cell into terminal scrollback (inline viewport)
     InsertHistoryCell(crate::history_cell::HistoryCell),
+    /// Start commit animation ticks
+    StartCommitAnimation,
+    /// Commit animation tick
+    CommitTick,
+    /// Stop commit animation ticks
+    StopCommitAnimation,
 }
 
 #[derive(Clone, Default)]

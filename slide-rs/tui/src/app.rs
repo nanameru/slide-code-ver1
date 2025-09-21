@@ -178,11 +178,10 @@ impl App {
     }
 
     fn on_tick(&mut self) {
-        // Spinner frame advance every ~140ms while running
+        // Emit commit animation ticks every ~100ms while running
         if self.status == RunStatus::Running {
             if self.thinking_last_change.elapsed() > Duration::from_millis(100) {
-                // Advance across the sweep length (text length + depth simulated by 5 extra steps)
-                self.thinking_frame_idx = self.thinking_frame_idx.wrapping_add(1);
+                self.app_event_tx.send(AppEvent::CommitTick);
                 self.thinking_last_change = Instant::now();
             }
         }
@@ -529,6 +528,20 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
                     let cell = HistoryCell::new_system_status(SystemLabel::Info, [text]);
                     insert_history_lines(&mut terminal, cell.lines());
                 }
+                AppEvent::StartCommitAnimation => {
+                    // ensure status indicator is visible
+                    app.bottom_pane.set_task_running(true);
+                }
+                AppEvent::CommitTick => {
+                    // progress shimmer and request redraw; update a simple animated header
+                    let dots = [".", "..", "...", "…." ];
+                    app.thinking_frame_idx = app.thinking_frame_idx.wrapping_add(1);
+                    let idx = (app.thinking_frame_idx as usize) % dots.len();
+                    app.bottom_pane.update_status_header(format!("Working{}", dots[idx]));
+                }
+                AppEvent::StopCommitAnimation => {
+                    app.bottom_pane.set_task_running(false);
+                }
                 AppEvent::ExecApproval { id, decision } => {
                     if let Some(agent) = &app.agent {
                         let c = agent.codex.clone();
@@ -730,6 +743,7 @@ where
             app.status = RunStatus::Running;
             app.bottom_pane.set_task_running(true);
             append_log("[task] started");
+            app.app_event_tx.send(AppEvent::StartCommitAnimation);
         }
         CoreEvent::AgentMessageDelta { delta } => {
             let lines = app.answer_stream.push_delta(&delta);
@@ -808,6 +822,7 @@ where
                 insert_history_lines(terminal, tail);
             }
             append_log("[task] complete");
+            app.app_event_tx.send(AppEvent::StopCommitAnimation);
         }
         CoreEvent::Error { message } => {
             let cell = HistoryCell::new_system_status(SystemLabel::Error, [message.clone()]);
@@ -815,6 +830,7 @@ where
             app.status = RunStatus::Error;
             app.bottom_pane.set_task_running(false);
             append_log(&format!("[error] {}", message));
+            app.app_event_tx.send(AppEvent::StopCommitAnimation);
         }
         CoreEvent::ShutdownComplete => {}
         CoreEvent::ExecApprovalRequest {
