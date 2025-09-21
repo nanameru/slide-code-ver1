@@ -2216,6 +2216,7 @@ dependencies = [
  "ratatui",
  "slide-common",
  "slide-core",
+ "slide-file-search",
  "textwrap",
  "tokio",
  "unicode-segmentation",

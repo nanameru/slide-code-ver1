@@ -25,6 +25,12 @@ pub enum AppEvent {
         query: String,
         matches: Vec<crate::bottom_pane::file_search_popup::FileMatch>,
     },
+    /// Generic tool execution textual output to display in history
+    ToolOutput {
+        text: String,
+    },
+    /// Insert a history cell into terminal scrollback (inline viewport)
+    InsertHistoryCell(crate::history_cell::HistoryCell),
 }
 
 #[derive(Clone, Default)]

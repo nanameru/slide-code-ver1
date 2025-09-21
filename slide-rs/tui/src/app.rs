@@ -311,14 +311,11 @@ impl App {
                     if text.trim().is_empty() {
                         return;
                     }
-                    // まず画面に表示（競合するエージェントイベントより先に出す）
+                    // Insert via unified AppEvent so ordering is consistent
                     let cell = HistoryCell::new_user_prompt(text.clone());
-                    insert_history_lines(terminal, cell.lines());
-                    let _ = std::io::stdout().flush();
-                    let cell = HistoryCell::new_user_prompt(text.clone());
-                    insert_history_lines(terminal, cell.lines());
-                    let _ = std::io::stdout().flush();
-                    // その後に内部状態更新と送信
+                    self.app_event_tx
+                        .send(AppEvent::InsertHistoryCell(cell));
+                    // then update internal state and dispatch to agent
                     self.submit_message(text);
                 }
                 InputResult::None => {}
@@ -525,6 +522,13 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
         // Drain app events from UI widgets
         while let Ok(ev) = app.app_event_rx.try_recv() {
             match ev {
+                AppEvent::InsertHistoryCell(cell) => {
+                    insert_history_lines(&mut terminal, cell.lines());
+                }
+                AppEvent::ToolOutput { text } => {
+                    let cell = HistoryCell::new_system_status(SystemLabel::Info, [text]);
+                    insert_history_lines(&mut terminal, cell.lines());
+                }
                 AppEvent::ExecApproval { id, decision } => {
                     if let Some(agent) = &app.agent {
                         let c = agent.codex.clone();
