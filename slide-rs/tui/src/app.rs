@@ -269,11 +269,11 @@ impl App {
                     if text.trim().is_empty() {
                         return;
                     }
-                    // 内部状態を更新
-                    self.submit_message(text.clone());
-                    // 画面表示（上側へ差し込み）
-                    let cell = HistoryCell::new_user_prompt(text);
+                    // まず画面に表示（競合するエージェントイベントより先に出す）
+                    let cell = HistoryCell::new_user_prompt(text.clone());
                     insert_history_lines(terminal, cell.lines());
+                    // その後に内部状態更新と送信
+                    self.submit_message(text);
                 }
                 InputResult::None => {}
             }
