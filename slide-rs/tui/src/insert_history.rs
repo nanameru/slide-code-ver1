@@ -51,9 +51,19 @@ pub fn insert_history_lines_to_writer<B, W>(
 
     // Pre-wrap lines using word-aware wrapping so terminal scrollback sees the same
     // formatting as the TUI. This avoids character-level hard wrapping by the terminal.
-    // Use the full screen width for wrapping to avoid overly narrow wrapping when the
-    // viewport width is restricted by the bottom input pane.
-    let wrap_width = screen_size.width.max(1);
+    // Determine a stable wrap width: prefer the actual terminal width, then fall back
+    // to the viewport width. This prevents pathological cases where a transient width=1
+    // yields excessively narrow wrapping, but also prevents overly wide text.
+    let viewport_width = area.width;
+    let term_width = crossterm::terminal::size()
+        .map(|(w, _)| w)
+        .unwrap_or(screen_size.width);
+    // Use the minimum of terminal width and viewport width to ensure proper wrapping
+    // but ensure it's at least 20 characters for readability
+    let wrap_width = term_width
+        .min(viewport_width)
+        .min(screen_size.width)
+        .max(20);
     let wrapped = word_wrap_lines(&lines, wrap_width);
     let wrapped_lines = wrapped.len() as u16;
     let cursor_top = if area.bottom() < screen_size.height {
@@ -321,8 +331,10 @@ fn word_wrap_line(line: &Line, width: usize) -> Vec<Line<'static>> {
     let mut seg_start: usize = 0;
 
     for (byte_idx, g) in flat.grapheme_indices(true) {
-        let w = g.width().max(1);
-        if acc_cells > 0 && acc_cells + w > width {
+        // Use actual width without forcing minimum of 1
+        // This properly handles zero-width characters and CJK characters
+        let w = g.width();
+        if acc_cells > 0 && w > 0 && acc_cells + w > width {
             out.push(slice_line_spans(line, &span_bounds, seg_start, byte_idx));
             seg_start = byte_idx;
             acc_cells = 0;
