@@ -117,6 +117,7 @@ pub struct App {
     overlay: PagerOverlay,
     // --- Tool/Exec rendering state (codex-like grouping) ---
     pending_exec_block: Option<Vec<String>>, // captures [Tool Execution]..Result lines as one block
+    pending_tool_block: Option<Vec<String>>, // captures generic tool blocks ([Tool Execution] ... [Tool Execution Result])
 }
 
 impl App {
@@ -188,6 +189,7 @@ impl App {
             approx_output_chars: 0,
             overlay: PagerOverlay::new(),
             pending_exec_block: None,
+            pending_tool_block: None,
         };
         // Write a small banner to the log so the browser viewer has content
         append_log("[info] Slide TUI session started");
@@ -909,31 +911,55 @@ where
             app.app_event_tx.send(AppEvent::StartCommitAnimation);
         }
         CoreEvent::AgentMessageDelta { delta } => {
-            // Split incoming delta into normal text vs tool/exec annotations, and group exec blocks
+            // Split incoming delta into normal text vs tool/exec annotations, and group blocks
             let mut normal_buf = String::new();
             for raw in delta.split('\n') {
                 let line = raw.trim_end_matches('\r');
                 let t = line.trim_start();
-                let is_exec_line = t.starts_with("[Tool Execution]") || t.starts_with('▶');
-                let is_exec_end = t.starts_with("[Tool Execution Result]") || t.starts_with("exit ");
+                let is_tool_begin = t.starts_with("[Tool Execution]");
+                let is_tool_mid = t.starts_with('▶');
+                let is_tool_end = t.starts_with("[Tool Execution Result]");
+                let is_exec_begin = t.starts_with("$ ");
+                let is_exec_end = t.starts_with("exit ");
 
-                if is_exec_line || is_exec_end {
+                if is_tool_begin || is_tool_mid || is_tool_end || is_exec_begin || is_exec_end {
                     // Ensure assistant stream is flushed before tool blocks
                     let tail = app.answer_stream.finalize();
                     if !tail.is_empty() {
                         insert_history_lines(terminal, tail);
                     }
-                    // Begin block if not present
-                    if app.pending_exec_block.is_none() {
-                        app.pending_exec_block = Some(Vec::new());
+                    // Exec block handling
+                    if is_exec_begin || is_exec_end {
+                        if is_exec_begin {
+                            if app.pending_exec_block.is_none() {
+                                app.pending_exec_block = Some(Vec::new());
+                            }
+                            if let Some(ref mut blk) = app.pending_exec_block {
+                                blk.push(line.to_string());
+                            }
+                        } else {
+                            // exit ...
+                            if let Some(mut blk) = app.pending_exec_block.take() {
+                                blk.push(line.to_string());
+                                let cell = HistoryCell::new_system_status(SystemLabel::Exec, blk);
+                                insert_history_lines(terminal, cell.lines());
+                            } else {
+                                let cell = HistoryCell::new_system_status(SystemLabel::Exec, [line.to_string()]);
+                                insert_history_lines(terminal, cell.lines());
+                            }
+                        }
+                        continue;
                     }
-                    if let Some(ref mut blk) = app.pending_exec_block {
+                    // Generic tool block handling
+                    if app.pending_tool_block.is_none() {
+                        app.pending_tool_block = Some(Vec::new());
+                    }
+                    if let Some(ref mut blk) = app.pending_tool_block {
                         blk.push(line.to_string());
                     }
-                    // If it's an end marker, flush the whole block as Exec
-                    if is_exec_end {
-                        if let Some(blk) = app.pending_exec_block.take() {
-                            let cell = HistoryCell::new_system_status(SystemLabel::Exec, blk);
+                    if is_tool_end {
+                        if let Some(blk) = app.pending_tool_block.take() {
+                            let cell = HistoryCell::new_system_status(SystemLabel::Info, blk);
                             insert_history_lines(terminal, cell.lines());
                         }
                     }
@@ -1043,6 +1069,15 @@ where
             let tail = app.answer_stream.finalize();
             if !tail.is_empty() {
                 insert_history_lines(terminal, tail);
+            }
+            // Flush any pending tool/exec blocks to avoid dangling groups
+            if let Some(blk) = app.pending_tool_block.take() {
+                let cell = HistoryCell::new_system_status(SystemLabel::Info, blk);
+                insert_history_lines(terminal, cell.lines());
+            }
+            if let Some(blk) = app.pending_exec_block.take() {
+                let cell = HistoryCell::new_system_status(SystemLabel::Exec, blk);
+                insert_history_lines(terminal, cell.lines());
             }
             append_log("[task] complete");
             app.app_event_tx.send(AppEvent::StopCommitAnimation);
