@@ -61,12 +61,10 @@ impl ChatComposer {
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        // Account for borders (2 lines) and icon/spacing (doesn't affect height)
-        let inner_width = width.saturating_sub(4); // 2 for borders + 2 for icon and spacing
-        let textarea_height = self.textarea.desired_height(inner_width);
+        // Simple design: just left border space, no extra height
+        let textarea_height = self.textarea.desired_height(width.saturating_sub(2)); // Account for left border space
         let hints_height = if self.show_hints { 1 } else { 0 };
-        // Add 2 for top and bottom borders
-        textarea_height.saturating_add(hints_height).saturating_add(2)
+        textarea_height.saturating_add(hints_height)
     }
 
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
@@ -158,11 +156,13 @@ impl ChatComposer {
         ])
         .areas(area);
 
-        // Use Block's inner method to get the correct content area
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded);
-        let content_area = block.inner(textarea_rect);
+        // Simple design: just account for left border space
+        let content_area = Rect {
+            x: textarea_rect.x + 2, // Space for "→ "
+            y: textarea_rect.y,
+            width: textarea_rect.width.saturating_sub(2),
+            height: textarea_rect.height,
+        };
 
         let state = self.textarea_state.borrow();
         self.textarea.cursor_pos_with_state(content_area, &*state)
@@ -298,23 +298,33 @@ impl WidgetRef for &ChatComposer {
             Style::default().add_modifier(Modifier::DIM)
         };
 
-        // Create a Block with icon as title
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
+        // Render left border like Claude Code
+        Block::default()
+            .borders(Borders::LEFT)
+            .border_type(BorderType::Plain)
             .border_style(border_style)
-            .title(Line::from(vec![Span::styled("→ ", border_style)]));
+            .render_ref(textarea_rect, buf);
 
-        // Get the inner area after applying the block
-        let inner_area = block.inner(textarea_rect);
+        // Render prompt icon
+        let icon_line = Line::from("→").style(border_style);
+        Paragraph::new(vec![icon_line])
+            .render_ref(
+                Rect::new(textarea_rect.x + 1, textarea_rect.y, 1, 1),
+                buf,
+            );
 
-        // Render the block
-        block.render_ref(textarea_rect, buf);
+        // Content area (after icon and space)
+        let content_area = Rect {
+            x: textarea_rect.x + 2, // Space for "→ "
+            y: textarea_rect.y,
+            width: textarea_rect.width.saturating_sub(2),
+            height: textarea_rect.height,
+        };
 
-        // Render textarea in the inner area
+        // Render textarea with explicit text color
         {
             let mut state = self.textarea_state.borrow_mut();
-            StatefulWidgetRef::render_ref(&&self.textarea, inner_area, buf, &mut *state);
+            StatefulWidgetRef::render_ref(&&self.textarea, content_area, buf, &mut *state);
         }
 
         // Render placeholder if textarea is empty
@@ -322,7 +332,7 @@ impl WidgetRef for &ChatComposer {
             let placeholder_line = Line::from(self.placeholder_text.as_str())
                 .style(Style::default().add_modifier(Modifier::DIM));
             Paragraph::new(vec![placeholder_line])
-                .render_ref(inner_area, buf);
+                .render_ref(content_area, buf);
         }
 
         // Render hints if enabled
