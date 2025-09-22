@@ -1,20 +1,21 @@
-use crate::approval_manager::AskForApproval;
-use crate::seatbelt::SandboxPolicy;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value as JsonValue;
+use serde_json::json;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
-pub struct ToolDef {
-    pub name: String,
-    pub description: String,
-    pub schema: Option<JsonValue>,
-}
+use crate::model_family::ModelFamily;
+use crate::plan_tool::PLAN_TOOL;
+use crate::tool_apply_patch::ApplyPatchToolType;
+use crate::tool_apply_patch::create_apply_patch_freeform_tool;
+use crate::tool_apply_patch::create_apply_patch_json_tool;
+
 
 /// Generic JSON‑Schema subset needed for our tool definitions
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "lowercase")]
-pub enum JsonSchema {
+pub(crate) enum JsonSchema {
     Boolean {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
@@ -23,6 +24,7 @@ pub enum JsonSchema {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
+    /// MCP schema allows "number" | "integer" for Number
     #[serde(alias = "integer")]
     Number {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -30,6 +32,7 @@ pub enum JsonSchema {
     },
     Array {
         items: Box<JsonSchema>,
+
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
@@ -45,101 +48,169 @@ pub enum JsonSchema {
     },
 }
 
-/// Tool definition that matches OpenAI function calling format
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ResponsesApiTool {
-    pub name: String,
-    pub description: String,
+    pub(crate) name: String,
+    pub(crate) description: String,
     /// TODO: Validation. When strict is set to true, the JSON schema,
     /// `required` and `additional_properties` must be present. All fields in
     /// `properties` must be present in `required`.
-    pub strict: bool,
-    pub parameters: JsonSchema,
+    pub(crate) strict: bool,
+    pub(crate) parameters: JsonSchema,
 }
 
-/// Freeform tool format for custom tools (GPT-5)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FreeformTool {
-    pub name: String,
-    pub description: String,
-    pub format: FreeformToolFormat,
+    pub(crate) name: String,
+    pub(crate) description: String,
+    pub(crate) format: FreeformToolFormat,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FreeformToolFormat {
-    pub r#type: String,
-    pub syntax: String,
-    pub definition: String,
+    pub(crate) r#type: String,
+    pub(crate) syntax: String,
+    pub(crate) definition: String,
 }
 
 /// When serialized as JSON, this produces a valid "Tool" in the OpenAI
 /// Responses API.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "type")]
-pub enum OpenAiTool {
+pub(crate) enum OpenAiTool {
     #[serde(rename = "function")]
     Function(ResponsesApiTool),
-    #[serde(rename = "freeform")]
-    Freeform(FreeformTool),
     #[serde(rename = "local_shell")]
     LocalShell {},
+    // TODO: Understand why we get an error on web_search although the API docs say it's supported.
+    // https://platform.openai.com/docs/guides/tools-web-search?api-mode=responses#:~:text=%7B%20type%3A%20%22web_search%22%20%7D%2C
+    #[serde(rename = "web_search")]
+    WebSearch {},
+    #[serde(rename = "custom")]
+    Freeform(FreeformTool),
 }
 
 #[derive(Debug, Clone)]
 pub enum ConfigShellToolType {
-    DefaultShell,
-    ShellWithRequest { sandbox_policy: SandboxPolicy },
-    LocalShell,
-    StreamableShell,
+    Default,
+    Local,
+    Streamable,
 }
 
 #[derive(Debug, Clone)]
-pub struct ToolsConfig {
+pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
-    pub include_plan_tool: bool,
-    pub include_apply_patch_tool: bool,
+    pub plan_tool: bool,
+    pub apply_patch_tool_type: Option<ApplyPatchToolType>,
+    pub web_search_request: bool,
     pub include_view_image_tool: bool,
-    pub include_web_search_request: bool,
-    pub include_slides_tools: bool,
+    pub experimental_unified_exec_tool: bool,
 }
 
-pub struct ToolsConfigParams {
-    pub approval_policy: AskForApproval,
-    pub sandbox_policy: SandboxPolicy,
-    pub include_plan_tool: bool,
-    pub include_apply_patch_tool: bool,
-    pub include_view_image_tool: bool,
-    pub include_web_search_request: bool,
-    pub use_streamable_shell_tool: bool,
-    pub include_slides_tools: bool,
+pub(crate) struct ToolsConfigParams<'a> {
+    pub(crate) model_family: &'a ModelFamily,
+    pub(crate) include_plan_tool: bool,
+    pub(crate) include_apply_patch_tool: bool,
+    pub(crate) include_web_search_request: bool,
+    pub(crate) use_streamable_shell_tool: bool,
+    pub(crate) include_view_image_tool: bool,
+    pub(crate) experimental_unified_exec_tool: bool,
+    // Compatibility fields for existing code
+    pub(crate) include_slides_tools: bool,
+    pub(crate) approval_policy: crate::approval_manager::AskForApproval,
+    pub(crate) sandbox_policy: crate::seatbelt::SandboxPolicy,
 }
 
 impl ToolsConfig {
     pub fn new(params: &ToolsConfigParams) -> Self {
-        let shell_type = if params.use_streamable_shell_tool {
-            ConfigShellToolType::StreamableShell
-        } else if matches!(params.approval_policy, AskForApproval::OnRequest)
-            && !params.use_streamable_shell_tool
-        {
-            ConfigShellToolType::ShellWithRequest {
-                sandbox_policy: params.sandbox_policy.clone(),
-            }
+        let ToolsConfigParams {
+            model_family,
+            include_plan_tool,
+            include_apply_patch_tool,
+            include_web_search_request,
+            use_streamable_shell_tool,
+            include_view_image_tool,
+            experimental_unified_exec_tool,
+            ..
+        } = params;
+        let shell_type = if *use_streamable_shell_tool {
+            ConfigShellToolType::Streamable
+        } else if model_family.uses_local_shell_tool {
+            ConfigShellToolType::Local
         } else {
-            ConfigShellToolType::DefaultShell
+            ConfigShellToolType::Default
+        };
+
+        let apply_patch_tool_type = match model_family.apply_patch_tool_type {
+            Some(ApplyPatchToolType::Freeform) => Some(ApplyPatchToolType::Freeform),
+            Some(ApplyPatchToolType::Function) => Some(ApplyPatchToolType::Function),
+            None => {
+                if *include_apply_patch_tool {
+                    Some(ApplyPatchToolType::Freeform)
+                } else {
+                    None
+                }
+            }
         };
 
         Self {
             shell_type,
-            include_plan_tool: params.include_plan_tool,
-            include_apply_patch_tool: params.include_apply_patch_tool,
-            include_view_image_tool: params.include_view_image_tool,
-            include_web_search_request: params.include_web_search_request,
-            include_slides_tools: params.include_slides_tools,
+            plan_tool: *include_plan_tool,
+            apply_patch_tool_type,
+            web_search_request: *include_web_search_request,
+            include_view_image_tool: *include_view_image_tool,
+            experimental_unified_exec_tool: *experimental_unified_exec_tool,
         }
     }
 }
 
-/// Create the basic shell tool
+fn create_unified_exec_tool() -> OpenAiTool {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "input".to_string(),
+        JsonSchema::Array {
+            items: Box::new(JsonSchema::String { description: None }),
+            description: Some(
+                "When no session_id is provided, treat the array as the command and arguments \
+                 to launch. When session_id is set, concatenate the strings (in order) and write \
+                 them to the session's stdin."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "session_id".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Identifier for an existing interactive session. If omitted, a new command \
+                 is spawned."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "timeout_ms".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Maximum time in milliseconds to wait for output after writing the input."
+                    .to_string(),
+            ),
+        },
+    );
+
+    OpenAiTool::Function(ResponsesApiTool {
+        name: "unified_exec".to_string(),
+        description:
+            "Runs a command in a PTY. Provide a session_id to reuse an existing interactive session.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["input".to_string()]),
+            additional_properties: Some(false),
+        },
+    })
+}
+
 fn create_shell_tool() -> OpenAiTool {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -162,9 +233,22 @@ fn create_shell_tool() -> OpenAiTool {
         },
     );
 
+    properties.insert(
+        "with_escalated_permissions".to_string(),
+        JsonSchema::Boolean {
+            description: Some("Whether to request escalated permissions. Set to true if command needs to be run without sandbox restrictions".to_string()),
+        },
+    );
+    properties.insert(
+        "justification".to_string(),
+        JsonSchema::String {
+            description: Some("Only set if with_escalated_permissions is true. 1-sentence explanation of why we want to run this command.".to_string()),
+        },
+    );
+
     OpenAiTool::Function(ResponsesApiTool {
         name: "shell".to_string(),
-        description: "Runs a shell command and returns its output".to_string(),
+        description: "Runs a shell command and returns its output.".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -174,212 +258,98 @@ fn create_shell_tool() -> OpenAiTool {
     })
 }
 
-/// Create the sandbox-aware shell tool with approval support
-fn create_shell_tool_for_sandbox(sandbox_policy: &SandboxPolicy) -> OpenAiTool {
+fn create_view_image_tool() -> OpenAiTool {
+    // Support only local filesystem path.
     let mut properties = BTreeMap::new();
     properties.insert(
-        "command".to_string(),
-        JsonSchema::Array {
-            items: Box::new(JsonSchema::String { description: None }),
-            description: Some("The command to execute".to_string()),
-        },
-    );
-    properties.insert(
-        "workdir".to_string(),
+        "path".to_string(),
         JsonSchema::String {
-            description: Some("The working directory to execute the command in".to_string()),
+            description: Some("Local filesystem path to an image file".to_string()),
         },
     );
-    properties.insert(
-        "timeout_ms".to_string(),
-        JsonSchema::Number {
-            description: Some("The timeout for the command in milliseconds".to_string()),
-        },
-    );
-
-    // Add escalated permissions support for workspace-write mode
-    if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
-        properties.insert(
-            "with_escalated_permissions".to_string(),
-            JsonSchema::Boolean {
-                description: Some("Whether to request escalated permissions. Set to true if command needs to be run without sandbox restrictions".to_string()),
-            },
-        );
-        properties.insert(
-            "justification".to_string(),
-            JsonSchema::String {
-                description: Some("Justification for why this command needs to be run".to_string()),
-            },
-        );
-    }
-
-    let required = vec!["command".to_string()];
-    if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
-        // justification is required when with_escalated_permissions is used
-    }
 
     OpenAiTool::Function(ResponsesApiTool {
-        name: "shell".to_string(),
-        description: format!(
-            "Runs a shell command with sandbox policy: {}. {}",
-            match sandbox_policy {
-                SandboxPolicy::ReadOnly => "read-only",
-                SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
-                SandboxPolicy::DangerFullAccess => "danger-full-access",
-            },
-            if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
-                "Use with_escalated_permissions=true for commands that need to access outside workspace."
-            } else {
-                ""
+        name: "view_image".to_string(),
+        description:
+            "Attach a local image (by filesystem path) to the conversation context for this turn."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["path".to_string()]),
+            additional_properties: Some(false),
+        },
+    })
+}
+/// TODO(dylan): deprecate once we get rid of json tool
+#[derive(Serialize, Deserialize)]
+pub(crate) struct ApplyPatchToolArgs {
+    pub(crate) input: String,
+}
+
+/// Returns JSON values that are compatible with Function Calling in the
+/// Responses API:
+/// https://platform.openai.com/docs/guides/function-calling?api-mode=responses
+pub fn create_tools_json_for_responses_api(
+    tools: &[OpenAiTool],
+) -> crate::error::Result<Vec<serde_json::Value>> {
+    let mut tools_json = Vec::new();
+
+    for tool in tools {
+        let json = serde_json::to_value(tool)?;
+        tools_json.push(json);
+    }
+
+    Ok(tools_json)
+}
+/// Returns JSON values that are compatible with Function Calling in the
+/// Chat Completions API:
+/// https://platform.openai.com/docs/guides/function-calling?api-mode=chat
+pub(crate) fn create_tools_json_for_chat_completions_api(
+    tools: &[OpenAiTool],
+) -> crate::error::Result<Vec<serde_json::Value>> {
+    // We start with the JSON for the Responses API and than rewrite it to match
+    // the chat completions tool call format.
+    let responses_api_tools_json = create_tools_json_for_responses_api(tools)?;
+    let tools_json = responses_api_tools_json
+        .into_iter()
+        .filter_map(|mut tool| {
+            if tool.get("type") != Some(&serde_json::Value::String("function".to_string())) {
+                return None;
             }
-        ),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(required),
-            additional_properties: Some(false),
-        },
-    })
+
+            if let Some(map) = tool.as_object_mut() {
+                // Remove "type" field as it is not needed in chat completions.
+                map.remove("type");
+                Some(json!({
+                    "type": "function",
+                    "function": map,
+                }))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<serde_json::Value>>();
+    Ok(tools_json)
 }
 
-/// Create the plan tool
-fn create_plan_tool() -> OpenAiTool {
-    let mut plan_item_props = BTreeMap::new();
-    plan_item_props.insert("step".to_string(), JsonSchema::String { description: None });
-    plan_item_props.insert(
-        "status".to_string(),
-        JsonSchema::String {
-            description: Some("One of: pending, in_progress, completed".to_string()),
-        },
-    );
-
-    let plan_items_schema = JsonSchema::Array {
-        description: Some("The list of steps".to_string()),
-        items: Box::new(JsonSchema::Object {
-            properties: plan_item_props,
-            required: Some(vec!["step".to_string(), "status".to_string()]),
-            additional_properties: Some(false),
-        }),
-    };
-
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "explanation".to_string(),
-        JsonSchema::String { description: None },
-    );
-    properties.insert("plan".to_string(), plan_items_schema);
-
-    OpenAiTool::Function(ResponsesApiTool {
-        name: "update_plan".to_string(),
-        description: "Updates the task plan. Provide an explanation and a list of plan items."
-            .to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["plan".to_string()]),
-            additional_properties: Some(false),
-        },
-    })
-}
-
-/// Create tools based on configuration
-pub fn create_tools(config: &ToolsConfig, _mcp_tools: Option<Vec<String>>) -> Vec<OpenAiTool> {
-    let mut tools = Vec::new();
-
-    // Add shell tool based on configuration
-    match &config.shell_type {
-        ConfigShellToolType::DefaultShell => {
-            tools.push(create_shell_tool());
-        }
-        ConfigShellToolType::ShellWithRequest { sandbox_policy } => {
-            tools.push(create_shell_tool_for_sandbox(sandbox_policy));
-        }
-        ConfigShellToolType::LocalShell => {
-            // For now, same as default shell
-            tools.push(create_shell_tool());
-        }
-        ConfigShellToolType::StreamableShell => {
-            // Add streamable shell tools (simplified)
-            tools.push(create_shell_tool());
-        }
-    }
-
-    if config.include_plan_tool {
-        tools.push(create_plan_tool());
-    }
-
-    // Add apply_patch tool if enabled
-    if config.include_apply_patch_tool {
-        tools.push(create_apply_patch_tool());
-    }
-
-    // Note: Other tools (view_image, etc.) would be implemented similarly
-
-    tools
-}
-
-/// Create the apply_patch tool
-fn create_apply_patch_tool() -> OpenAiTool {
+// Simplified MCP tool compatibility - for now just return basic shell tool
+pub(crate) fn mcp_tool_to_openai_tool(
+    fully_qualified_name: String,
+    _tool: mcp_types::Tool,
+) -> Result<ResponsesApiTool, serde_json::Error> {
+    // For now, return a simplified tool definition
     let mut properties = BTreeMap::new();
     properties.insert(
         "input".to_string(),
         JsonSchema::String {
-            description: Some(r#"The entire contents of the apply_patch command"#.to_string()),
+            description: Some("Tool input".to_string()),
         },
     );
 
-    OpenAiTool::Function(ResponsesApiTool {
-        name: "apply_patch".to_string(),
-        description: r#"Use the `apply_patch` tool to edit files.
-Your patch language is a stripped‑down, file‑oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high‑level envelope:
-
-*** Begin Patch
-[ one or more file sections ]
-*** End Patch
-
-Within that envelope, you get a sequence of file operations.
-You MUST include a header to specify the action you are taking.
-Each operation starts with one of three headers:
-
-*** Add File: <path> - create a new file. Every following line is a + line (the initial contents).
-*** Delete File: <path> - delete a file (no more lines after this header).
-*** Update File: <path> - edit an existing file. This supports:
-  1. Context lines (starting with a space).
-  2. Additions (starting with +).
-  3. Deletions (starting with -).
-  4. Optional context markers (@@ ... @@).
-  5. Optional end‑of‑file marker (*** End of File).
-
-Examples:
-
-*** Begin Patch
-*** Add File: hello.py
-+print("Hello, world!")
-+print("This is a new file")
-*** End Patch
-
-*** Begin Patch
-*** Update File: main.py
- def main():
--    print("Old message")
-+    print("New message")
-     return 0
-*** End Patch
-
-*** Begin Patch
-*** Delete File: obsolete.py
-*** End Patch
-
-*** Begin Patch
-*** Update File: config.json
-@@ Adding new configuration @@
- {
-   "version": "1.0",
-+  "debug": true,
-   "name": "myapp"
- }
-*** End Patch
-"#.to_string(),
+    Ok(ResponsesApiTool {
+        name: fully_qualified_name,
+        description: "MCP Tool".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -389,81 +359,192 @@ Examples:
     })
 }
 
-/// Legacy function for compatibility - returns tool names
-pub fn get_openai_tools(cfg: &ToolsConfig, _mcp_tools: Option<Vec<String>>) -> Vec<String> {
-    let tools = create_tools(cfg, _mcp_tools);
-    tools
-        .into_iter()
-        .map(|t| match t {
-            OpenAiTool::Function(f) => f.name,
-            OpenAiTool::Freeform(f) => f.name,
-            OpenAiTool::LocalShell {} => "local_shell".to_string(),
-        })
-        .collect()
+/// Sanitize a JSON Schema (as serde_json::Value) so it can fit our limited
+/// JsonSchema enum. This function:
+/// - Ensures every schema object has a "type". If missing, infers it from
+///   common keywords (properties => object, items => array, enum/const/format => string)
+///   and otherwise defaults to "string".
+/// - Fills required child fields (e.g. array items, object properties) with
+///   permissive defaults when absent.
+fn sanitize_json_schema(value: &mut JsonValue) {
+    match value {
+        JsonValue::Bool(_) => {
+            // JSON Schema boolean form: true/false. Coerce to an accept-all string.
+            *value = json!({ "type": "string" });
+        }
+        JsonValue::Array(arr) => {
+            for v in arr.iter_mut() {
+                sanitize_json_schema(v);
+            }
+        }
+        JsonValue::Object(map) => {
+            // First, recursively sanitize known nested schema holders
+            if let Some(props) = map.get_mut("properties") {
+                if let Some(props_map) = props.as_object_mut() {
+                    for (_k, v) in props_map.iter_mut() {
+                        sanitize_json_schema(v);
+                    }
+                }
+            }
+            if let Some(items) = map.get_mut("items") {
+                sanitize_json_schema(items);
+            }
+            // Some schemas use oneOf/anyOf/allOf - sanitize their entries
+            for combiner in ["oneOf", "anyOf", "allOf", "prefixItems"] {
+                if let Some(v) = map.get_mut(combiner) {
+                    sanitize_json_schema(v);
+                }
+            }
+
+            // Normalize/ensure type
+            let mut ty = map
+                .get("type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            // If type is an array (union), pick first supported; else leave to inference
+            if ty.is_none() {
+                if let Some(JsonValue::Array(types)) = map.get("type") {
+                    for t in types {
+                        if let Some(tt) = t.as_str() {
+                            if matches!(
+                                tt,
+                                "object" | "array" | "string" | "number" | "integer" | "boolean"
+                            ) {
+                                ty = Some(tt.to_string());
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Infer type if still missing
+            if ty.is_none() {
+                if map.contains_key("properties")
+                    || map.contains_key("required")
+                    || map.contains_key("additionalProperties")
+                {
+                    ty = Some("object".to_string());
+                } else if map.contains_key("items") || map.contains_key("prefixItems") {
+                    ty = Some("array".to_string());
+                } else if map.contains_key("enum")
+                    || map.contains_key("const")
+                    || map.contains_key("format")
+                {
+                    ty = Some("string".to_string());
+                } else if map.contains_key("minimum")
+                    || map.contains_key("maximum")
+                    || map.contains_key("exclusiveMinimum")
+                    || map.contains_key("exclusiveMaximum")
+                    || map.contains_key("multipleOf")
+                {
+                    ty = Some("number".to_string());
+                }
+            }
+            // If we still couldn't infer, default to string
+            let ty = ty.unwrap_or_else(|| "string".to_string());
+            map.insert("type".to_string(), JsonValue::String(ty.to_string()));
+
+            // Ensure object schemas have properties map
+            if ty == "object" {
+                if !map.contains_key("properties") {
+                    map.insert(
+                        "properties".to_string(),
+                        JsonValue::Object(serde_json::Map::new()),
+                    );
+                }
+                // If additionalProperties is an object schema, sanitize it too.
+                // Leave booleans as-is, since JSON Schema allows boolean here.
+                if let Some(ap) = map.get_mut("additionalProperties") {
+                    let is_bool = matches!(ap, JsonValue::Bool(_));
+                    if !is_bool {
+                        sanitize_json_schema(ap);
+                    }
+                }
+            }
+
+            // Ensure array schemas have items
+            if ty == "array" && !map.contains_key("items") {
+                map.insert("items".to_string(), json!({ "type": "string" }));
+            }
+        }
+        _ => {}
+    }
 }
 
-/// Render a concise instruction block that advertises available tools to the model.
-/// This is a lightweight alternative to function/tool calling and mirrors codex style.
-pub fn render_tools_instructions(cfg: &ToolsConfig, approval_mode_hint: Option<&str>) -> String {
-    let mut lines: Vec<String> = Vec::new();
-    lines.push(
-        "You can propose using the following tools by writing clear instructions:".to_string(),
-    );
+/// Returns a list of OpenAiTools based on the provided config and MCP tools.
+/// Note that the keys of mcp_tools should be fully qualified names. See
+/// [`McpConnectionManager`] for more details.
+pub(crate) fn get_openai_tools(
+    config: &ToolsConfig,
+    mcp_tools: Option<HashMap<String, mcp_types::Tool>>,
+) -> Vec<OpenAiTool> {
+    let mut tools: Vec<OpenAiTool> = Vec::new();
 
-    // Shell tool description based on configuration
-    match &cfg.shell_type {
-        ConfigShellToolType::StreamableShell => {
-            lines.push("- exec_command: run a shell command. Always explain why and prefer read-only commands (ls, cat, rg).".to_string());
+    if config.experimental_unified_exec_tool {
+        tools.push(create_unified_exec_tool());
+    } else {
+        match &config.shell_type {
+            ConfigShellToolType::Default => {
+                tools.push(create_shell_tool());
+            }
+            ConfigShellToolType::Local => {
+                tools.push(OpenAiTool::LocalShell {});
+            }
+            ConfigShellToolType::Streamable => {
+                tools.push(OpenAiTool::Function(
+                    crate::exec_command::create_exec_command_tool_for_responses_api(),
+                ));
+                tools.push(OpenAiTool::Function(
+                    crate::exec_command::create_write_stdin_tool_for_responses_api(),
+                ));
+            }
         }
-        ConfigShellToolType::ShellWithRequest { sandbox_policy } => {
-            let policy_desc = match sandbox_policy {
-                SandboxPolicy::ReadOnly => "read-only sandbox",
-                SandboxPolicy::WorkspaceWrite { .. } => {
-                    "workspace-write sandbox (use with_escalated_permissions for broader access)"
+    }
+
+    if config.plan_tool {
+        tools.push(PLAN_TOOL.clone());
+    }
+
+    if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
+        match apply_patch_tool_type {
+            ApplyPatchToolType::Freeform => {
+                tools.push(create_apply_patch_freeform_tool());
+            }
+            ApplyPatchToolType::Function => {
+                tools.push(create_apply_patch_json_tool());
+            }
+        }
+    }
+
+    if config.web_search_request {
+        tools.push(OpenAiTool::WebSearch {});
+    }
+
+    // Include the view_image tool so the agent can attach images to context.
+    if config.include_view_image_tool {
+        tools.push(create_view_image_tool());
+    }
+    if let Some(mcp_tools) = mcp_tools {
+        // Ensure deterministic ordering to maximize prompt cache hits.
+        let mut entries: Vec<(String, mcp_types::Tool)> = mcp_tools.into_iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for (name, tool) in entries.into_iter() {
+            match mcp_tool_to_openai_tool(name.clone(), tool.clone()) {
+                Ok(converted_tool) => tools.push(OpenAiTool::Function(converted_tool)),
+                Err(e) => {
+                    tracing::error!("Failed to convert {name:?} MCP tool to OpenAI tool: {e:?}");
                 }
-                SandboxPolicy::DangerFullAccess => "full access",
-            };
-            lines.push(format!("- shell: run a shell command in {}. Always explain why and prefer read-only commands (ls, cat, rg).", policy_desc));
-        }
-        _ => {
-            lines.push("- shell: run a shell command. Always explain why and prefer read-only commands (ls, cat, rg).".to_string());
+            }
         }
     }
 
-    if cfg.include_apply_patch_tool {
-        lines.push(
-            "- apply_patch: propose a unified diff to edit files. Keep edits minimal and correct."
-                .to_string(),
-        );
-    }
-    if cfg.include_slides_tools {
-        lines.push(
-            "- slides_write: write slide files under slides/ (create/overwrite/append)."
-                .to_string(),
-        );
-        lines.push(
-            "- slides_apply_patch: apply a restricted apply_patch affecting only slides/ files."
-                .to_string(),
-        );
-    }
-    if cfg.include_plan_tool {
-        lines.push("- update_plan: refine your task plan concisely.".to_string());
-    }
-    if cfg.include_view_image_tool {
-        lines.push("- view_image: request to view an image by path.".to_string());
-    }
-    if cfg.include_web_search_request {
-        lines.push(
-            "- web_search_request: request a web search when strictly necessary.".to_string(),
-        );
-    }
+    tools
+}
 
-    if let Some(mode) = approval_mode_hint {
-        lines.push(format!(
-            "Approval policy: {mode}. Destructive or ambiguous actions may require user approval."
-        ));
-    }
-
-    lines.push("When proposing a tool, output a short rationale followed by the exact command or a minimal diff.".to_string());
-    lines.join("\n")
+// Compatibility function for existing code
+pub fn render_tools_instructions(_config: &ToolsConfig, _approval_mode_hint: Option<&str>) -> String {
+    "Tools are available for execution.".to_string()
 }

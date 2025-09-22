@@ -247,7 +247,10 @@ impl Codex {
                         }
                         // Prefix prompt with tool instructions so the model can propose edits/execs.
                         let approval_hint = std::env::var("SLIDE_APPROVAL_MODE").ok();
+                        let model_family = crate::model_family::find_family_for_model("gpt-5").unwrap_or_else(|| crate::model_family::derive_default_model_family("gpt-5"));
                         let tools_cfg = ToolsConfig::new(&ToolsConfigParams {
+                            model_family: &model_family,
+                            experimental_unified_exec_tool: true,
                             include_plan_tool: true,
                             include_apply_patch_tool: true,
                             include_view_image_tool: false,
@@ -554,7 +557,10 @@ impl Codex {
                         let _ = tx_event.send(Event::TaskStarted).await;
                         // Build a prompt similar to above; for parity we include text and note images
                         let approval_hint = std::env::var("SLIDE_APPROVAL_MODE").ok();
+                        let model_family = crate::model_family::find_family_for_model("gpt-5").unwrap_or_else(|| crate::model_family::derive_default_model_family("gpt-5"));
                         let tools_cfg = ToolsConfig::new(&ToolsConfigParams {
+                            model_family: &model_family,
+                            experimental_unified_exec_tool: true,
                             include_plan_tool: true,
                             include_apply_patch_tool: true,
                             include_view_image_tool: true,
