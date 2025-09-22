@@ -72,22 +72,76 @@ impl ToolExecutor {
     pub fn extract_tool_calls(&self, response: &str) -> Result<Vec<ToolCall>> {
         let mut tool_calls = Vec::new();
 
-        // JSON形式のツール呼び出しパターンを検索
+        // 1) JSON形式のツール呼び出しパターンを検索（厳密トリガー）
         for line in response.lines() {
             let line = line.trim();
-
-            // {"tool": "shell", "command": ["ls", "-la"]} 形式を検出
             if line.starts_with('{') && line.contains("\"tool\"") {
                 if let Ok(call) = self.parse_tool_call(line) {
                     tool_calls.push(call);
                 }
             }
-
-            // <tool_call>...</tool_call> XML形式も対応
             if line.contains("<tool_call>") {
                 if let Some(extracted) = self.extract_xml_tool_call(line) {
                     if let Ok(call) = self.parse_tool_call(&extracted) {
                         tool_calls.push(call);
+                    }
+                }
+            }
+        }
+
+        // 2) exec_command 提案の簡易パース（モデルがJSONを出さない場合のフォールバック）
+        //    例:
+        //    exec_command:
+        //    cat '/abs/path/to/file'
+        //    または同一行に続くケースも許容
+        if tool_calls.is_empty() {
+            let mut lines = response.lines().peekable();
+            let mut in_exec_block = false;
+            while let Some(raw) = lines.next() {
+                let line = raw.trim();
+                if !in_exec_block {
+                    // トリガー行検出
+                    if line.eq_ignore_ascii_case("exec_command:") || line.eq_ignore_ascii_case("exec_command") {
+                        in_exec_block = true;
+                        // 次行を見る
+                        continue;
+                    }
+                    // 同一行で "exec_command:" の後にコマンドが続くパターン
+                    if let Some(pos) = line.to_ascii_lowercase().find("exec_command:") {
+                        let after = line[pos + "exec_command:".len()..].trim();
+                        if !after.is_empty() {
+                            let cmd = after;
+                            let argv = crate::parse_command::parse_command_string(cmd);
+                            tool_calls.push(ToolCall::Shell {
+                                command: argv,
+                                working_dir: None,
+                                with_escalated_permissions: false,
+                                justification: None,
+                                timeout_ms: None,
+                            });
+                            break;
+                        } else {
+                            in_exec_block = true;
+                            continue;
+                        }
+                    }
+                } else {
+                    // exec_command ブロック内の最初の非空行をコマンドとして扱う
+                    if !line.is_empty() {
+                        // 箇条書き記号や見出しの可能性がある行はスキップ
+                        let is_meta = line.ends_with(':') || line.starts_with('-');
+                        if !is_meta {
+                            let cmd = line;
+                            let argv = crate::parse_command::parse_command_string(cmd);
+                            tool_calls.push(ToolCall::Shell {
+                                command: argv,
+                                working_dir: None,
+                                with_escalated_permissions: false,
+                                justification: None,
+                                timeout_ms: None,
+                            });
+                            break;
+                        }
                     }
                 }
             }
