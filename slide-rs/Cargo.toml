@@ -10,6 +10,7 @@ members = [
     "file-search",
     "tui",
     "slides-tools",
+    "mcp-client",
 ]
 resolver = "2"
 

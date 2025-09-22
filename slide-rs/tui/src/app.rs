@@ -122,10 +122,6 @@ pub struct App {
     pending_tool_block: Option<Vec<String>>, // captures generic tool blocks ([Tool Execution] ... [Tool Execution Result])
     pending_exec_started_at: Option<Instant>,
     pending_tool_started_at: Option<Instant>,
-    // Message queue for proper display ordering (insert in reverse to account for top-insertion)
-    message_queue: Vec<HistoryCell>,
-    // Track user messages that haven't been displayed yet (for replay mechanism)
-    pending_user_messages: Vec<HistoryCell>,
 }
 
 impl App {
@@ -200,8 +196,6 @@ impl App {
             pending_tool_block: None,
             pending_exec_started_at: None,
             pending_tool_started_at: None,
-            message_queue: Vec::new(),
-            pending_user_messages: Vec::new(),
         };
         // Write a small banner to the log so the browser viewer has content
         append_log("[info] Slide TUI session started");
@@ -227,8 +221,8 @@ impl App {
             return;
         }
 
-        // ユーザーメッセージは即座に履歴に追加しない（codex-1と同じ動作）
-        // 代わりにTaskComplete時のリプレイで表示される
+        // ユーザーメッセージは送信直後に表示する（codex と同様）
+        // 表示は AppEvent::InsertHistoryCell 側で処理する
         append_log(&format!("user: {}", text));
 
         if let Some(agent) = &self.agent {
@@ -661,162 +655,7 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
     loop {
         // Drain app events from UI widgets
         while let Ok(ev) = app.app_event_rx.try_recv() {
-            match ev {
-                AppEvent::StartFileSearch { query } => {
-                    app.bottom_pane.show_file_search();
-                    if let Some(p) = app.bottom_pane.file_search_mut() {
-                        p.set_query(&query);
-                    }
-                }
-                AppEvent::InsertHistoryCell(cell) => {
-                    // Codex-1 style: Only display user messages during replay, not immediately
-                    if matches!(cell, HistoryCell::UserPrompt { .. }) {
-                        // Store user message for later replay display
-                        app.history.push(cell.clone());
-                        app.pending_user_messages.push(cell);
-                    } else {
-                        // Display non-user messages immediately
-                        insert_history_lines(&mut terminal, cell.lines());
-                    }
-                }
-                AppEvent::ToolOutput { text } => {
-                    let cell = HistoryCell::new_system_status(SystemLabel::Info, [text]);
-                    insert_history_lines(&mut terminal, cell.lines());
-                }
-                AppEvent::StartCommitAnimation => {
-                    // ensure status indicator is visible
-                    app.bottom_pane.set_task_running(true);
-                }
-                AppEvent::CommitTick => {
-                    // progress shimmer and request redraw; update a simple animated header
-                    let dots = [".", "..", "...", "…." ];
-                    app.thinking_frame_idx = app.thinking_frame_idx.wrapping_add(1);
-                    let idx = (app.thinking_frame_idx as usize) % dots.len();
-                    app.bottom_pane.update_status_header(format!("Working{}", dots[idx]));
-                }
-                AppEvent::StopCommitAnimation => {
-                    app.bottom_pane.set_task_running(false);
-                }
-                AppEvent::UpdateModel(model) => {
-                    if let Some(agent) = &app.agent {
-                        agent.override_turn_context_bg(Some(model.clone()), None, None, None);
-                    }
-                    // Update composer placeholder locally to reflect model
-                    app.bottom_pane.set_composer_placeholder(format!("Model: {}", model));
-                }
-                AppEvent::UpdateReasoningEffort(effort) => {
-                    if let Some(agent) = &app.agent {
-                        agent.override_turn_context_bg(None, effort, None, None);
-                    }
-                }
-                AppEvent::UpdateAskForApprovalPolicy(policy) => {
-                    if let Some(agent) = &app.agent {
-                        agent.override_turn_context_bg(None, None, Some(policy), None);
-                    }
-                }
-                AppEvent::UpdateSandboxPolicy(policy) => {
-                    if let Some(agent) = &app.agent {
-                        agent.override_turn_context_bg(None, None, None, Some(policy));
-                    }
-                }
-                AppEvent::PersistModelSelection { .. } => {
-                    // Placeholder: No persistent config system in slide-code-test yet.
-                }
-                AppEvent::ExecApproval { id, decision } => {
-                    if let Some(agent) = &app.agent {
-                        let c = agent.codex.clone();
-                        tokio::spawn(async move {
-                            let _ = c.submit(Op::ExecApproval { id, decision }).await;
-                        });
-                    }
-                }
-                AppEvent::PatchApproval { id, decision } => {
-                    if let Some(agent) = &app.agent {
-                        let c = agent.codex.clone();
-                        tokio::spawn(async move {
-                            let _ = c.submit(Op::PatchApproval { id, decision }).await;
-                        });
-                    }
-                }
-                AppEvent::FileReadRequest { path } => {
-                    let tx = app.app_event_tx.clone();
-                    tokio::spawn(async move {
-                        use tokio::io::AsyncReadExt;
-                        // Canonicalize & bound size
-                        let pathbuf = std::path::PathBuf::from(&path);
-                        let canonical = match tokio::fs::canonicalize(&pathbuf).await {
-                            Ok(p) => p,
-                            Err(e) => {
-                                tx.send(AppEvent::FileReadResult { path, content: Err(format!("canonicalize failed: {e}")) });
-                                return;
-                            }
-                        };
-                        let meta = match tokio::fs::metadata(&canonical).await {
-                            Ok(m) => m,
-                            Err(e) => {
-                                tx.send(AppEvent::FileReadResult { path, content: Err(format!("metadata failed: {e}")) });
-                                return;
-                            }
-                        };
-                        if !meta.is_file() {
-                            tx.send(AppEvent::FileReadResult { path, content: Err("not a regular file".to_string()) });
-                            return;
-                        }
-                        let max_bytes: u64 = 256 * 1024; // 256KB
-                        let truncated = meta.len() > max_bytes;
-                        let mut file = match tokio::fs::File::open(&canonical).await {
-                            Ok(f) => f,
-                            Err(e) => {
-                                tx.send(AppEvent::FileReadResult { path, content: Err(format!("open failed: {e}")) });
-                                return;
-                            }
-                        };
-                        let mut buf = Vec::with_capacity((max_bytes as usize).min(262144));
-                        let to_read = max_bytes.min(meta.len());
-                        let mut reader = tokio::io::BufReader::new(file);
-                        let mut handle = reader.take(to_read);
-                        if let Err(e) = handle.read_to_end(&mut buf).await {
-                            tx.send(AppEvent::FileReadResult { path, content: Err(format!("read failed: {e}")) });
-                            return;
-                        }
-                        let mut content = String::from_utf8_lossy(&buf).to_string();
-                        if truncated {
-                            content.push_str("\n…[truncated]\n");
-                        }
-                        tx.send(AppEvent::FileReadResult { path, content: Ok(content) });
-                    });
-                }
-                AppEvent::FileReadResult { path, content } => {
-                    match content {
-                        Ok(text) => {
-                            let header = format!("{}", path);
-                            let mut lines = Vec::new();
-                            lines.push(ratatui::text::Line::from(""));
-                            lines.push(ratatui::text::Line::from(
-                                ratatui::text::Span::styled(
-                                    header,
-                                    ratatui::style::Style::default()
-                                        .fg(ratatui::style::Color::LightBlue)
-                                        .add_modifier(ratatui::style::Modifier::BOLD),
-                                ),
-                            ));
-                            for l in text.lines() {
-                                lines.push(crate::history_cell::format_content_line(l));
-                            }
-                            insert_history_lines(&mut terminal, lines);
-                        }
-                        Err(err) => {
-                            let cell = HistoryCell::new_system_status(SystemLabel::Error, [format!("open: {path} — {err}")]);
-                            insert_history_lines(&mut terminal, cell.lines());
-                        }
-                    }
-                }
-                AppEvent::FileSearchResults { query, matches } => {
-                    if let Some(p) = app.bottom_pane.file_search_mut() {
-                        p.set_matches(&query, matches);
-                    }
-                }
-            }
+            handle_app_event(&mut terminal, &mut app, ev);
         }
 
         // 下部の入力エリアのみ描画（履歴はスクロールバックへ差し込み）
@@ -832,6 +671,11 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
                 },
                 Event::Key(key) => {
                     app.handle_key_event(key, &mut terminal);
+                    // 入力ハンドラ内で発行された AppEvent（特に InsertHistoryCell）を即時適用して
+                    // CoreEvent より前にユーザー投稿が表示されるようにする
+                    while let Ok(ev) = app.app_event_rx.try_recv() {
+                        handle_app_event(&mut terminal, &mut app, ev);
+                    }
                 }
                 Event::Resize(_, _) => {
                     // Keep latest visible on resize only when follow-bottom is enabled
@@ -853,7 +697,18 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
             }
         }
         for ev in drained_events {
+            // ユーザー投稿などの AppEvent を最優先で適用
+            while let Ok(aev) = app.app_event_rx.try_recv() {
+                handle_app_event(&mut terminal, &mut app, aev);
+            }
+
+            // その後に CoreEvent を処理（Assistant のストリーム等）
             handle_core_event(&mut terminal, &mut app, ev);
+
+            // CoreEvent によって即時キューされた AppEvent も同フレームで流す
+            while let Ok(aev) = app.app_event_rx.try_recv() {
+                handle_app_event(&mut terminal, &mut app, aev);
+            }
         }
 
         if app.should_quit {
@@ -935,9 +790,10 @@ where
         }
         CoreEvent::AgentMessageDelta { delta } => {
             // Split incoming delta into normal text vs tool/exec annotations, and group blocks
+            // IMPORTANT: preserve original newline semantics using split_inclusive('\n')
             let mut normal_buf = String::new();
-            for raw in delta.split('\n') {
-                let line = raw.trim_end_matches('\r');
+            for raw in delta.split_inclusive('\n') {
+                let line = raw.trim_end_matches('\n').trim_end_matches('\r');
                 let t = line.trim_start();
                 let is_tool_begin = t.starts_with("[Tool Execution]");
                 let is_tool_mid = t.starts_with('▶');
@@ -1008,7 +864,10 @@ where
                     }
                 } else {
                     normal_buf.push_str(line);
-                    normal_buf.push('\n');
+                    if raw.ends_with('\n') {
+                        // Re-add newline only when it was present in the original chunk
+                        normal_buf.push('\n');
+                    }
                 }
             }
 
@@ -1018,7 +877,10 @@ where
                     insert_history_lines(terminal, lines);
                 }
             }
-            append_log(&format!("assistantΔ: {}", delta.replace('\n', "\\n")));
+            // Debug-only per-chunk logging (default off)
+            if std::env::var("SLIDE_STREAM_DEBUG_CHUNKS").ok().as_deref() == Some("1") {
+                append_log(&format!("assistantΔ: {}", delta.replace('\n', "\\n")));
+            }
             app.approx_output_chars = app.approx_output_chars.saturating_add(delta.len());
         }
         CoreEvent::AgentMessage { message } => {
@@ -1148,12 +1010,7 @@ where
                 insert_history_lines(terminal, tail);
             }
 
-            // Codex-1 style replay: Display pending user messages in reverse order
-            // This ensures proper chronological order (user messages appear above assistant responses)
-            for cell in app.pending_user_messages.iter().rev() {
-                insert_history_lines(terminal, cell.lines());
-            }
-            app.pending_user_messages.clear();
+            // ユーザーメッセージのリプレイは行わない（即時表示へ変更済み）
             // Flush any pending tool/exec blocks to avoid dangling groups
             if let Some(mut blk) = app.pending_tool_block.take() {
                 if let Some(st) = app.pending_tool_started_at.take() {
@@ -1217,6 +1074,151 @@ where
             app.bottom_pane
                 .show_approval_modal(req, app.app_event_tx.clone());
             append_log("[approve] exec requested");
+        }
+    }
+}
+
+fn handle_app_event<B>(terminal: &mut Terminal<B>, app: &mut App, ev: AppEvent)
+where
+    B: ratatui::backend::Backend,
+{
+    match ev {
+        AppEvent::StartFileSearch { query } => {
+            app.bottom_pane.show_file_search();
+            if let Some(p) = app.bottom_pane.file_search_mut() {
+                p.set_query(&query);
+            }
+        }
+        AppEvent::InsertHistoryCell(cell) => {
+            // すべてのメッセージを即時表示（codex と同様）
+            insert_history_lines(terminal, cell.lines());
+        }
+        AppEvent::ToolOutput { text } => {
+            let cell = HistoryCell::new_system_status(SystemLabel::Info, [text]);
+            insert_history_lines(terminal, cell.lines());
+        }
+        AppEvent::StartCommitAnimation => {
+            app.bottom_pane.set_task_running(true);
+        }
+        AppEvent::CommitTick => {
+            let dots = [".", "..", "...", "…." ];
+            app.thinking_frame_idx = app.thinking_frame_idx.wrapping_add(1);
+            let idx = (app.thinking_frame_idx as usize) % dots.len();
+            app.bottom_pane.update_status_header(format!("Working{}", dots[idx]));
+        }
+        AppEvent::StopCommitAnimation => {
+            app.bottom_pane.set_task_running(false);
+        }
+        AppEvent::UpdateModel(model) => {
+            if let Some(agent) = &app.agent {
+                agent.override_turn_context_bg(Some(model.clone()), None, None, None);
+            }
+            app.bottom_pane.set_composer_placeholder(format!("Model: {}", model));
+        }
+        AppEvent::UpdateReasoningEffort(effort) => {
+            if let Some(agent) = &app.agent {
+                agent.override_turn_context_bg(None, effort, None, None);
+            }
+        }
+        AppEvent::UpdateAskForApprovalPolicy(policy) => {
+            if let Some(agent) = &app.agent {
+                agent.override_turn_context_bg(None, None, Some(policy), None);
+            }
+        }
+        AppEvent::UpdateSandboxPolicy(policy) => {
+            if let Some(agent) = &app.agent {
+                agent.override_turn_context_bg(None, None, None, Some(policy));
+            }
+        }
+        AppEvent::PersistModelSelection { .. } => {}
+        AppEvent::ExecApproval { id, decision } => {
+            if let Some(agent) = &app.agent {
+                let c = agent.codex.clone();
+                tokio::spawn(async move {
+                    let _ = c.submit(Op::ExecApproval { id, decision }).await;
+                });
+            }
+        }
+        AppEvent::PatchApproval { id, decision } => {
+            if let Some(agent) = &app.agent {
+                let c = agent.codex.clone();
+                tokio::spawn(async move {
+                    let _ = c.submit(Op::PatchApproval { id, decision }).await;
+                });
+            }
+        }
+        AppEvent::FileReadRequest { path } => {
+            let tx = app.app_event_tx.clone();
+            tokio::spawn(async move {
+                use tokio::io::AsyncReadExt;
+                let pathbuf = std::path::PathBuf::from(&path);
+                let canonical = match tokio::fs::canonicalize(&pathbuf).await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tx.send(AppEvent::FileReadResult { path, content: Err(format!("canonicalize failed: {e}")) });
+                        return;
+                    }
+                };
+                let meta = match tokio::fs::metadata(&canonical).await {
+                    Ok(m) => m,
+                    Err(e) => {
+                        tx.send(AppEvent::FileReadResult { path, content: Err(format!("metadata failed: {e}")) });
+                        return;
+                    }
+                };
+                if !meta.is_file() {
+                    tx.send(AppEvent::FileReadResult { path, content: Err("not a regular file".to_string()) });
+                    return;
+                }
+                let max_bytes: u64 = 256 * 1024;
+                let truncated = meta.len() > max_bytes;
+                let mut file = match tokio::fs::File::open(&canonical).await {
+                    Ok(f) => f,
+                    Err(e) => {
+                        tx.send(AppEvent::FileReadResult { path, content: Err(format!("open failed: {e}")) });
+                        return;
+                    }
+                };
+                let mut buf = Vec::with_capacity((max_bytes as usize).min(262144));
+                let to_read = max_bytes.min(meta.len());
+                let mut reader = tokio::io::BufReader::new(file);
+                let mut handle = reader.take(to_read);
+                if let Err(e) = handle.read_to_end(&mut buf).await {
+                    tx.send(AppEvent::FileReadResult { path, content: Err(format!("read failed: {e}")) });
+                    return;
+                }
+                let mut content = String::from_utf8_lossy(&buf).to_string();
+                if truncated { content.push_str("\n…[truncated]\n"); }
+                tx.send(AppEvent::FileReadResult { path, content: Ok(content) });
+            });
+        }
+        AppEvent::FileReadResult { path, content } => match content {
+            Ok(text) => {
+                let header = format!("{}", path);
+                let mut lines = Vec::new();
+                lines.push(ratatui::text::Line::from(""));
+                lines.push(ratatui::text::Line::from(
+                    ratatui::text::Span::styled(
+                        header,
+                        ratatui::style::Style::default()
+                            .fg(ratatui::style::Color::LightBlue)
+                            .add_modifier(ratatui::style::Modifier::BOLD),
+                    ),
+                ));
+                for l in text.lines() {
+                    lines.push(crate::history_cell::format_content_line(l));
+                }
+                insert_history_lines(terminal, lines);
+            }
+            Err(err) => {
+                let cell = HistoryCell::new_system_status(SystemLabel::Error, [format!("open: {path} — {err}")]);
+                insert_history_lines(terminal, cell.lines());
+            }
+        },
+        AppEvent::FileSearchResults { query, matches } => {
+            if let Some(p) = app.bottom_pane.file_search_mut() {
+                p.set_matches(&query, matches);
+            }
         }
     }
 }

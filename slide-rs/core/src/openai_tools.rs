@@ -333,29 +333,31 @@ pub(crate) fn create_tools_json_for_chat_completions_api(
     Ok(tools_json)
 }
 
-// Simplified MCP tool compatibility - for now just return basic shell tool
 pub(crate) fn mcp_tool_to_openai_tool(
     fully_qualified_name: String,
-    _tool: mcp_types::Tool,
+    tool: mcp_types::Tool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    // For now, return a simplified tool definition
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "input".to_string(),
-        JsonSchema::String {
-            description: Some("Tool input".to_string()),
-        },
-    );
+    let mcp_types::Tool {
+        description,
+        mut input_schema,
+        ..
+    } = tool;
+
+    // Ensure properties exists (Agents SDK does this as well)
+    if input_schema.properties.is_empty() {
+        input_schema.properties.insert("__placeholder__".to_string(), serde_json::Map::new());
+        input_schema.properties.remove("__placeholder__");
+    }
+
+    let mut serialized = serde_json::to_value(input_schema)?;
+    sanitize_json_schema(&mut serialized);
+    let input_schema = serde_json::from_value::<JsonSchema>(serialized)?;
 
     Ok(ResponsesApiTool {
         name: fully_qualified_name,
-        description: "MCP Tool".to_string(),
+        description: description.unwrap_or_default(),
         strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["input".to_string()]),
-            additional_properties: Some(false),
-        },
+        parameters: input_schema,
     })
 }
 

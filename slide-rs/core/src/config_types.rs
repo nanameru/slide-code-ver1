@@ -1,6 +1,8 @@
 use crate::seatbelt::SandboxPolicy;
 use serde::{Deserialize, Serialize};
 use slide_common::ApprovalMode;
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct CoreConfig {
@@ -19,6 +21,18 @@ impl Default for CoreConfig {
             shell_environment_policy: ShellEnvironmentPolicy::default(),
         }
     }
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub struct McpServerConfig {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: Option<HashMap<String, String>>,
+    /// Startup timeout in milliseconds for initializing MCP server & initially listing tools.
+    #[serde(default)]
+    pub startup_timeout_ms: Option<u64>,
 }
 
 /// Controls which environment variables are passed to shell commands

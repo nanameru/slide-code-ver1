@@ -1,5 +1,6 @@
 use crate::approval_manager::AskForApproval;
 use crate::config_types::{CoreConfig, ShellEnvironmentPolicy};
+use std::collections::HashMap as StdHashMap;
 use crate::seatbelt::SandboxPolicy;
 use slide_common::ApprovalMode;
 use serde::{Deserialize, Serialize};
@@ -44,6 +45,9 @@ pub struct Config {
     pub model: String,
     /// Model provider
     pub model_provider: String,
+    /// MCP servers configuration (server name -> spawn config)
+    #[serde(default)]
+    pub mcp_servers: StdHashMap<String, McpServerConfig>,
     /// Configuration profiles
     #[serde(default)]
     pub profiles: HashMap<String, ConfigProfile>,
@@ -104,9 +108,23 @@ impl Default for Config {
             disable_response_storage: false,
             model: "gpt-5".to_string(),
             model_provider: "openai".to_string(),
+            mcp_servers: StdHashMap::new(),
             profiles,
         }
     }
+}
+
+/// Minimal MCP server spawn configuration compatible with mcp-types 0.1.1
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: Option<StdHashMap<String, String>>,
+    /// Startup timeout in milliseconds for initializing & first list_tools
+    #[serde(default)]
+    pub startup_timeout_ms: Option<u64>,
 }
 
 impl Config {
