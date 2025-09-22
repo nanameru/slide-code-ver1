@@ -118,6 +118,8 @@ pub struct App {
     // --- Tool/Exec rendering state (codex-like grouping) ---
     pending_exec_block: Option<Vec<String>>, // captures [Tool Execution]..Result lines as one block
     pending_tool_block: Option<Vec<String>>, // captures generic tool blocks ([Tool Execution] ... [Tool Execution Result])
+    pending_exec_started_at: Option<Instant>,
+    pending_tool_started_at: Option<Instant>,
 }
 
 impl App {
@@ -190,6 +192,8 @@ impl App {
             overlay: PagerOverlay::new(),
             pending_exec_block: None,
             pending_tool_block: None,
+            pending_exec_started_at: None,
+            pending_tool_started_at: None,
         };
         // Write a small banner to the log so the browser viewer has content
         append_log("[info] Slide TUI session started");
@@ -936,12 +940,17 @@ where
                             if app.pending_exec_block.is_none() {
                                 app.pending_exec_block = Some(Vec::new());
                             }
+                            app.pending_exec_started_at = Some(Instant::now());
                             if let Some(ref mut blk) = app.pending_exec_block {
                                 blk.push(line.to_string());
                             }
                         } else {
                             // exit ...
                             if let Some(mut blk) = app.pending_exec_block.take() {
+                                if let Some(st) = app.pending_exec_started_at.take() {
+                                    let ms = st.elapsed().as_millis();
+                                    blk.push(format!("took {}ms", ms));
+                                }
                                 blk.push(line.to_string());
                                 let cell = HistoryCell::new_system_status(SystemLabel::Exec, blk);
                                 insert_history_lines(terminal, cell.lines());
@@ -956,11 +965,16 @@ where
                     if app.pending_tool_block.is_none() {
                         app.pending_tool_block = Some(Vec::new());
                     }
+                    if app.pending_tool_started_at.is_none() { app.pending_tool_started_at = Some(Instant::now()); }
                     if let Some(ref mut blk) = app.pending_tool_block {
                         blk.push(line.to_string());
                     }
                     if is_tool_end {
-                        if let Some(blk) = app.pending_tool_block.take() {
+                        if let Some(mut blk) = app.pending_tool_block.take() {
+                            if let Some(st) = app.pending_tool_started_at.take() {
+                                let ms = st.elapsed().as_millis();
+                                blk.push(format!("took {}ms", ms));
+                            }
                             // Try to classify as MCP/Search ifタグを含む
                             let label = if blk.iter().any(|l| l.contains("MCP:")) || is_mcp_tag {
                                 SystemLabel::Mcp
