@@ -158,12 +158,11 @@ impl ChatComposer {
         ])
         .areas(area);
 
-        let content_area = Rect {
-            x: textarea_rect.x + 3, // 1 for border + 1 for icon + 1 for spacing
-            y: textarea_rect.y + 1, // 1 for top border
-            width: textarea_rect.width.saturating_sub(4), // 2 for borders + 2 for icon and spacing
-            height: textarea_rect.height.saturating_sub(2), // 2 for top and bottom borders
-        };
+        // Use Block's inner method to get the correct content area
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded);
+        let content_area = block.inner(textarea_rect);
 
         let state = self.textarea_state.borrow();
         self.textarea.cursor_pos_with_state(content_area, &*state)
@@ -299,40 +298,31 @@ impl WidgetRef for &ChatComposer {
             Style::default().add_modifier(Modifier::DIM)
         };
 
-        // Render border block around entire textarea
-        Block::default()
+        // Create a Block with icon as title
+        let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(border_style)
-            .render_ref(textarea_rect, buf);
+            .title(Line::from(vec![Span::styled("→ ", border_style)]));
 
-        // Render prompt icon inside the border
-        let icon = "→";
-        let icon_line = Line::from(icon).style(border_style);
-        Paragraph::new(vec![icon_line])
-            .render_ref(
-                Rect::new(textarea_rect.x + 1, textarea_rect.y + 1, 1, 1),
-                buf,
-            );
+        // Get the inner area after applying the block
+        let inner_area = block.inner(textarea_rect);
 
-        // Content area (inside border, after icon)
-        let content_area = Rect {
-            x: textarea_rect.x + 3, // 1 for border + 1 for icon + 1 for spacing
-            y: textarea_rect.y + 1, // 1 for top border
-            width: textarea_rect.width.saturating_sub(4), // 2 for borders + 2 for icon and spacing
-            height: textarea_rect.height.saturating_sub(2), // 2 for top and bottom borders
-        };
+        // Render the block
+        block.render_ref(textarea_rect, buf);
 
+        // Render textarea in the inner area
         {
             let mut state = self.textarea_state.borrow_mut();
-            StatefulWidgetRef::render_ref(&&self.textarea, content_area, buf, &mut *state);
+            StatefulWidgetRef::render_ref(&&self.textarea, inner_area, buf, &mut *state);
         }
 
+        // Render placeholder if textarea is empty
         if self.textarea.is_empty() && !self.placeholder_text.is_empty() {
             let placeholder_line = Line::from(self.placeholder_text.as_str())
                 .style(Style::default().add_modifier(Modifier::DIM));
             Paragraph::new(vec![placeholder_line])
-                .render_ref(content_area.inner(Margin::new(1, 0)), buf);
+                .render_ref(inner_area, buf);
         }
 
         // Render hints if enabled
