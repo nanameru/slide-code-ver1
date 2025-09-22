@@ -26,6 +26,8 @@ pub enum SystemLabel {
     Diff,
     Error,
     Info,
+    Mcp,
+    Search,
 }
 
 impl HistoryCell {
@@ -136,6 +138,8 @@ impl SystemLabel {
             SystemLabel::Diff => "diff".light_blue().bold(),
             SystemLabel::Error => "error".red().bold(),
             SystemLabel::Info => "info".blue().bold(),
+            SystemLabel::Mcp => "mcp".light_magenta().bold(),
+            SystemLabel::Search => "search".yellow().bold(),
         }
     }
 }
@@ -171,6 +175,8 @@ fn build_status_block(label: SystemLabel, lines: &[String]) -> Vec<Line<'static>
             SystemLabel::Error => format_error_line(line),
             SystemLabel::Diff => format_content_line(line),
             SystemLabel::Info => format_content_line(line),
+            SystemLabel::Mcp => format_content_line(line),
+            SystemLabel::Search => format_content_line(line),
         };
         out.push(rendered);
     }

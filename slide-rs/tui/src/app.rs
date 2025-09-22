@@ -919,6 +919,8 @@ where
                 let is_tool_begin = t.starts_with("[Tool Execution]");
                 let is_tool_mid = t.starts_with('▶');
                 let is_tool_end = t.starts_with("[Tool Execution Result]");
+                let is_mcp_tag = t.contains("MCP:") || t.contains("Tool:");
+                let is_search_tag = t.contains("WebSearch:") || t.contains("Search:");
                 let is_exec_begin = t.starts_with("$ ");
                 let is_exec_end = t.starts_with("exit ");
 
@@ -959,7 +961,15 @@ where
                     }
                     if is_tool_end {
                         if let Some(blk) = app.pending_tool_block.take() {
-                            let cell = HistoryCell::new_system_status(SystemLabel::Info, blk);
+                            // Try to classify as MCP/Search ifタグを含む
+                            let label = if blk.iter().any(|l| l.contains("MCP:")) || is_mcp_tag {
+                                SystemLabel::Mcp
+                            } else if blk.iter().any(|l| l.contains("WebSearch:")) || is_search_tag {
+                                SystemLabel::Search
+                            } else {
+                                SystemLabel::Info
+                            };
+                            let cell = HistoryCell::new_system_status(label, blk);
                             insert_history_lines(terminal, cell.lines());
                         }
                     }
@@ -1072,7 +1082,14 @@ where
             }
             // Flush any pending tool/exec blocks to avoid dangling groups
             if let Some(blk) = app.pending_tool_block.take() {
-                let cell = HistoryCell::new_system_status(SystemLabel::Info, blk);
+                let label = if blk.iter().any(|l| l.contains("MCP:")) {
+                    SystemLabel::Mcp
+                } else if blk.iter().any(|l| l.contains("WebSearch:")) || blk.iter().any(|l| l.contains("Search:")) {
+                    SystemLabel::Search
+                } else {
+                    SystemLabel::Info
+                };
+                let cell = HistoryCell::new_system_status(label, blk);
                 insert_history_lines(terminal, cell.lines());
             }
             if let Some(blk) = app.pending_exec_block.take() {
