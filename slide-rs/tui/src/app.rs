@@ -275,13 +275,15 @@ impl App {
                     items.push(crate::bottom_pane::list_selection_view::SelectionItem {
                         name: name.clone(),
                         description: desc,
-                        is_current: settings::current_model().as_deref() == Some(p.model),
+                        is_current: settings::current_model().as_deref() == Some(p.model)
+                            && settings::current_effort() == effort,
                         actions: vec![Box::new(move |t: &AppEventSender| {
                             t.send(AppEvent::UpdateModel(model_slug.clone()));
                             t.send(AppEvent::UpdateReasoningEffort(effort));
                             tx.send(AppEvent::PersistModelSelection { model: model_slug.clone(), effort });
                             t.send(AppEvent::ToolOutput { text: format!("Model: {}", name) });
                             settings::save_model(&model_slug);
+                            settings::save_effort(effort);
                         })],
                     });
                 }
