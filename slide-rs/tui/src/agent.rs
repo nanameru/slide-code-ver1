@@ -2,6 +2,7 @@ use anyhow::Result;
 use slide_core::client::{ModelClient, OpenAiAdapter, StubClient};
 use slide_core::codex::{Codex, CodexSpawnOk, Event as CoreEvent, Op};
 use slide_core::protocol::ReasoningEffort as ReasoningEffortConfig;
+use slide_core::protocol::{CoreAskForApproval as AskForApproval, CoreSandboxPolicy as SandboxPolicy};
 use slide_core::protocol::InputItem;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -71,14 +72,16 @@ impl AgentHandle {
         &self,
         model: Option<String>,
         effort: Option<ReasoningEffortConfig>,
+        approval: Option<AskForApproval>,
+        sandbox: Option<SandboxPolicy>,
     ) {
         let c = self.codex.clone();
         tokio::spawn(async move {
             let _ = c
                 .submit(Op::OverrideTurnContext {
                     cwd: None,
-                    approval_policy: None,
-                    sandbox_policy: None,
+                    approval_policy: approval,
+                    sandbox_policy: sandbox,
                     model,
                     effort,
                     summary: None,

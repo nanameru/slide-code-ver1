@@ -284,6 +284,59 @@ impl App {
                 );
                 return;
             }
+            KeyEvent { code: KeyCode::Char('a'), modifiers: KeyModifiers::CONTROL, .. } => {
+                // Approvals popup (approval policy + sandbox)
+                use slide_core::protocol::{CoreAskForApproval as AskForApproval, CoreSandboxPolicy as SandboxPolicy};
+                let items: Vec<crate::bottom_pane::list_selection_view::SelectionItem> = vec![
+                    {
+                        let tx = self.app_event_tx.clone();
+                        crate::bottom_pane::list_selection_view::SelectionItem {
+                            name: "On-request + Workspace-write".to_string(),
+                            description: Some("ask on request; write in workspace; no network".to_string()),
+                            is_current: false,
+                            actions: vec![Box::new(move |t: &AppEventSender| {
+                                t.send(AppEvent::UpdateAskForApprovalPolicy(AskForApproval::OnRequest));
+                                t.send(AppEvent::UpdateSandboxPolicy(SandboxPolicy::default()));
+                                tx.send(AppEvent::ToolOutput { text: "Approval: on-request, Sandbox: workspace-write".to_string() });
+                            })],
+                        }
+                    },
+                    {
+                        let tx = self.app_event_tx.clone();
+                        crate::bottom_pane::list_selection_view::SelectionItem {
+                            name: "Unless-trusted + Read-only".to_string(),
+                            description: Some("ask unless trusted; read-only".to_string()),
+                            is_current: false,
+                            actions: vec![Box::new(move |t: &AppEventSender| {
+                                t.send(AppEvent::UpdateAskForApprovalPolicy(AskForApproval::UnlessTrusted));
+                                t.send(AppEvent::UpdateSandboxPolicy(SandboxPolicy::ReadOnly));
+                                tx.send(AppEvent::ToolOutput { text: "Approval: unless-trusted, Sandbox: read-only".to_string() });
+                            })],
+                        }
+                    },
+                    {
+                        let tx = self.app_event_tx.clone();
+                        crate::bottom_pane::list_selection_view::SelectionItem {
+                            name: "Never + Danger-full-access".to_string(),
+                            description: Some("no prompts; full access (danger)".to_string()),
+                            is_current: false,
+                            actions: vec![Box::new(move |t: &AppEventSender| {
+                                t.send(AppEvent::UpdateAskForApprovalPolicy(AskForApproval::Never));
+                                t.send(AppEvent::UpdateSandboxPolicy(SandboxPolicy::DangerFullAccess));
+                                tx.send(AppEvent::ToolOutput { text: "Approval: never, Sandbox: danger-full-access".to_string() });
+                            })],
+                        }
+                    },
+                ];
+                self.bottom_pane.show_selection_view(
+                    "Select approval & sandbox".to_string(),
+                    None,
+                    Some("Enter to confirm, Esc to dismiss".to_string()),
+                    items,
+                    self.app_event_tx.clone(),
+                );
+                return;
+            }
             KeyEvent {
                 code: KeyCode::Char('h'),
                 modifiers: KeyModifiers::CONTROL,
@@ -627,14 +680,24 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
                 }
                 AppEvent::UpdateModel(model) => {
                     if let Some(agent) = &app.agent {
-                        agent.override_turn_context_bg(Some(model.clone()), None);
+                        agent.override_turn_context_bg(Some(model.clone()), None, None, None);
                     }
                     // Update composer placeholder locally to reflect model
                     app.bottom_pane.set_composer_placeholder(format!("Model: {}", model));
                 }
                 AppEvent::UpdateReasoningEffort(effort) => {
                     if let Some(agent) = &app.agent {
-                        agent.override_turn_context_bg(None, effort);
+                        agent.override_turn_context_bg(None, effort, None, None);
+                    }
+                }
+                AppEvent::UpdateAskForApprovalPolicy(policy) => {
+                    if let Some(agent) = &app.agent {
+                        agent.override_turn_context_bg(None, None, Some(policy), None);
+                    }
+                }
+                AppEvent::UpdateSandboxPolicy(policy) => {
+                    if let Some(agent) = &app.agent {
+                        agent.override_turn_context_bg(None, None, None, Some(policy));
                     }
                 }
                 AppEvent::PersistModelSelection { .. } => {

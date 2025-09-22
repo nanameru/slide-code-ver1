@@ -125,11 +125,15 @@ impl Codex {
             // Persisted turn-overrides (minimal): applied to future turns
             let mut current_model: Option<String> = std::env::var("SLIDE_MODEL").ok();
             let mut current_effort: Option<ReasoningEffort> = None;
+            let mut current_approval: crate::approval_manager::AskForApproval = crate::approval_manager::AskForApproval::default();
+            let mut current_sandbox: crate::seatbelt::SandboxPolicy = crate::seatbelt::SandboxPolicy::default();
             while let Some(op) = rx_submit.recv().await {
                 match op {
-                    Op::OverrideTurnContext { cwd: _cwd, approval_policy: _ap, sandbox_policy: _sb, model, effort, summary: _ } => {
+                    Op::OverrideTurnContext { cwd: _cwd, approval_policy, sandbox_policy, model, effort, summary: _ } => {
                         if model.is_some() { current_model = model; }
                         if effort.is_some() { current_effort = effort; }
+                        if let Some(ap) = approval_policy { current_approval = ap; }
+                        if let Some(sb) = sandbox_policy { current_sandbox = sb; }
                         // No immediate event; next turn will use updated context annotations.
                     }
                     Op::UserInput { text } => {
@@ -230,6 +234,8 @@ impl Codex {
                         if let Some(e) = current_effort {
                             context_note.push_str(&format!("\n[Reasoning: {}]", e.to_string()));
                         }
+                        context_note.push_str(&format!("\n[Approval: {:?}]", current_approval));
+                        context_note.push_str(&format!("\n[Sandbox: {:?}]", current_sandbox));
                         let composed = format!(
                             "{}{}{}\n\nUser: {}",
                             tool_instructions, context_note, history_block, text
@@ -445,6 +451,8 @@ impl Codex {
                         let mut context_note = String::new();
                         if let Some(m) = &current_model { context_note.push_str(&format!("\n[Model: {}]", m)); }
                         if let Some(e) = current_effort { context_note.push_str(&format!("\n[Reasoning: {}]", e.to_string())); }
+                        context_note.push_str(&format!("\n[Approval: {:?}]", current_approval));
+                        context_note.push_str(&format!("\n[Sandbox: {:?}]", current_sandbox));
                         let mut composed = format!("{}{}{}\n\nUser: {}", tool_instructions, context_note, history_block, text_part);
                         if img_count > 0 { composed.push_str(&format!("\n\n[{} image attachment(s)]", img_count)); }
 

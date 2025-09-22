@@ -1,5 +1,6 @@
 use slide_core::codex::ReviewDecision;
 use slide_core::protocol::ReasoningEffort as ReasoningEffortConfig;
+use slide_core::protocol::{CoreAskForApproval as AskForApproval, CoreSandboxPolicy as SandboxPolicy};
 use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Debug, Clone)]
@@ -49,6 +50,10 @@ pub enum AppEvent {
     UpdateReasoningEffort(Option<ReasoningEffortConfig>),
     /// Persist model selection (no-op placeholder)
     PersistModelSelection { model: String, effort: Option<ReasoningEffortConfig> },
+
+    /// Update approval/sandbox presets for subsequent turns
+    UpdateAskForApprovalPolicy(AskForApproval),
+    UpdateSandboxPolicy(SandboxPolicy),
 }
 
 #[derive(Clone, Default)]
