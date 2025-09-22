@@ -4,13 +4,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use std::time::Instant;
+use tokio::process::Command;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use std::process::Stdio;
 use tokio::sync::Mutex;
 
 use crate::client::{ModelClient, ResponseEvent, OpenAiAdapter, StubClient};
 use crate::openai_tools::{render_tools_instructions, ToolsConfig, ToolsConfigParams};
 use crate::protocol::{ReasoningEffort, ReasoningSummary};
 use protocol::protocol::InputItem;
-use crate::tool_executor::ToolExecutor;
+use crate::tool_executor::{ToolExecutor, ToolCall};
 use slide_chatgpt::client::{ChatGptClient, SlideRequest};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,6 +174,9 @@ impl Codex {
             } else {
                 Arc::new(OpenAiAdapter::new(api_key.clone()))
             };
+            // Handle to the currently running shell process (for interrupt)
+            let running_child: Arc<tokio::sync::Mutex<Option<(u64, tokio::process::Child, Instant)>>> =
+                Arc::new(tokio::sync::Mutex::new(None));
             while let Some(op) = rx_submit.recv().await {
                 match op {
                     Op::OverrideTurnContext { cwd: _cwd, approval_policy, sandbox_policy, model, effort, summary: _ } => {
@@ -357,27 +363,128 @@ impl Codex {
                                                             appended.push_str(&announce);
 
                                                             let started = Instant::now();
-                                                            match tool_executor.execute_tool_call(tool_call).await {
-                                                                Ok(exec_output) => {
-                                                                    for ln in exec_output.lines() {
-                                                                        let _ = tx_event.send(Event::ToolOutput { id, stream: ToolStream::Stdout, line: ln.to_string() }).await;
+                                                            match tool_call {
+                                                                ToolCall::Shell { command, working_dir, with_escalated_permissions, justification: _j, timeout_ms } => {
+                                                                    // Streaming execution
+                                                                    let mut cmd = Command::new(&command[0]);
+                                                                    cmd.args(&command[1..]);
+                                                                    let run_cwd = working_dir.unwrap_or_else(|| cwd.clone());
+                                                                    cmd.current_dir(&run_cwd);
+                                                                    cmd.stdin(Stdio::null());
+                                                                    cmd.stdout(Stdio::piped());
+                                                                    cmd.stderr(Stdio::piped());
+                                                                    // minimal env policy (reuse existing creator)
+                                                                    let env_map = crate::exec_env::create_env(&crate::config_types::ShellEnvironmentPolicy::default());
+                                                                    cmd.env_clear();
+                                                                    cmd.envs(env_map);
+                                                                    let child = match cmd.spawn() {
+                                                                        Ok(c) => c,
+                                                                        Err(e) => {
+                                                                            let err_text = e.to_string();
+                                                                            let took_ms = started.elapsed().as_millis();
+                                                                            let _ = tx_event.send(Event::ToolEnd { id, ok: false, exit_code: None, took_ms }).await;
+                                                                            let block = format!("\n\n[Tool Execution Result]\nFailed: {}", err_text);
+                                                                            let _ = tx_event.send(Event::AgentMessageDelta { delta: block }).await;
+                                                                            break;
+                                                                        }
+                                                                    };
+                                                                    // Save handle for possible interrupt
+                                                                    {
+                                                                        let mut g = running_child.lock().await;
+                                                                        *g = Some((id, child, started));
                                                                     }
-                                                                    let took_ms = started.elapsed().as_millis();
-                                                                    let _ = tx_event.send(Event::ToolEnd { id, ok: true, exit_code: None, took_ms }).await;
-                                                                    // Fallback block
-                                                                    let block = format!("\n\n[Tool Execution Result]\n{}", exec_output);
-                                                                    let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
-                                                                    appended.push_str(&block);
+                                                                    // take stdout/stderr from the saved handle
+                                                                    let out_opt = {
+                                                                        let mut g = running_child.lock().await;
+                                                                        g.as_mut().and_then(|(_, ch, _)| ch.stdout.take())
+                                                                    };
+                                                                    if let Some(out) = out_opt {
+                                                                        let mut br = BufReader::new(out).lines();
+                                                                        let tx = tx_event.clone();
+                                                                        let idc = id;
+                                                                        tokio::spawn(async move {
+                                                                            while let Ok(Some(line)) = br.next_line().await {
+                                                                                let _ = tx.send(Event::ToolOutput { id: idc, stream: ToolStream::Stdout, line }).await;
+                                                                            }
+                                                                        });
+                                                                    }
+                                                                    let err_opt = {
+                                                                        let mut g = running_child.lock().await;
+                                                                        g.as_mut().and_then(|(_, ch, _)| ch.stderr.take())
+                                                                    };
+                                                                    if let Some(err) = err_opt {
+                                                                        let mut br = BufReader::new(err).lines();
+                                                                        let tx = tx_event.clone();
+                                                                        let idc = id;
+                                                                        tokio::spawn(async move {
+                                                                            while let Ok(Some(line)) = br.next_line().await {
+                                                                                let _ = tx.send(Event::ToolOutput { id: idc, stream: ToolStream::Stderr, line }).await;
+                                                                            }
+                                                                        });
+                                                                    }
+                                                                    // Wait for completion (or detect that it was killed)
+                                                                    let status_opt = {
+                                                                        let mut g = running_child.lock().await;
+                                                                        if let Some((_, ch, _)) = g.as_mut() { Some(ch.wait().await) } else { None }
+                                                                    };
+                                                                    if let Some(wait_res) = status_opt {
+                                                                        let status = match wait_res {
+                                                                            Ok(s) => s,
+                                                                            Err(e) => {
+                                                                                let err_text = e.to_string();
+                                                                                let took_ms = {
+                                                                                    let mut g = running_child.lock().await;
+                                                                                    g.take().map(|(_, _, st)| st.elapsed().as_millis()).unwrap_or_else(|| started.elapsed().as_millis())
+                                                                                };
+                                                                                let _ = tx_event.send(Event::ToolEnd { id, ok: false, exit_code: None, took_ms }).await;
+                                                                                let block = format!("\n\n[Tool Execution Result]\nFailed: {}", err_text);
+                                                                                let _ = tx_event.send(Event::AgentMessageDelta { delta: block }).await;
+                                                                                break;
+                                                                            }
+                                                                        };
+                                                                        let code = status.code();
+                                                                        let took_ms = {
+                                                                            let mut g = running_child.lock().await;
+                                                                            g.take().map(|(_, _, st)| st.elapsed().as_millis()).unwrap_or_else(|| started.elapsed().as_millis())
+                                                                        };
+                                                                        let _ = tx_event.send(Event::ToolEnd { id, ok: status.success(), exit_code: code, took_ms }).await;
+                                                                        // keep fallback block minimal (no duplication of streamed lines)
+                                                                        let fallback = format!("\n\n[Tool Execution Result]\nexit {:?}", code);
+                                                                        let _ = tx_event.send(Event::AgentMessageDelta { delta: fallback.clone() }).await;
+                                                                        appended.push_str(&fallback);
+                                                                    } else {
+                                                                        // Already killed (interrupt)
+                                                                        let took_ms = {
+                                                                            let mut g = running_child.lock().await;
+                                                                            g.take().map(|(_, _, st)| st.elapsed().as_millis()).unwrap_or_else(|| started.elapsed().as_millis())
+                                                                        };
+                                                                        let _ = tx_event.send(Event::ToolEnd { id, ok: false, exit_code: None, took_ms }).await;
+                                                                        continue;
+                                                                    }
+                                                                }
+                                                                other_call => {
+                                                                    match tool_executor.execute_tool_call(other_call).await {
+                                                                     Ok(exec_output) => {
+                                                                         for ln in exec_output.lines() {
+                                                                             let _ = tx_event.send(Event::ToolOutput { id, stream: ToolStream::Stdout, line: ln.to_string() }).await;
+                                                                         }
+                                                                         let took_ms = started.elapsed().as_millis();
+                                                                         let _ = tx_event.send(Event::ToolEnd { id, ok: true, exit_code: None, took_ms }).await;
+                                                                         // Fallback block
+                                                                         let block = format!("\n\n[Tool Execution Result]\n{}", exec_output);
+                                                                         let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
+                                                                         appended.push_str(&block);
                                                                 }
                                                                 Err(err) => {
                                                                     let err_text = err.to_string();
-                                                                    let took_ms = started.elapsed().as_millis();
-                                                                    let _ = tx_event.send(Event::ToolEnd { id, ok: false, exit_code: None, took_ms }).await;
-                                                                    let block = format!("\n\n[Tool Execution Result]\nFailed: {}", err_text);
-                                                                    let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
-                                                                    let _ = tx_event.send(Event::Error { message: format!("Tool execution failed: {}", err_text) }).await;
+                                                                         let took_ms = started.elapsed().as_millis();
+                                                                         let _ = tx_event.send(Event::ToolEnd { id, ok: false, exit_code: None, took_ms }).await;
+                                                                         let block = format!("\n\n[Tool Execution Result]\nFailed: {}", err_text);
+                                                                         let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
+                                                                         let _ = tx_event.send(Event::Error { message: format!("Tool execution failed: {}", err_text) }).await;
                                                                     appended.push_str(&block);
                                                                     break;
+                                                                     }
                                                                 }
                                                             }
                                                         }
@@ -398,9 +505,10 @@ impl Codex {
                                                                 convo.drain(0..drop);
                                                             }
                                                         }
-                                                    }
                                                 }
-                                                Err(e) => {
+                                            }
+                                            }
+                                            Err(e) => {
                                                     let _ = tx_event
                                                         .send(Event::Error {
                                                             message: format!(
@@ -574,7 +682,12 @@ impl Codex {
                         }
                     }
                     Op::Interrupt => {
-                        // Minimal implementation: no-op for now
+                        let mut g = running_child.lock().await;
+                        if let Some((rid, mut child, st)) = g.take() {
+                            let _ = child.kill().await;
+                            let took_ms = st.elapsed().as_millis();
+                            let _ = tx_event.send(Event::ToolEnd { id: rid, ok: false, exit_code: None, took_ms }).await;
+                        }
                     }
                     Op::ExecApproval { .. } => {
                         // Minimal placeholder: in full core this would resolve a pending approval

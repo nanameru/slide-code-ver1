@@ -49,7 +49,10 @@ pub fn insert_history_lines_to_writer<B, W>(
 
     // Pre-wrap lines using word-aware wrapping so terminal scrollback sees the same
     // formatting as the TUI. This avoids character-level hard wrapping by the terminal.
-    let wrapped = word_wrap_lines(&lines, area.width.max(1));
+    // Use the full screen width for wrapping to avoid overly narrow wrapping when the
+    // viewport width is restricted by the bottom input pane.
+    let wrap_width = screen_size.width.max(1);
+    let wrapped = word_wrap_lines(&lines, wrap_width);
     let wrapped_lines = wrapped.len() as u16;
     let cursor_top = if area.bottom() < screen_size.height {
         // If the viewport is not at the bottom of the screen, scroll it down to make room.
@@ -103,7 +106,14 @@ pub fn insert_history_lines_to_writer<B, W>(
 
     for line in wrapped {
         queue!(writer, Print("\r\n")).ok();
-        write_spans(writer, line.iter()).ok();
+        // Merge line-level style into each span so that ANSI reflects line styling
+        // across all wrapped fragments (e.g., blockquotes, list markers).
+        let merged_spans: Vec<Span> = line
+            .spans
+            .iter()
+            .map(|s| Span { style: s.style.patch(line.style), content: s.content.clone() })
+            .collect();
+        write_spans(writer, merged_spans.iter()).ok();
     }
 
     queue!(writer, ResetScrollRegion).ok();

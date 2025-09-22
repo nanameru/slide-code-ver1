@@ -1043,13 +1043,10 @@ where
             let cell = HistoryCell::new_system_status(label, [format!("▶ {}", summary)]);
             insert_history_lines(terminal, cell.lines());
         }
-        CoreEvent::ToolOutput { id: _id, stream, line } => {
-            // Append to pending tool block; stderr lines dim/red later when flushing
-            if let Some(ref mut blk) = app.pending_tool_block {
-                blk.push(line.clone());
-            } else {
-                app.pending_tool_block = Some(vec![line.clone()]);
-            }
+        CoreEvent::ToolOutput { id: _id, stream: _, line } => {
+            // Render 1 line immediately (use content formatter; stderr coloring handled by prefix in core in future)
+            let styled = crate::history_cell::format_content_line(&line);
+            insert_history_lines(terminal, vec![styled]);
         }
         CoreEvent::ToolEnd { id: _id, ok, exit_code, took_ms } => {
             if let Some(mut blk) = app.pending_tool_block.take() {
