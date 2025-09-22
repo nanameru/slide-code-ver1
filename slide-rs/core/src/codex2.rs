@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 
 use crate::client::{ModelClient, ResponseEvent, OpenAiAdapter, StubClient};
@@ -29,6 +30,24 @@ pub enum Event {
     },
     AgentMessage {
         message: String,
+    },
+    /// Explicit tool lifecycle events (codex-1 parity)
+    ToolBegin {
+        id: u64,
+        kind: ToolKind,
+        summary: String,
+        cwd: PathBuf,
+    },
+    ToolOutput {
+        id: u64,
+        stream: ToolStream,
+        line: String,
+    },
+    ToolEnd {
+        id: u64,
+        ok: bool,
+        exit_code: Option<i32>,
+        took_ms: u128,
     },
     ExecCommandBegin {
         command: Vec<String>,
@@ -60,6 +79,20 @@ pub enum Event {
         cwd: PathBuf,
         reason: Option<String>,
     },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ToolKind {
+    Exec,
+    Mcp,
+    Search,
+    Info,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ToolStream {
+    Stdout,
+    Stderr,
 }
 
 #[derive(Debug, Clone)]
@@ -122,6 +155,8 @@ impl Codex {
             let slide_client = ChatGptClient::new(api_key.clone());
             // Keep recent conversation messages (role, text). Oldest first.
             let mut convo: Vec<(String, String)> = Vec::new();
+            // Monotonic identifier for tool lifecycles
+            let mut next_tool_id: u64 = 1;
             // Persisted turn-overrides (minimal): applied to future turns
             let mut current_model: Option<String> = std::env::var("SLIDE_MODEL").ok();
             let mut current_effort: Option<ReasoningEffort> = None;
@@ -312,56 +347,35 @@ impl Codex {
                                                         let mut appended = String::new();
 
                                                         for tool_call in tool_calls {
-                                                            let announce = format!(
-                                                                "\n\n[Tool Execution]\n▶ {}",
-                                                                tool_call.summary()
-                                                            );
-                                                            let _ = tx_event
-                                                                .send(Event::AgentMessageDelta {
-                                                                    delta: announce.clone(),
-                                                                })
-                                                                .await;
+                                                            let id = next_tool_id; next_tool_id += 1;
+                                                            let summary = tool_call.summary();
+                                                            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                                                            let _ = tx_event.send(Event::ToolBegin { id, kind: ToolKind::Exec, summary: summary.clone(), cwd: cwd.clone() }).await;
+                                                            // Fallback heuristic line for current TUI
+                                                            let announce = format!("\n\n[Tool Execution]\n▶ {}", summary);
+                                                            let _ = tx_event.send(Event::AgentMessageDelta { delta: announce.clone() }).await;
                                                             appended.push_str(&announce);
 
-                                                            match tool_executor
-                                                                .execute_tool_call(tool_call)
-                                                                .await
-                                                            {
+                                                            let started = Instant::now();
+                                                            match tool_executor.execute_tool_call(tool_call).await {
                                                                 Ok(exec_output) => {
-                                                                    let block = format!(
-                                                                        "\n\n[Tool Execution Result]\n{}",
-                                                                        exec_output
-                                                                    );
-                                                                    let _ = tx_event
-                                                                        .send(
-                                                                            Event::AgentMessageDelta {
-                                                                                delta: block.clone(),
-                                                                            },
-                                                                        )
-                                                                        .await;
+                                                                    for ln in exec_output.lines() {
+                                                                        let _ = tx_event.send(Event::ToolOutput { id, stream: ToolStream::Stdout, line: ln.to_string() }).await;
+                                                                    }
+                                                                    let took_ms = started.elapsed().as_millis();
+                                                                    let _ = tx_event.send(Event::ToolEnd { id, ok: true, exit_code: None, took_ms }).await;
+                                                                    // Fallback block
+                                                                    let block = format!("\n\n[Tool Execution Result]\n{}", exec_output);
+                                                                    let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
                                                                     appended.push_str(&block);
                                                                 }
                                                                 Err(err) => {
                                                                     let err_text = err.to_string();
-                                                                    let block = format!(
-                                                                        "\n\n[Tool Execution Result]\nFailed: {}",
-                                                                        err_text
-                                                                    );
-                                                                    let _ = tx_event
-                                                                        .send(
-                                                                            Event::AgentMessageDelta {
-                                                                                delta: block.clone(),
-                                                                            },
-                                                                        )
-                                                                        .await;
-                                                                    let _ = tx_event
-                                                                        .send(Event::Error {
-                                                                            message: format!(
-                                                                                "Tool execution failed: {}",
-                                                                                err_text
-                                                                            ),
-                                                                        })
-                                                                        .await;
+                                                                    let took_ms = started.elapsed().as_millis();
+                                                                    let _ = tx_event.send(Event::ToolEnd { id, ok: false, exit_code: None, took_ms }).await;
+                                                                    let block = format!("\n\n[Tool Execution Result]\nFailed: {}", err_text);
+                                                                    let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
+                                                                    let _ = tx_event.send(Event::Error { message: format!("Tool execution failed: {}", err_text) }).await;
                                                                     appended.push_str(&block);
                                                                     break;
                                                                 }
