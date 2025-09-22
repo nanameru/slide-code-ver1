@@ -296,12 +296,12 @@ impl WidgetRef for &ChatComposer {
             Style::default().add_modifier(Modifier::DIM)
         };
 
-        Block::default()
-            .borders(Borders::LEFT)
-            .border_type(BorderType::QuadrantOutside)
-            .border_style(border_style)
+        // Render prompt icon instead of border
+        let icon = if self.has_focus { "→" } else { "→" };
+        let icon_line = Line::from(icon).style(border_style);
+        Paragraph::new(vec![icon_line])
             .render_ref(
-                Rect::new(textarea_rect.x, textarea_rect.y, 1, textarea_rect.height),
+                Rect::new(textarea_rect.x, textarea_rect.y, 1, 1),
                 buf,
             );
 

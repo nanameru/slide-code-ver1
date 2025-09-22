@@ -182,7 +182,7 @@ impl App {
             recent_files,
             agent: None,
             // Empty placeholder to hide any ghost text in input
-            bottom_pane: BottomPane::new(BottomPaneParams{ has_input_focus: true, placeholder_text: "".into()}),
+            bottom_pane: BottomPane::new(BottomPaneParams{ has_input_focus: true, placeholder_text: "Add a follow-up".into()}),
             app_event_rx: app_rx,
             app_event_tx: app_tx,
             // pending_history_lines removed - history cells now insert directly
