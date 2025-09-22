@@ -1031,12 +1031,18 @@ where
             let tail = app.answer_stream.finalize();
             if !tail.is_empty() { insert_history_lines(terminal, tail); }
             app.pending_exec_block = Some(vec![format!("$ {}", command.join(" "))]);
+            app.pending_exec_started_at = Some(Instant::now());
+            app.bottom_pane.update_status_header(format!("Running: {}", command.join(" ")));
             append_log("[exec] begin");
         }
         CoreEvent::ExecCommandEnd { exit_code, .. } => {
             // Close and flush exec block if present; otherwise print a one-liner
             let exit_line = format!("exit {}", exit_code);
             if let Some(mut blk) = app.pending_exec_block.take() {
+                if let Some(st) = app.pending_exec_started_at.take() {
+                    let ms = st.elapsed().as_millis();
+                    blk.push(format!("took {}ms", ms));
+                }
                 blk.push(exit_line);
                 let cell = HistoryCell::new_system_status(SystemLabel::Exec, blk);
                 insert_history_lines(terminal, cell.lines());
@@ -1044,6 +1050,7 @@ where
                 let cell = HistoryCell::new_system_status(SystemLabel::Exec, [exit_line.clone()]);
                 insert_history_lines(terminal, cell.lines());
             }
+            app.bottom_pane.update_status_header("Working".to_string());
             append_log("[exec] end");
         }
         CoreEvent::ApplyPatchApprovalRequest {
@@ -1095,7 +1102,11 @@ where
                 insert_history_lines(terminal, tail);
             }
             // Flush any pending tool/exec blocks to avoid dangling groups
-            if let Some(blk) = app.pending_tool_block.take() {
+            if let Some(mut blk) = app.pending_tool_block.take() {
+                if let Some(st) = app.pending_tool_started_at.take() {
+                    let ms = st.elapsed().as_millis();
+                    blk.push(format!("took {}ms", ms));
+                }
                 let label = if blk.iter().any(|l| l.contains("MCP:")) {
                     SystemLabel::Mcp
                 } else if blk.iter().any(|l| l.contains("WebSearch:")) || blk.iter().any(|l| l.contains("Search:")) {
@@ -1110,6 +1121,7 @@ where
                 let cell = HistoryCell::new_system_status(SystemLabel::Exec, blk);
                 insert_history_lines(terminal, cell.lines());
             }
+            app.bottom_pane.update_status_header("Working".to_string());
             append_log("[task] complete");
             app.app_event_tx.send(AppEvent::StopCommitAnimation);
             // simple inline notification (one-line)
