@@ -89,4 +89,11 @@ impl AgentHandle {
                 .await;
         });
     }
+
+    pub fn interrupt_bg(&self) {
+        let c = self.codex.clone();
+        tokio::spawn(async move {
+            let _ = c.submit(Op::Interrupt).await;
+        });
+    }
 }

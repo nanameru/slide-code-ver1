@@ -264,9 +264,13 @@ impl App {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             }
-            | KeyEvent {
-                code: KeyCode::Esc, ..
-            } => {
+            | KeyEvent { code: KeyCode::Esc, .. } => {
+                if self.bottom_pane.is_task_running() {
+                    if let Some(agent) = &self.agent {
+                        agent.interrupt_bg();
+                    }
+                    return;
+                }
                 if self.show_modal {
                     self.show_modal = false;
                 } else {
@@ -424,7 +428,7 @@ impl App {
                     {
                         let images = self.bottom_pane.take_recent_submission_images();
                         if images.is_empty() {
-                            self.submit_message(text);
+                    self.submit_message(text);
                         } else {
                             // Build items: text then LocalImage(s)
                             let mut items: Vec<InputItem> = Vec::new();
@@ -896,7 +900,7 @@ where
             // Bottom pane (input area) using render_ref
             app.bottom_pane.render_ref(Rect { x: input_area.x, y: input_area.y + status_height, width: input_area.width, height: bottom_height }, f.buffer_mut());
             if let Some((x, y)) = app.bottom_pane.cursor_pos(Rect { x: input_area.x, y: input_area.y + status_height, width: input_area.width, height: bottom_height }) {
-                f.set_cursor_position((x, y));
+            f.set_cursor_position((x, y));
             }
         }
     })?;
