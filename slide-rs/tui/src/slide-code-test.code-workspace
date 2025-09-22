@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"path": "../../.."
+		},
+		{
+			"path": "../../../../gemini-cli-3"
+		},
+		{
+			"path": "../../../../chalk-animation"
+		},
+		{
+			"path": "../../../../codex-1"
+		}
+	],
+	"settings": {}
+}

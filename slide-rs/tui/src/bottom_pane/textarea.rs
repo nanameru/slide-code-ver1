@@ -930,9 +930,8 @@ impl TextArea {
             let r = &lines[idx];
             let y = area.y + row as u16;
             let line_range = r.start..r.end - 1;
-            // Draw base line with explicit white text for visibility.
-            let text_style = Style::default().fg(Color::White);
-            buf.set_string(area.x, y, &self.text[line_range.clone()], text_style);
+            // Use terminal's default foreground color (adapts to theme)
+            buf.set_string(area.x, y, &self.text[line_range.clone()], Style::default());
 
             // Overlay styled segments for elements that intersect this line.
             for elem in &self.elements {
