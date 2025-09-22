@@ -156,10 +156,10 @@ impl ChatComposer {
         .areas(area);
 
         let content_area = Rect {
-            x: textarea_rect.x + 1, // Account for left border
-            y: textarea_rect.y,
-            width: textarea_rect.width.saturating_sub(1),
-            height: textarea_rect.height,
+            x: textarea_rect.x + 3, // 1 for border + 1 for icon + 1 for spacing
+            y: textarea_rect.y + 1, // 1 for top border
+            width: textarea_rect.width.saturating_sub(4), // 2 for borders + 2 for icon and spacing
+            height: textarea_rect.height.saturating_sub(2), // 2 for top and bottom borders
         };
 
         let state = self.textarea_state.borrow();
@@ -296,21 +296,28 @@ impl WidgetRef for &ChatComposer {
             Style::default().add_modifier(Modifier::DIM)
         };
 
-        // Render prompt icon instead of border
-        let icon = if self.has_focus { "→" } else { "→" };
+        // Render border block around entire textarea
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(border_style)
+            .render_ref(textarea_rect, buf);
+
+        // Render prompt icon inside the border
+        let icon = "→";
         let icon_line = Line::from(icon).style(border_style);
         Paragraph::new(vec![icon_line])
             .render_ref(
-                Rect::new(textarea_rect.x, textarea_rect.y, 1, 1),
+                Rect::new(textarea_rect.x + 1, textarea_rect.y + 1, 1, 1),
                 buf,
             );
 
-        // Content area (excluding left border)
+        // Content area (inside border, after icon)
         let content_area = Rect {
-            x: textarea_rect.x + 1,
-            y: textarea_rect.y,
-            width: textarea_rect.width.saturating_sub(1),
-            height: textarea_rect.height,
+            x: textarea_rect.x + 3, // 1 for border + 1 for icon + 1 for spacing
+            y: textarea_rect.y + 1, // 1 for top border
+            width: textarea_rect.width.saturating_sub(4), // 2 for borders + 2 for icon and spacing
+            height: textarea_rect.height.saturating_sub(2), // 2 for top and bottom borders
         };
 
         {
