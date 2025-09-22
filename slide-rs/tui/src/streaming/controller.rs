@@ -174,7 +174,7 @@ impl StreamController {
             return false;
         }
 
-        step.has_more || self.finishing_after_drain
+        !self.state.is_idle() || self.finishing_after_drain
     }
 
     pub(crate) fn has_seen_delta(&self) -> bool {
