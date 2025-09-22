@@ -86,10 +86,11 @@ impl BottomPane {
         };
 
         // If a status indicator is active and no modal is covering the composer,
-        // include its height above the composer.
+        // include its height above the composer plus spacing.
         if self.active_view.is_none() {
             if let Some(status) = self.status.as_ref() {
                 base = base.saturating_add(status.desired_height(width));
+                base = base.saturating_add(1); // Add spacing between status and composer
             }
         }
 
@@ -115,9 +116,13 @@ impl BottomPane {
             0
         };
 
-        let [_, status, content, _] = Layout::vertical([
+        // Add spacing between status and content when status is visible
+        let spacing = if status_height > 0 { 1 } else { 0 };
+
+        let [_, status, _spacing, content, _] = Layout::vertical([
             Constraint::Max(top_margin),
             Constraint::Max(status_height),
+            Constraint::Length(spacing),
             Constraint::Min(1),
             Constraint::Max(bottom_pad),
         ])
