@@ -1,6 +1,7 @@
 use anyhow::Result;
 use slide_core::client::{ModelClient, OpenAiAdapter, StubClient};
 use slide_core::codex::{Codex, CodexSpawnOk, Event as CoreEvent, Op};
+use slide_core::protocol::ReasoningEffort as ReasoningEffortConfig;
 use slide_core::protocol::InputItem;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -63,6 +64,26 @@ impl AgentHandle {
         let c = self.codex.clone();
         tokio::spawn(async move {
             let _ = c.submit(Op::UserInputItems { items }).await;
+        });
+    }
+
+    pub fn override_turn_context_bg(
+        &self,
+        model: Option<String>,
+        effort: Option<ReasoningEffortConfig>,
+    ) {
+        let c = self.codex.clone();
+        tokio::spawn(async move {
+            let _ = c
+                .submit(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    model,
+                    effort,
+                    summary: None,
+                })
+                .await;
         });
     }
 }

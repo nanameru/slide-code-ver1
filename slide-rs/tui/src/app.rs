@@ -25,7 +25,6 @@ use crate::widgets::banner::banner_history_lines;
 use slide_core::codex::Event as CoreEvent;
 use slide_core::codex::Op;
 use slide_core::protocol::InputItem;
-use slide_core::codex::Op as CoreOp;
 use slide_core::protocol::ReasoningEffort as ReasoningEffortConfig;
 
 // (leftover from earlier spinner impl) — intentionally removed
@@ -628,22 +627,14 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
                 }
                 AppEvent::UpdateModel(model) => {
                     if let Some(agent) = &app.agent {
-                        let c = agent.codex.clone();
-                        tokio::spawn(async move {
-                            // In this minimal core, we don't support OverrideTurnContext yet.
-                            // No-op for backend; UI will reflect in future when core supports it.
-                            let _ = c.submit(CoreOp::Interrupt).await;
-                        });
+                        agent.override_turn_context_bg(Some(model.clone()), None);
                     }
                     // Update composer placeholder locally to reflect model
                     app.bottom_pane.set_composer_placeholder(format!("Model: {}", model));
                 }
                 AppEvent::UpdateReasoningEffort(effort) => {
                     if let Some(agent) = &app.agent {
-                        let c = agent.codex.clone();
-                        tokio::spawn(async move {
-                            let _ = c.submit(CoreOp::Interrupt).await;
-                        });
+                        agent.override_turn_context_bg(None, effort);
                     }
                 }
                 AppEvent::PersistModelSelection { .. } => {

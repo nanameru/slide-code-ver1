@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 
 use crate::client::{ModelClient, ResponseEvent};
 use crate::openai_tools::{render_tools_instructions, ToolsConfig, ToolsConfigParams};
+use crate::protocol::{ReasoningEffort, ReasoningSummary};
 use protocol::protocol::InputItem;
 use crate::tool_executor::ToolExecutor;
 use slide_chatgpt::client::{ChatGptClient, SlideRequest};
@@ -70,6 +71,15 @@ pub enum Op {
     UserInputItems {
         items: Vec<InputItem>,
     },
+    /// Override parts of the persistent turn context for subsequent turns (model/effort/etc.)
+    OverrideTurnContext {
+        cwd: Option<PathBuf>,
+        approval_policy: Option<crate::approval_manager::AskForApproval>,
+        sandbox_policy: Option<crate::seatbelt::SandboxPolicy>,
+        model: Option<String>,
+        effort: Option<ReasoningEffort>,
+        summary: Option<ReasoningSummary>,
+    },
     Interrupt,
     ExecApproval {
         id: String,
@@ -112,8 +122,16 @@ impl Codex {
             let slide_client = ChatGptClient::new(api_key);
             // Keep recent conversation messages (role, text). Oldest first.
             let mut convo: Vec<(String, String)> = Vec::new();
+            // Persisted turn-overrides (minimal): applied to future turns
+            let mut current_model: Option<String> = std::env::var("SLIDE_MODEL").ok();
+            let mut current_effort: Option<ReasoningEffort> = None;
             while let Some(op) = rx_submit.recv().await {
                 match op {
+                    Op::OverrideTurnContext { cwd: _cwd, approval_policy: _ap, sandbox_policy: _sb, model, effort, summary: _ } => {
+                        if model.is_some() { current_model = model; }
+                        if effort.is_some() { current_effort = effort; }
+                        // No immediate event; next turn will use updated context annotations.
+                    }
                     Op::UserInput { text } => {
                         let _ = tx_event.send(Event::TaskStarted).await;
                         if let Some(prompt) = text.strip_prefix("/slide ") {
@@ -205,8 +223,17 @@ impl Codex {
                                 }
                             }
                         }
-                        let composed =
-                            format!("{}{}\n\nUser: {}", tool_instructions, history_block, text);
+                        let mut context_note = String::new();
+                        if let Some(m) = &current_model {
+                            context_note.push_str(&format!("\n[Model: {}]", m));
+                        }
+                        if let Some(e) = current_effort {
+                            context_note.push_str(&format!("\n[Reasoning: {}]", e.to_string()));
+                        }
+                        let composed = format!(
+                            "{}{}{}\n\nUser: {}",
+                            tool_instructions, context_note, history_block, text
+                        );
                         // ツール実行エンジンを作成（ToolsConfigParamsから設定を取得）
                         let approval_policy = crate::approval_manager::AskForApproval::default();
                         let sandbox_policy = crate::seatbelt::SandboxPolicy::default();
@@ -415,7 +442,10 @@ impl Codex {
                                 if !msg.ends_with('\n') { history_block.push('\n'); }
                             }
                         }
-                        let mut composed = format!("{}{}\n\nUser: {}", tool_instructions, history_block, text_part);
+                        let mut context_note = String::new();
+                        if let Some(m) = &current_model { context_note.push_str(&format!("\n[Model: {}]", m)); }
+                        if let Some(e) = current_effort { context_note.push_str(&format!("\n[Reasoning: {}]", e.to_string())); }
+                        let mut composed = format!("{}{}{}\n\nUser: {}", tool_instructions, context_note, history_block, text_part);
                         if img_count > 0 { composed.push_str(&format!("\n\n[{} image attachment(s)]", img_count)); }
 
                         let mut tool_executor = ToolExecutor::new(
