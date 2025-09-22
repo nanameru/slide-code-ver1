@@ -10,6 +10,7 @@ pub mod history_cell;
 pub mod history_store;
 pub mod insert_history;
 pub mod interactive;
+pub mod markdown_stream;
 pub mod preview;
 pub mod status_indicator_widget;
 pub mod streaming;

@@ -21,7 +21,7 @@ use crate::app_event_sender::{AppEvent, AppEventSender};
 use crate::bottom_pane::{BottomPane, BottomPaneParams};
 use crate::history_cell::{HistoryCell, SystemLabel};
 use crate::insert_history::insert_history_lines;
-use crate::streaming::AnswerStreamState;
+use crate::streaming::controller::{StreamController, AppEventHistorySink};
 use crate::user_approval_widget::ApprovalRequest;
 use crate::widgets::banner::banner_history_lines;
 use crate::pager_overlay::PagerOverlay;
@@ -107,7 +107,7 @@ pub struct App {
     // Inline viewport history (pending lines to insert above)
     // pending_history_lines removed - messages now insert directly
     // Assistant応答の行単位ストリーミング状態
-    answer_stream: AnswerStreamState,
+    stream_controller: StreamController,
     // Thinking... spinner state
     thinking_frame_idx: usize,
     thinking_last_change: Instant,
@@ -186,7 +186,7 @@ impl App {
             app_event_rx: app_rx,
             app_event_tx: app_tx,
             // pending_history_lines removed - history cells now insert directly
-            answer_stream: AnswerStreamState::new(),
+            stream_controller: StreamController::new(),
             thinking_frame_idx: 0,
             thinking_last_change: Instant::now(),
             last_agent_preview: String::new(),
@@ -805,10 +805,8 @@ where
 
                 if is_tool_begin || is_tool_mid || is_tool_end || is_exec_begin || is_exec_end {
                     // Ensure assistant stream is flushed before tool blocks
-                    let tail = app.answer_stream.finalize();
-                    if !tail.is_empty() {
-                        insert_history_lines(terminal, tail);
-                    }
+                    let sink = AppEventHistorySink(app.app_event_tx.clone());
+                    app.stream_controller.finalize(true, &sink);
                     // Exec block handling
                     if is_exec_begin || is_exec_end {
                         if is_exec_begin {
@@ -872,10 +870,11 @@ where
             }
 
             if !normal_buf.is_empty() {
-                let lines = app.answer_stream.push_delta(&normal_buf);
-                if !lines.is_empty() {
-                    insert_history_lines(terminal, lines);
+                let sink = AppEventHistorySink(app.app_event_tx.clone());
+                if !app.stream_controller.is_write_cycle_active() {
+                    app.stream_controller.begin(&sink);
                 }
+                app.stream_controller.push_and_maybe_commit(&normal_buf, &sink);
             }
             // Debug-only per-chunk logging (default off)
             if std::env::var("SLIDE_STREAM_DEBUG_CHUNKS").ok().as_deref() == Some("1") {
@@ -884,9 +883,14 @@ where
             app.approx_output_chars = app.approx_output_chars.saturating_add(delta.len());
         }
         CoreEvent::AgentMessage { message } => {
-            let mut pending = Vec::new();
             if !message.is_empty() {
-                pending.extend(app.answer_stream.push_delta(&message));
+                let sink = AppEventHistorySink(app.app_event_tx.clone());
+                if !app.stream_controller.is_write_cycle_active() {
+                    app.stream_controller.begin(&sink);
+                }
+                app.stream_controller.push_and_maybe_commit(&message, &sink);
+                app.stream_controller.finalize(true, &sink);
+                
                 // keep a short preview for notification
                 use unicode_segmentation::UnicodeSegmentation;
                 let mut preview = String::new();
@@ -900,19 +904,14 @@ where
                 app.last_agent_preview = preview;
                 app.approx_output_chars = app.approx_output_chars.saturating_add(message.len());
             }
-            let mut tail = app.answer_stream.finalize();
-            pending.append(&mut tail);
-            if !pending.is_empty() {
-                insert_history_lines(terminal, pending);
-            }
             let message_for_log = message.clone();
             append_log(&format!("assistant: {}", message_for_log));
         }
         // New explicit tool events (preferred over heuristic blocks)
         CoreEvent::ToolBegin { id: _id, kind, summary, cwd: _ } => {
             let label = match kind { CoreToolKind::Exec => SystemLabel::Exec, CoreToolKind::Mcp => SystemLabel::Mcp, CoreToolKind::Search => SystemLabel::Search, CoreToolKind::Info => SystemLabel::Info };
-            let tail = app.answer_stream.finalize();
-            if !tail.is_empty() { insert_history_lines(terminal, tail); }
+            let sink = AppEventHistorySink(app.app_event_tx.clone());
+            app.stream_controller.finalize(true, &sink);
             app.pending_tool_block = Some(vec![format!("▶ {}", summary)]);
             app.pending_tool_started_at = Some(Instant::now());
             app.bottom_pane.update_status_header(format!("Tool: {}", summary));
@@ -936,8 +935,8 @@ where
         }
         CoreEvent::ExecCommandBegin { command, .. } => {
             // Flush assistant stream and start a new exec block
-            let tail = app.answer_stream.finalize();
-            if !tail.is_empty() { insert_history_lines(terminal, tail); }
+            let sink = AppEventHistorySink(app.app_event_tx.clone());
+            app.stream_controller.finalize(true, &sink);
             app.pending_exec_block = Some(vec![format!("$ {}", command.join(" "))]);
             app.pending_exec_started_at = Some(Instant::now());
             app.bottom_pane.update_status_header(format!("Running: {}", command.join(" ")));
@@ -1005,10 +1004,8 @@ where
             app.status = RunStatus::Idle;
             app.bottom_pane.set_task_running(false);
             // 念のため残りをフラッシュ
-            let tail = app.answer_stream.finalize();
-            if !tail.is_empty() {
-                insert_history_lines(terminal, tail);
-            }
+            let sink = AppEventHistorySink(app.app_event_tx.clone());
+            app.stream_controller.finalize(true, &sink);
 
             // ユーザーメッセージのリプレイは行わない（即時表示へ変更済み）
             // Flush any pending tool/exec blocks to avoid dangling groups
