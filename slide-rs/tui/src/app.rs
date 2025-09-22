@@ -9,6 +9,8 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     layout::Rect,
+    text::{Line, Span},
+    widgets::{Paragraph, WidgetRef},
 };
 use std::io::Write as _;
 use std::{io, path::PathBuf, time::Instant};
@@ -105,6 +107,12 @@ pub struct App {
     thinking_last_change: Instant,
     // Preview of last assistant message (for notifications)
     last_agent_preview: String,
+    // Simple running output size counter for token approximation
+    approx_output_chars: usize,
+    // Transcript overlay state
+    overlay_active: bool,
+    overlay_scroll_top: usize,
+    overlay_lines: Vec<Line<'static>>,
 }
 
 impl App {
@@ -173,6 +181,10 @@ impl App {
             thinking_frame_idx: 0,
             thinking_last_change: Instant::now(),
             last_agent_preview: String::new(),
+            approx_output_chars: 0,
+            overlay_active: false,
+            overlay_scroll_top: 0,
+            overlay_lines: Vec::new(),
         };
         // Write a small banner to the log so the browser viewer has content
         append_log("[info] Slide TUI session started");
@@ -225,6 +237,25 @@ impl App {
 
         // Global shortcuts
         match key {
+            // Transcript overlay toggle
+            KeyEvent { code: KeyCode::Char('t'), modifiers: KeyModifiers::CONTROL, .. } => {
+                if self.overlay_active {
+                    self.overlay_active = false;
+                    self.overlay_lines.clear();
+                    self.overlay_scroll_top = 0;
+                } else {
+                    let mut lines: Vec<Line<'static>> = Vec::new();
+                    for cell in &self.history {
+                        for l in cell.lines() {
+                            lines.push(l);
+                        }
+                    }
+                    self.overlay_lines = lines;
+                    self.overlay_active = true;
+                    self.overlay_scroll_top = 0;
+                }
+                return;
+            }
             KeyEvent {
                 code: KeyCode::Char('q'),
                 modifiers: KeyModifiers::CONTROL,
@@ -419,6 +450,35 @@ impl App {
                 return;
             }
             _ => {}
+        }
+
+        // If transcript overlay is active, handle scroll keys here
+        if self.overlay_active {
+            match key.code {
+                KeyCode::Esc => {
+                    self.overlay_active = false;
+                }
+                KeyCode::Up => {
+                    self.overlay_scroll_top = self.overlay_scroll_top.saturating_sub(1);
+                }
+                KeyCode::Down => {
+                    self.overlay_scroll_top = self.overlay_scroll_top.saturating_add(1);
+                }
+                KeyCode::PageUp => {
+                    self.overlay_scroll_top = self.overlay_scroll_top.saturating_sub(10);
+                }
+                KeyCode::PageDown => {
+                    self.overlay_scroll_top = self.overlay_scroll_top.saturating_add(10);
+                }
+                KeyCode::Home => {
+                    self.overlay_scroll_top = 0;
+                }
+                KeyCode::End => {
+                    self.overlay_scroll_top = usize::MAX;
+                }
+                _ => {}
+            }
+            return;
         }
 
         // Delegate to bottom pane for input handling
@@ -947,10 +1007,21 @@ where
     terminal.set_viewport_area(input_area);
 
     terminal.draw(|f| {
-        // Bottom pane (input area) using render_ref
-        app.bottom_pane.render_ref(Rect { x: input_area.x, y: input_area.y + status_height, width: input_area.width, height: bottom_height }, f.buffer_mut());
-        if let Some((x, y)) = app.bottom_pane.cursor_pos(Rect { x: input_area.x, y: input_area.y + status_height, width: input_area.width, height: bottom_height }) {
-            f.set_cursor_position((x, y));
+        if app.overlay_active {
+            // Render transcript overlay in the same area, scrollable
+            let mut start = app.overlay_scroll_top;
+            let total = app.overlay_lines.len();
+            if start > total { start = total; }
+            let mut end = start.saturating_add(bottom_height as usize);
+            if end > total { end = total; }
+            let view = app.overlay_lines[start..end].to_vec();
+            Paragraph::new(view).render_ref(Rect { x: input_area.x, y: input_area.y, width: input_area.width, height: bottom_height }, f.buffer_mut());
+        } else {
+            // Bottom pane (input area) using render_ref
+            app.bottom_pane.render_ref(Rect { x: input_area.x, y: input_area.y + status_height, width: input_area.width, height: bottom_height }, f.buffer_mut());
+            if let Some((x, y)) = app.bottom_pane.cursor_pos(Rect { x: input_area.x, y: input_area.y + status_height, width: input_area.width, height: bottom_height }) {
+                f.set_cursor_position((x, y));
+            }
         }
     })?;
 
@@ -975,6 +1046,7 @@ where
                 insert_history_lines(terminal, lines);
             }
             append_log(&format!("assistantΔ: {}", delta));
+            app.approx_output_chars = app.approx_output_chars.saturating_add(delta.len());
         }
         CoreEvent::AgentMessage { message } => {
             let mut pending = Vec::new();
@@ -991,6 +1063,7 @@ where
                     count = next;
                 }
                 app.last_agent_preview = preview;
+                app.approx_output_chars = app.approx_output_chars.saturating_add(message.len());
             }
             let mut tail = app.answer_stream.finalize();
             pending.append(&mut tail);
@@ -1043,10 +1116,17 @@ where
             append_log(&format!("[patch] {}", status));
         }
         CoreEvent::TurnDiff { unified_diff } => {
-            let diff_lines: Vec<String> = unified_diff.split('\n').map(|s| s.to_string()).collect();
-            let cell = HistoryCell::new_system_status(SystemLabel::Diff, diff_lines);
-            insert_history_lines(terminal, cell.lines());
-            append_log("[diff] updated");
+            // Open a simple scrollable overlay with the diff content
+            app.overlay_lines.clear();
+            // Title line (dim)
+            app.overlay_lines.push(Line::from("D I F F"));
+            app.overlay_lines.push(Line::from(""));
+            for l in unified_diff.split('\n') {
+                app.overlay_lines.push(Line::from(l.to_string()));
+            }
+            app.overlay_active = true;
+            app.overlay_scroll_top = 0;
+            append_log("[diff] overlay opened");
         }
         CoreEvent::TaskComplete => {
             app.status = RunStatus::Idle;
@@ -1065,6 +1145,14 @@ where
                 let cell = HistoryCell::new_system_status(SystemLabel::Info, [note]);
                 insert_history_lines(terminal, cell.lines());
                 app.last_agent_preview.clear();
+            }
+            // Approximate tokens (rough heuristic: 4 chars per token)
+            if app.approx_output_chars > 0 {
+                let approx_tokens = (app.approx_output_chars as f32 / 4.0).ceil() as u64;
+                let line = format!("Token approx: ~{} tokens", approx_tokens);
+                let cell = HistoryCell::new_system_status(SystemLabel::Info, [line]);
+                insert_history_lines(terminal, cell.lines());
+                app.approx_output_chars = 0;
             }
         }
         CoreEvent::Error { message } => {

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 
-use crate::client::{ModelClient, ResponseEvent};
+use crate::client::{ModelClient, ResponseEvent, OpenAiAdapter, StubClient};
 use crate::openai_tools::{render_tools_instructions, ToolsConfig, ToolsConfigParams};
 use crate::protocol::{ReasoningEffort, ReasoningSummary};
 use protocol::protocol::InputItem;
@@ -119,7 +119,7 @@ impl Codex {
         // Background task processing submissions
         tokio::spawn(async move {
             let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
-            let slide_client = ChatGptClient::new(api_key);
+            let slide_client = ChatGptClient::new(api_key.clone());
             // Keep recent conversation messages (role, text). Oldest first.
             let mut convo: Vec<(String, String)> = Vec::new();
             // Persisted turn-overrides (minimal): applied to future turns
@@ -127,6 +127,15 @@ impl Codex {
             let mut current_effort: Option<ReasoningEffort> = None;
             let mut current_approval: crate::approval_manager::AskForApproval = crate::approval_manager::AskForApproval::default();
             let mut current_sandbox: crate::seatbelt::SandboxPolicy = crate::seatbelt::SandboxPolicy::default();
+
+            // Build initial model client (OpenAI or Stub)
+            let mut current_model_client: Arc<dyn ModelClient + Send + Sync> = if api_key.is_empty() {
+                Arc::new(StubClient)
+            } else if let Some(ref m) = current_model {
+                Arc::new(OpenAiAdapter::new_with_model(api_key.clone(), m.clone()))
+            } else {
+                Arc::new(OpenAiAdapter::new(api_key.clone()))
+            };
             while let Some(op) = rx_submit.recv().await {
                 match op {
                     Op::OverrideTurnContext { cwd: _cwd, approval_policy, sandbox_policy, model, effort, summary: _ } => {
@@ -134,6 +143,14 @@ impl Codex {
                         if effort.is_some() { current_effort = effort; }
                         if let Some(ap) = approval_policy { current_approval = ap; }
                         if let Some(sb) = sandbox_policy { current_sandbox = sb; }
+                        // Rebuild model client if model changed
+                        if !api_key.is_empty() {
+                            current_model_client = if let Some(ref m) = current_model {
+                                Arc::new(OpenAiAdapter::new_with_model(api_key.clone(), m.clone()))
+                            } else {
+                                Arc::new(OpenAiAdapter::new(api_key.clone()))
+                            };
+                        }
                         // No immediate event; next turn will use updated context annotations.
                     }
                     Op::UserInput { text } => {
@@ -263,7 +280,7 @@ impl Codex {
                             std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
                             crate::config_types::ShellEnvironmentPolicy::default(),
                         );
-                        match client.stream(composed).await {
+                        match current_model_client.stream(composed).await {
                             Ok(mut rx) => {
                                 let mut assembled_resp = String::new();
                                 while let Some(ev) = rx.recv().await {
@@ -462,7 +479,7 @@ impl Codex {
                             std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
                             crate::config_types::ShellEnvironmentPolicy::default(),
                         );
-                        match client.stream(composed).await {
+                        match current_model_client.stream(composed).await {
                             Ok(mut rx) => {
                                 let mut assembled_resp = String::new();
                                 while let Some(ev) = rx.recv().await {
