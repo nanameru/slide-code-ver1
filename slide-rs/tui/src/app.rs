@@ -1018,7 +1018,7 @@ where
                     insert_history_lines(terminal, lines);
                 }
             }
-            append_log(&format!("assistantΔ: {}", delta));
+            append_log(&format!("assistantΔ: {}", delta.replace('\n', "\\n")));
             app.approx_output_chars = app.approx_output_chars.saturating_add(delta.len());
         }
         CoreEvent::AgentMessage { message } => {
