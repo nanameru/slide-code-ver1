@@ -73,10 +73,9 @@ impl AnswerStreamState {
 
     fn header_line(&self) -> Line<'static> {
         Line::from(Span::styled(
-            "Assistant",
+            "・ ",
             Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
+                .fg(Color::White),
         ))
     }
 }
