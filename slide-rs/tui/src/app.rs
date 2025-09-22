@@ -115,6 +115,8 @@ pub struct App {
     approx_output_chars: usize,
     // Transcript/Diff overlay
     overlay: PagerOverlay,
+    // --- Tool/Exec rendering state (codex-like grouping) ---
+    pending_exec_block: Option<Vec<String>>, // captures [Tool Execution]..Result lines as one block
 }
 
 impl App {
@@ -185,6 +187,7 @@ impl App {
             last_agent_preview: String::new(),
             approx_output_chars: 0,
             overlay: PagerOverlay::new(),
+            pending_exec_block: None,
         };
         // Write a small banner to the log so the browser viewer has content
         append_log("[info] Slide TUI session started");
@@ -906,31 +909,38 @@ where
             app.app_event_tx.send(AppEvent::StartCommitAnimation);
         }
         CoreEvent::AgentMessageDelta { delta } => {
-            // Split incoming delta into normal text vs tool-execution annotations
+            // Split incoming delta into normal text vs tool/exec annotations, and group exec blocks
             let mut normal_buf = String::new();
-            let mut tool_lines: Vec<String> = Vec::new();
             for raw in delta.split('\n') {
                 let line = raw.trim_end_matches('\r');
                 let t = line.trim_start();
-                let is_tool = t.starts_with("[Tool Execution]")
-                    || t.starts_with('▶')
-                    || t.starts_with("[Tool Execution Result]");
-                if is_tool {
-                    tool_lines.push(line.to_string());
+                let is_exec_line = t.starts_with("[Tool Execution]") || t.starts_with('▶');
+                let is_exec_end = t.starts_with("[Tool Execution Result]") || t.starts_with("exit ");
+
+                if is_exec_line || is_exec_end {
+                    // Ensure assistant stream is flushed before tool blocks
+                    let tail = app.answer_stream.finalize();
+                    if !tail.is_empty() {
+                        insert_history_lines(terminal, tail);
+                    }
+                    // Begin block if not present
+                    if app.pending_exec_block.is_none() {
+                        app.pending_exec_block = Some(Vec::new());
+                    }
+                    if let Some(ref mut blk) = app.pending_exec_block {
+                        blk.push(line.to_string());
+                    }
+                    // If it's an end marker, flush the whole block as Exec
+                    if is_exec_end {
+                        if let Some(blk) = app.pending_exec_block.take() {
+                            let cell = HistoryCell::new_system_status(SystemLabel::Exec, blk);
+                            insert_history_lines(terminal, cell.lines());
+                        }
+                    }
                 } else {
                     normal_buf.push_str(line);
                     normal_buf.push('\n');
                 }
-            }
-
-            if !tool_lines.is_empty() {
-                // Flush any pending streamed answer before inserting tool block
-                let tail = app.answer_stream.finalize();
-                if !tail.is_empty() {
-                    insert_history_lines(terminal, tail);
-                }
-                let cell = HistoryCell::new_system_status(SystemLabel::Info, tool_lines);
-                insert_history_lines(terminal, cell.lines());
             }
 
             if !normal_buf.is_empty() {
@@ -967,16 +977,24 @@ where
             append_log(&format!("assistant: {}", message));
         }
         CoreEvent::ExecCommandBegin { command, .. } => {
-            let display = format!("$ {}", command.join(" "));
-            let cell = HistoryCell::new_system_status(SystemLabel::Exec, [display.clone()]);
-            insert_history_lines(terminal, cell.lines());
-            append_log(&format!("[exec] {}", display));
+            // Flush assistant stream and start a new exec block
+            let tail = app.answer_stream.finalize();
+            if !tail.is_empty() { insert_history_lines(terminal, tail); }
+            app.pending_exec_block = Some(vec![format!("$ {}", command.join(" "))]);
+            append_log("[exec] begin");
         }
         CoreEvent::ExecCommandEnd { exit_code, .. } => {
-            let display = format!("exit {}", exit_code);
-            let cell = HistoryCell::new_system_status(SystemLabel::Exec, [display.clone()]);
-            insert_history_lines(terminal, cell.lines());
-            append_log(&format!("[exec] {}", display));
+            // Close and flush exec block if present; otherwise print a one-liner
+            let exit_line = format!("exit {}", exit_code);
+            if let Some(mut blk) = app.pending_exec_block.take() {
+                blk.push(exit_line);
+                let cell = HistoryCell::new_system_status(SystemLabel::Exec, blk);
+                insert_history_lines(terminal, cell.lines());
+            } else {
+                let cell = HistoryCell::new_system_status(SystemLabel::Exec, [exit_line.clone()]);
+                insert_history_lines(terminal, cell.lines());
+            }
+            append_log("[exec] end");
         }
         CoreEvent::ApplyPatchApprovalRequest {
             id,
