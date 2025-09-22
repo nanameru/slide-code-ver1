@@ -18,6 +18,7 @@ slide-core = { path = "../core" }
 unicode-width = "0.1"
 textwrap = "0.16.2"
 unicode-segmentation = "1.12.0"
+itertools = "0.14.0"
 slide-file-search = { path = "../file-search" }
 arboard = "3"
 image = { version = "0.24", default-features = false, features = ["png", "jpeg"] }
@@ -25,3 +26,5 @@ tempfile = "3"
 
 [dev-dependencies]
 insta = "1.39"
+pretty_assertions = "1"
+vt100 = "0.15"

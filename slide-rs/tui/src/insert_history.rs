@@ -5,6 +5,7 @@ use std::io;
 use std::io::Write;
 
 use crate::custom_terminal::Terminal;
+use crate::wrapping::word_wrap_lines_borrowed;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
 use crossterm::style::Color as CColor;
@@ -21,10 +22,6 @@ use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use textwrap::Options as TwOptions;
-use textwrap::WordSplitter;
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
 /// Insert `lines` above the current viewport using inline viewport technique.
 /// This allows history to be preserved in terminal scrollback.
@@ -64,7 +61,7 @@ pub fn insert_history_lines_to_writer<B, W>(
         .min(viewport_width)
         .min(screen_size.width)
         .max(20);
-    let wrapped = word_wrap_lines(&lines, wrap_width);
+    let wrapped = word_wrap_lines_borrowed(&lines, wrap_width as usize);
     let wrapped_lines = wrapped.len() as u16;
     let cursor_top = if area.bottom() < screen_size.height {
         // If the viewport is not at the bottom of the screen, scroll it down to make room.
@@ -297,114 +294,137 @@ where
     Ok(())
 }
 
-/// Word-aware wrapping for a list of `Line`s preserving styles.
-pub(crate) fn word_wrap_lines(lines: &[Line], width: u16) -> Vec<Line<'static>> {
-    let mut out = Vec::new();
-    let w = width.max(1) as usize;
-    for line in lines {
-        out.extend(word_wrap_line(line, w));
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::markdown_render::render_markdown_text;
+    use ratatui::layout::Rect;
+    use ratatui::style::Color;
+    use vt100::Parser;
+
+    #[test]
+    fn writes_bold_then_regular_spans() {
+        use ratatui::style::Stylize;
+
+        let spans = ["A".bold(), "B".into()];
+
+        let mut actual: Vec<u8> = Vec::new();
+        write_spans(&mut actual, spans.iter()).unwrap();
+
+        let mut expected: Vec<u8> = Vec::new();
+        queue!(
+            expected,
+            SetAttribute(crossterm::style::Attribute::Bold),
+            Print("A"),
+            SetAttribute(crossterm::style::Attribute::NormalIntensity),
+            Print("B"),
+            SetForegroundColor(CColor::Reset),
+            SetBackgroundColor(CColor::Reset),
+            SetAttribute(crossterm::style::Attribute::Reset),
+        )
+        .unwrap();
+
+        assert_eq!(
+            String::from_utf8(actual).unwrap(),
+            String::from_utf8(expected).unwrap()
+        );
     }
-    out
+
+    #[test]
+    fn vt100_blockquote_line_emits_green_fg() {
+        // Set up a small off-screen terminal
+        let width: u16 = 40;
+        let height: u16 = 10;
+        let backend = ratatui::backend::TestBackend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        // Place viewport on the last line so history inserts scroll upward
+        let viewport = Rect::new(0, height - 1, width, 1);
+        term.set_viewport_area(viewport);
+
+        // Build a blockquote-like line: apply line-level green style and prefix "> "
+        let mut line: Line<'static> = Line::from(vec!["> ".into(), "Hello world".into()]);
+        line = line.style(Color::Green);
+        let mut ansi: Vec<u8> = Vec::new();
+        insert_history_lines_to_writer(&mut term, &mut ansi, vec![line]);
+
+        // Parse ANSI using vt100 and assert at least one non-default fg color appears
+        let mut parser = Parser::new(height, width, 0);
+        parser.process(&ansi);
+
+        let mut saw_colored = false;
+        'outer: for row in 0..height {
+            for col in 0..width {
+                if let Some(cell) = parser.screen().cell(row, col) {
+                    if cell.has_contents() && cell.fgcolor() != vt100::Color::Default {
+                        saw_colored = true;
+                        break 'outer;
+                    }
+                }
+            }
+        }
+        assert!(
+            saw_colored,
+            "expected at least one colored cell in vt100 output"
+        );
+    }
+
+    #[test]
+    fn vt100_colored_prefix_then_plain_text_resets_color() {
+        let width: u16 = 40;
+        let height: u16 = 6;
+        let backend = ratatui::backend::TestBackend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        let viewport = Rect::new(0, height - 1, width, 1);
+        term.set_viewport_area(viewport);
+
+        // First span colored, rest plain.
+        let line: Line<'static> = Line::from(vec![
+            Span::styled("1. ", ratatui::style::Style::default().fg(Color::LightBlue)),
+            Span::raw("Hello world"),
+        ]);
+
+        let mut ansi: Vec<u8> = Vec::new();
+        insert_history_lines_to_writer(&mut term, &mut ansi, vec![line]);
+
+        let mut parser = Parser::new(height, width, 0);
+        parser.process(&ansi);
+        let screen = parser.screen();
+
+        // Find the first non-empty row; verify first three cells are colored, following cells default.
+        'rows: for row in 0..height {
+            let mut has_text = false;
+            for col in 0..width {
+                if let Some(cell) = screen.cell(row, col) {
+                    if cell.has_contents() && cell.contents() != " " {
+                        has_text = true;
+                        break;
+                    }
+                }
+            }
+            if !has_text {
+                continue;
+            }
+
+            // Expect "1. Hello world" starting at col 0.
+            for col in 0..3 {
+                let cell = screen.cell(row, col).unwrap();
+                assert!(
+                    cell.fgcolor() != vt100::Color::Default,
+                    "expected colored prefix at col {col}, got {:?}",
+                    cell.fgcolor()
+                );
+            }
+            for col in 3..(3 + "Hello world".len() as u16) {
+                let cell = screen.cell(row, col).unwrap();
+                assert_eq!(
+                    cell.fgcolor(),
+                    vt100::Color::Default,
+                    "expected default color for plain text at col {col}, got {:?}",
+                    cell.fgcolor()
+                );
+            }
+            break 'rows;
+        }
+    }
 }
 
-fn word_wrap_line(line: &Line, width: usize) -> Vec<Line<'static>> {
-    if width == 0 {
-        return vec![to_owned_line(line)];
-    }
-
-    // Concatenate content and keep span boundaries for later re-slicing.
-    let mut flat = String::new();
-    let mut span_bounds = Vec::new(); // (start_byte, end_byte, style)
-    let mut cursor = 0usize;
-
-    for s in &line.spans {
-        let text = s.content.as_ref();
-        let start = cursor;
-        flat.push_str(text);
-        cursor += text.len();
-        span_bounds.push((start, cursor, s.style));
-    }
-
-    // Grapheme-aware, display-cell-width wrapping to handle CJK fullwidth correctly.
-    let mut out: Vec<Line<'static>> = Vec::new();
-    let mut acc_cells: usize = 0;
-    let mut seg_start: usize = 0;
-
-    for (byte_idx, g) in flat.grapheme_indices(true) {
-        // Use actual width without forcing minimum of 1
-        // This properly handles zero-width characters and CJK characters
-        let w = g.width();
-        if acc_cells > 0 && w > 0 && acc_cells + w > width {
-            out.push(slice_line_spans(line, &span_bounds, seg_start, byte_idx));
-            seg_start = byte_idx;
-            acc_cells = 0;
-        }
-        acc_cells = acc_cells.saturating_add(w);
-    }
-
-    // Tail
-    if seg_start == 0 {
-        // No wrap occurred
-        return vec![to_owned_line(line)];
-    }
-    out.push(slice_line_spans(line, &span_bounds, seg_start, flat.len()));
-    out
-}
-
-fn to_owned_line(l: &Line<'_>) -> Line<'static> {
-    Line {
-        style: l.style,
-        alignment: l.alignment,
-        spans: l
-            .spans
-            .iter()
-            .map(|s| Span {
-                style: s.style,
-                content: std::borrow::Cow::Owned(s.content.to_string()),
-            })
-            .collect(),
-    }
-}
-
-fn slice_line_spans(
-    original: &Line<'_>,
-    span_bounds: &[(usize, usize, ratatui::style::Style)],
-    start_byte: usize,
-    end_byte: usize,
-) -> Line<'static> {
-    let mut acc: Vec<Span<'static>> = Vec::new();
-
-    for (i, (s, e, style)) in span_bounds.iter().enumerate() {
-        if *e <= start_byte {
-            continue;
-        }
-        if *s >= end_byte {
-            break;
-        }
-
-        let seg_start = start_byte.max(*s);
-        let seg_end = end_byte.min(*e);
-
-        if seg_end > seg_start {
-            let local_start = seg_start - *s;
-            let local_end = seg_end - *s;
-            let content = original.spans[i].content.as_ref();
-            let slice = &content[local_start..local_end];
-
-            acc.push(Span {
-                style: *style,
-                content: std::borrow::Cow::Owned(slice.to_string()),
-            });
-        }
-
-        if *e >= end_byte {
-            break;
-        }
-    }
-
-    Line {
-        style: original.style,
-        alignment: original.alignment,
-        spans: acc,
-    }
-}

@@ -11,6 +11,7 @@ pub mod history_store;
 pub mod insert_history;
 pub mod interactive;
 pub mod markdown;
+pub mod markdown_render;
 pub mod markdown_stream;
 pub mod preview;
 pub mod render;
