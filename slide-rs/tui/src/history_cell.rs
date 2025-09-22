@@ -90,13 +90,13 @@ impl HistoryCell {
             HistoryCell::Banner => banner_lines().into_iter().map(line_to_plain).collect(),
             HistoryCell::UserPrompt { prompt } => {
                 let mut out = Vec::new();
-                out.push("user".to_string());
+                out.push("> ".to_string());
                 out.extend(split_preserving_empty(prompt));
                 out
             }
             HistoryCell::AssistantMessage { content } => {
                 let mut out = Vec::new();
-                out.push("assistant".to_string());
+                out.push("・ ".to_string());
                 out.extend(split_preserving_empty(content));
                 out
             }
