@@ -1004,7 +1004,7 @@ where
             }
 
             if !normal_buf.is_empty() {
-                let lines = app.answer_stream.push_delta(&normal_buf);
+                let _lines = app.answer_stream.push_delta(&normal_buf);
                 // Store assistant delta content for proper display order
                 // Note: We skip immediate display and queue it for task completion
             }
@@ -1031,6 +1031,7 @@ where
             let mut tail = app.answer_stream.finalize();
             pending.append(&mut tail);
             // Store final assistant message for proper display order
+            let message_for_log = message.clone();
             if !pending.is_empty() || !message.is_empty() {
                 let full_message = if !message.is_empty() { message } else {
                     pending.iter().map(|line| line.spans.iter().map(|span| span.content.to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
@@ -1038,7 +1039,7 @@ where
                 let cell = HistoryCell::new_assistant_message(full_message);
                 app.message_queue.push(cell);
             }
-            append_log(&format!("assistant: {}", message));
+            append_log(&format!("assistant: {}", message_for_log));
         }
         // New explicit tool events (preferred over heuristic blocks)
         CoreEvent::ToolBegin { id: _id, kind, summary, cwd: _ } => {
@@ -1056,7 +1057,7 @@ where
             let styled = crate::history_cell::format_content_line(&line);
             insert_history_lines(terminal, vec![styled]);
         }
-        CoreEvent::ToolEnd { id: _id, ok, exit_code, took_ms } => {
+        CoreEvent::ToolEnd { id: _id, ok: _, exit_code, took_ms } => {
             if let Some(mut blk) = app.pending_tool_block.take() {
                 blk.push(format!("took {}ms", took_ms));
                 if let Some(code) = exit_code { blk.push(format!("exit {}", code)); }
