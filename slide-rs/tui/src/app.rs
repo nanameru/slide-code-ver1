@@ -29,6 +29,8 @@ use crate::model_presets::builtin_model_presets;
 use crate::approval_presets::builtin_approval_presets;
 use crate::settings;
 use slide_core::codex::Event as CoreEvent;
+use slide_core::codex::ToolKind as CoreToolKind;
+use slide_core::codex::ToolStream as CoreToolStream;
 use slide_core::codex::Op;
 use slide_core::protocol::InputItem;
 use slide_core::protocol::ReasoningEffort as ReasoningEffortConfig;
@@ -1025,6 +1027,35 @@ where
                 insert_history_lines(terminal, pending);
             }
             append_log(&format!("assistant: {}", message));
+        }
+        // New explicit tool events (preferred over heuristic blocks)
+        CoreEvent::ToolBegin { id: _id, kind, summary, cwd: _ } => {
+            let label = match kind { CoreToolKind::Exec => SystemLabel::Exec, CoreToolKind::Mcp => SystemLabel::Mcp, CoreToolKind::Search => SystemLabel::Search, CoreToolKind::Info => SystemLabel::Info };
+            let tail = app.answer_stream.finalize();
+            if !tail.is_empty() { insert_history_lines(terminal, tail); }
+            app.pending_tool_block = Some(vec![format!("▶ {}", summary)]);
+            app.pending_tool_started_at = Some(Instant::now());
+            app.bottom_pane.update_status_header(format!("Tool: {}", summary));
+            let cell = HistoryCell::new_system_status(label, [format!("▶ {}", summary)]);
+            insert_history_lines(terminal, cell.lines());
+        }
+        CoreEvent::ToolOutput { id: _id, stream, line } => {
+            // Append to pending tool block; stderr lines dim/red later when flushing
+            if let Some(ref mut blk) = app.pending_tool_block {
+                blk.push(line.clone());
+            } else {
+                app.pending_tool_block = Some(vec![line.clone()]);
+            }
+        }
+        CoreEvent::ToolEnd { id: _id, ok, exit_code, took_ms } => {
+            if let Some(mut blk) = app.pending_tool_block.take() {
+                blk.push(format!("took {}ms", took_ms));
+                if let Some(code) = exit_code { blk.push(format!("exit {}", code)); }
+                let label = SystemLabel::Exec; // unknown kind in this context; Exec as default
+                let cell = HistoryCell::new_system_status(label, blk);
+                insert_history_lines(terminal, cell.lines());
+            }
+            app.bottom_pane.update_status_header("Working".to_string());
         }
         CoreEvent::ExecCommandBegin { command, .. } => {
             // Flush assistant stream and start a new exec block
