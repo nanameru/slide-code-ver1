@@ -61,9 +61,12 @@ impl ChatComposer {
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        let textarea_height = self.textarea.desired_height(width.saturating_sub(1));
+        // Account for borders (2 lines) and icon/spacing (doesn't affect height)
+        let inner_width = width.saturating_sub(4); // 2 for borders + 2 for icon and spacing
+        let textarea_height = self.textarea.desired_height(inner_width);
         let hints_height = if self.show_hints { 1 } else { 0 };
-        textarea_height.saturating_add(hints_height)
+        // Add 2 for top and bottom borders
+        textarea_height.saturating_add(hints_height).saturating_add(2)
     }
 
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
