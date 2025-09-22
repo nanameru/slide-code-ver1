@@ -122,8 +122,8 @@ pub struct App {
     pending_tool_block: Option<Vec<String>>, // captures generic tool blocks ([Tool Execution] ... [Tool Execution Result])
     pending_exec_started_at: Option<Instant>,
     pending_tool_started_at: Option<Instant>,
-    // User message pending display (to show after assistant response)
-    pending_user_message: Option<HistoryCell>,
+    // Message queue for proper display ordering (insert in reverse to account for top-insertion)
+    message_queue: Vec<HistoryCell>,
 }
 
 impl App {
@@ -198,7 +198,7 @@ impl App {
             pending_tool_block: None,
             pending_exec_started_at: None,
             pending_tool_started_at: None,
-            pending_user_message: None,
+            message_queue: Vec::new(),
         };
         // Write a small banner to the log so the browser viewer has content
         append_log("[info] Slide TUI session started");
@@ -667,12 +667,11 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
                     }
                 }
                 AppEvent::InsertHistoryCell(cell) => {
-                    // Store user messages for later display, show others immediately
+                    // Display user messages immediately, store assistant messages for later
                     if matches!(cell, HistoryCell::UserPrompt { .. }) {
-                        // Don't display user messages immediately - they will be shown after assistant response
-                        app.pending_user_message = Some(cell);
-                    } else {
                         insert_history_lines(&mut terminal, cell.lines());
+                    } else {
+                        app.message_queue.push(cell);
                     }
                 }
                 AppEvent::ToolOutput { text } => {
@@ -1143,10 +1142,11 @@ where
                 insert_history_lines(terminal, tail);
             }
 
-            // Display pending user message now (after assistant response is complete)
-            if let Some(user_cell) = app.pending_user_message.take() {
-                insert_history_lines(terminal, user_cell.lines());
+            // Display queued messages in correct order (user first, then assistant)
+            for msg in &app.message_queue {
+                insert_history_lines(terminal, msg.lines());
             }
+            app.message_queue.clear();
             // Flush any pending tool/exec blocks to avoid dangling groups
             if let Some(mut blk) = app.pending_tool_block.take() {
                 if let Some(st) = app.pending_tool_started_at.take() {
