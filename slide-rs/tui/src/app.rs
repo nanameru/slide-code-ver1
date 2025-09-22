@@ -24,6 +24,10 @@ use crate::insert_history::insert_history_lines;
 use crate::streaming::AnswerStreamState;
 use crate::user_approval_widget::ApprovalRequest;
 use crate::widgets::banner::banner_history_lines;
+use crate::pager_overlay::PagerOverlay;
+use crate::model_presets::builtin_model_presets;
+use crate::approval_presets::builtin_approval_presets;
+use crate::settings;
 use slide_core::codex::Event as CoreEvent;
 use slide_core::codex::Op;
 use slide_core::protocol::InputItem;
@@ -109,10 +113,8 @@ pub struct App {
     last_agent_preview: String,
     // Simple running output size counter for token approximation
     approx_output_chars: usize,
-    // Transcript overlay state
-    overlay_active: bool,
-    overlay_scroll_top: usize,
-    overlay_lines: Vec<Line<'static>>,
+    // Transcript/Diff overlay
+    overlay: PagerOverlay,
 }
 
 impl App {
@@ -182,9 +184,7 @@ impl App {
             thinking_last_change: Instant::now(),
             last_agent_preview: String::new(),
             approx_output_chars: 0,
-            overlay_active: false,
-            overlay_scroll_top: 0,
-            overlay_lines: Vec::new(),
+            overlay: PagerOverlay::new(),
         };
         // Write a small banner to the log so the browser viewer has content
         append_log("[info] Slide TUI session started");
@@ -239,21 +239,13 @@ impl App {
         match key {
             // Transcript overlay toggle
             KeyEvent { code: KeyCode::Char('t'), modifiers: KeyModifiers::CONTROL, .. } => {
-                if self.overlay_active {
-                    self.overlay_active = false;
-                    self.overlay_lines.clear();
-                    self.overlay_scroll_top = 0;
-                } else {
-                    let mut lines: Vec<Line<'static>> = Vec::new();
-                    for cell in &self.history {
-                        for l in cell.lines() {
-                            lines.push(l);
-                        }
+                let mut lines: Vec<Line<'static>> = Vec::new();
+                for cell in &self.history {
+                    for l in cell.lines() {
+                        lines.push(l);
                     }
-                    self.overlay_lines = lines;
-                    self.overlay_active = true;
-                    self.overlay_scroll_top = 0;
                 }
+                self.overlay.set_lines(lines);
                 return;
             }
             KeyEvent {
@@ -272,95 +264,27 @@ impl App {
                 return;
             }
             KeyEvent { code: KeyCode::Char('m'), modifiers: KeyModifiers::CONTROL, .. } => {
-                // Model selection popup with actions wired to UpdateModel and PersistModelSelection
-                let tx = self.app_event_tx.clone();
-                let items: Vec<crate::bottom_pane::list_selection_view::SelectionItem> = vec![
-                    {
-                        let tx = tx.clone();
-                        crate::bottom_pane::list_selection_view::SelectionItem {
-                            name: "gpt-4o-mini".to_string(),
-                            description: Some("fast, cost-effective".to_string()),
-                            is_current: false,
-                            actions: vec![Box::new(move |t: &AppEventSender| {
-                                t.send(AppEvent::UpdateModel("gpt-4o-mini".to_string()));
-                                tx.send(AppEvent::PersistModelSelection { model: "gpt-4o-mini".to_string(), effort: None });
-                                // Update placeholder and show a small info line
-                                let p = "Model: gpt-4o-mini".to_string();
-                                t.send(AppEvent::ToolOutput { text: p.clone() });
-                                // Update composer hint
-                                // Note: UI update via BottomPane happens next draw
-                            })],
-                        }
-                    },
-                    {
-                        let tx = self.app_event_tx.clone();
-                        crate::bottom_pane::list_selection_view::SelectionItem {
-                            name: "Workspace Write + Network".to_string(),
-                            description: Some("Codex can work in the workspace with network access; approval required for operations outside workspace".to_string()),
-                            is_current: false,
-                            actions: vec![Box::new(move |t: &AppEventSender| {
-                                t.send(AppEvent::UpdateAskForApprovalPolicy(AskForApproval::OnRequest));
-                                t.send(AppEvent::UpdateSandboxPolicy(SandboxPolicy::WorkspaceWrite {
-                                    writable_roots: Vec::new(),
-                                    network_access: true,
-                                    exclude_tmpdir_env_var: false,
-                                    exclude_system_tmp: false,
-                                }));
-                                tx.send(AppEvent::ToolOutput { text: "Approval preset: Workspace Write + Network".to_string() });
-                            })],
-                        }
-                    },
-                    {
-                        let tx = self.app_event_tx.clone();
-                        crate::bottom_pane::list_selection_view::SelectionItem {
-                            name: "Unless Trusted + Workspace Write".to_string(),
-                            description: Some("Fewer prompts when trusted; workspace-write with no network".to_string()),
-                            is_current: false,
-                            actions: vec![Box::new(move |t: &AppEventSender| {
-                                t.send(AppEvent::UpdateAskForApprovalPolicy(AskForApproval::UnlessTrusted));
-                                t.send(AppEvent::UpdateSandboxPolicy(SandboxPolicy::WorkspaceWrite {
-                                    writable_roots: Vec::new(),
-                                    network_access: false,
-                                    exclude_tmpdir_env_var: false,
-                                    exclude_system_tmp: false,
-                                }));
-                                tx.send(AppEvent::ToolOutput { text: "Approval preset: Unless Trusted + Workspace Write".to_string() });
-                            })],
-                        }
-                    },
-                    {
-                        let tx = self.app_event_tx.clone();
-                        crate::bottom_pane::list_selection_view::SelectionItem {
-                            name: "On Failure + Workspace Write".to_string(),
-                            description: Some("Only ask when operations fail; workspace-write with no network".to_string()),
-                            is_current: false,
-                            actions: vec![Box::new(move |t: &AppEventSender| {
-                                t.send(AppEvent::UpdateAskForApprovalPolicy(AskForApproval::OnFailure));
-                                t.send(AppEvent::UpdateSandboxPolicy(SandboxPolicy::WorkspaceWrite {
-                                    writable_roots: Vec::new(),
-                                    network_access: false,
-                                    exclude_tmpdir_env_var: false,
-                                    exclude_system_tmp: false,
-                                }));
-                                tx.send(AppEvent::ToolOutput { text: "Approval preset: On Failure + Workspace Write".to_string() });
-                            })],
-                        }
-                    },
-                    {
-                        let tx = tx.clone();
-                        crate::bottom_pane::list_selection_view::SelectionItem {
-                            name: "o4-mini".to_string(),
-                            description: Some("reasoning optimized".to_string()),
-                            is_current: false,
-                            actions: vec![Box::new(move |t: &AppEventSender| {
-                                t.send(AppEvent::UpdateModel("o4-mini".to_string()));
-                                tx.send(AppEvent::PersistModelSelection { model: "o4-mini".to_string(), effort: None });
-                                let p = "Model: o4-mini".to_string();
-                                t.send(AppEvent::ToolOutput { text: p.clone() });
-                            })],
-                        }
-                    },
-                ];
+                // Model selection popup from builtin presets
+                let mut items: Vec<crate::bottom_pane::list_selection_view::SelectionItem> = Vec::new();
+                for p in builtin_model_presets() {
+                    let tx = self.app_event_tx.clone();
+                    let name = p.label.to_string();
+                    let desc = Some(p.description.to_string());
+                    let model_slug = p.model.to_string();
+                    let effort = p.effort;
+                    items.push(crate::bottom_pane::list_selection_view::SelectionItem {
+                        name: name.clone(),
+                        description: desc,
+                        is_current: settings::current_model().as_deref() == Some(p.model),
+                        actions: vec![Box::new(move |t: &AppEventSender| {
+                            t.send(AppEvent::UpdateModel(model_slug.clone()));
+                            t.send(AppEvent::UpdateReasoningEffort(effort));
+                            tx.send(AppEvent::PersistModelSelection { model: model_slug.clone(), effort });
+                            t.send(AppEvent::ToolOutput { text: format!("Model: {}", name) });
+                            settings::save_model(&model_slug);
+                        })],
+                    });
+                }
                 self.bottom_pane.show_selection_view(
                     "Select model and reasoning level".to_string(),
                     Some("Switch model for this session".to_string()),
@@ -371,53 +295,25 @@ impl App {
                 return;
             }
             KeyEvent { code: KeyCode::Char('a'), modifiers: KeyModifiers::CONTROL, .. } => {
-                // Approvals popup aligned to codex-1 presets
-                let items: Vec<crate::bottom_pane::list_selection_view::SelectionItem> = vec![
-                    {
-                        let tx = self.app_event_tx.clone();
-                        crate::bottom_pane::list_selection_view::SelectionItem {
-                            name: "Read Only".to_string(),
-                            description: Some("Codex can read files and answer questions. Codex requires approval to make edits, run commands, or access network".to_string()),
-                            is_current: false,
-                            actions: vec![Box::new(move |t: &AppEventSender| {
-                                t.send(AppEvent::UpdateAskForApprovalPolicy(AskForApproval::OnRequest));
-                                t.send(AppEvent::UpdateSandboxPolicy(SandboxPolicy::ReadOnly));
-                                tx.send(AppEvent::ToolOutput { text: "Approval preset: Read Only".to_string() });
-                            })],
-                        }
-                    },
-                    {
-                        let tx = self.app_event_tx.clone();
-                        crate::bottom_pane::list_selection_view::SelectionItem {
-                            name: "Auto".to_string(),
-                            description: Some("Codex can read files, make edits, and run commands in the workspace. Codex requires approval to work outside the workspace or access network".to_string()),
-                            is_current: false,
-                            actions: vec![Box::new(move |t: &AppEventSender| {
-                                t.send(AppEvent::UpdateAskForApprovalPolicy(AskForApproval::OnRequest));
-                                t.send(AppEvent::UpdateSandboxPolicy(SandboxPolicy::WorkspaceWrite {
-                                    writable_roots: Vec::new(),
-                                    network_access: false,
-                                    exclude_tmpdir_env_var: false,
-                                    exclude_system_tmp: false,
-                                }));
-                                tx.send(AppEvent::ToolOutput { text: "Approval preset: Auto".to_string() });
-                            })],
-                        }
-                    },
-                    {
-                        let tx = self.app_event_tx.clone();
-                        crate::bottom_pane::list_selection_view::SelectionItem {
-                            name: "Full Access".to_string(),
-                            description: Some("Codex can read files, make edits, and run commands with network access, without approval. Exercise caution".to_string()),
-                            is_current: false,
-                            actions: vec![Box::new(move |t: &AppEventSender| {
-                                t.send(AppEvent::UpdateAskForApprovalPolicy(AskForApproval::Never));
-                                t.send(AppEvent::UpdateSandboxPolicy(SandboxPolicy::DangerFullAccess));
-                                tx.send(AppEvent::ToolOutput { text: "Approval preset: Full Access".to_string() });
-                            })],
-                        }
-                    },
-                ];
+                // Approvals popup from builtin presets
+                let mut items: Vec<crate::bottom_pane::list_selection_view::SelectionItem> = Vec::new();
+                for p in builtin_approval_presets() {
+                    let tx = self.app_event_tx.clone();
+                    let name = p.name.to_string();
+                    let desc = Some(p.description.to_string());
+                    let approval = p.approval.clone();
+                    let sandbox = p.sandbox.clone();
+                    items.push(crate::bottom_pane::list_selection_view::SelectionItem {
+                        name: name.clone(),
+                        description: desc,
+                        is_current: false,
+                        actions: vec![Box::new(move |t: &AppEventSender| {
+                            t.send(AppEvent::UpdateAskForApprovalPolicy(approval.clone()));
+                            t.send(AppEvent::UpdateSandboxPolicy(sandbox.clone()));
+                            tx.send(AppEvent::ToolOutput { text: format!("Approval preset: {}", name) });
+                        })],
+                    });
+                }
                 self.bottom_pane.show_selection_view(
                     "Select approval & sandbox".to_string(),
                     None,
@@ -452,34 +348,8 @@ impl App {
             _ => {}
         }
 
-        // If transcript overlay is active, handle scroll keys here
-        if self.overlay_active {
-            match key.code {
-                KeyCode::Esc => {
-                    self.overlay_active = false;
-                }
-                KeyCode::Up => {
-                    self.overlay_scroll_top = self.overlay_scroll_top.saturating_sub(1);
-                }
-                KeyCode::Down => {
-                    self.overlay_scroll_top = self.overlay_scroll_top.saturating_add(1);
-                }
-                KeyCode::PageUp => {
-                    self.overlay_scroll_top = self.overlay_scroll_top.saturating_sub(10);
-                }
-                KeyCode::PageDown => {
-                    self.overlay_scroll_top = self.overlay_scroll_top.saturating_add(10);
-                }
-                KeyCode::Home => {
-                    self.overlay_scroll_top = 0;
-                }
-                KeyCode::End => {
-                    self.overlay_scroll_top = usize::MAX;
-                }
-                _ => {}
-            }
-            return;
-        }
+        // If overlay is active, let it handle keys first
+        if self.overlay.handle_key(key) { return; }
 
         // Delegate to bottom pane for input handling
         // If file-search popup is active, intercept keys here
@@ -1007,15 +877,8 @@ where
     terminal.set_viewport_area(input_area);
 
     terminal.draw(|f| {
-        if app.overlay_active {
-            // Render transcript overlay in the same area, scrollable
-            let mut start = app.overlay_scroll_top;
-            let total = app.overlay_lines.len();
-            if start > total { start = total; }
-            let mut end = start.saturating_add(bottom_height as usize);
-            if end > total { end = total; }
-            let view = app.overlay_lines[start..end].to_vec();
-            Paragraph::new(view).render_ref(Rect { x: input_area.x, y: input_area.y, width: input_area.width, height: bottom_height }, f.buffer_mut());
+        if app.overlay.is_active() {
+            app.overlay.render_ref(Rect { x: input_area.x, y: input_area.y, width: input_area.width, height: bottom_height }, f.buffer_mut());
         } else {
             // Bottom pane (input area) using render_ref
             app.bottom_pane.render_ref(Rect { x: input_area.x, y: input_area.y + status_height, width: input_area.width, height: bottom_height }, f.buffer_mut());
@@ -1116,16 +979,12 @@ where
             append_log(&format!("[patch] {}", status));
         }
         CoreEvent::TurnDiff { unified_diff } => {
-            // Open a simple scrollable overlay with the diff content
-            app.overlay_lines.clear();
-            // Title line (dim)
-            app.overlay_lines.push(Line::from("D I F F"));
-            app.overlay_lines.push(Line::from(""));
+            let mut lines: Vec<Line<'static>> = Vec::new();
             for l in unified_diff.split('\n') {
-                app.overlay_lines.push(Line::from(l.to_string()));
+                lines.push(Line::from(l.to_string()));
             }
-            app.overlay_active = true;
-            app.overlay_scroll_top = 0;
+            app.overlay.set_lines(lines);
+            app.overlay.set_title("D I F F");
             append_log("[diff] overlay opened");
         }
         CoreEvent::TaskComplete => {

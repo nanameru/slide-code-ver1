@@ -15,6 +15,10 @@ pub mod status_indicator_widget;
 pub mod streaming;
 pub mod user_approval_widget;
 pub mod widgets;
+pub mod pager_overlay;
+pub mod model_presets;
+pub mod approval_presets;
+pub mod settings;
 
 use anyhow::Result;
 use clap::Parser;
