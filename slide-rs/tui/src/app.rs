@@ -667,12 +667,8 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
                     }
                 }
                 AppEvent::InsertHistoryCell(cell) => {
-                    // Display user messages immediately, store assistant messages for later
-                    if matches!(cell, HistoryCell::UserPrompt { .. }) {
-                        insert_history_lines(&mut terminal, cell.lines());
-                    } else {
-                        app.message_queue.push(cell);
-                    }
+                    // Store all messages for proper chronological display at task completion
+                    app.message_queue.push(cell);
                 }
                 AppEvent::ToolOutput { text } => {
                     let cell = HistoryCell::new_system_status(SystemLabel::Info, [text]);
@@ -1009,9 +1005,8 @@ where
 
             if !normal_buf.is_empty() {
                 let lines = app.answer_stream.push_delta(&normal_buf);
-                if !lines.is_empty() {
-                    insert_history_lines(terminal, lines);
-                }
+                // Store assistant delta content for proper display order
+                // Note: We skip immediate display and queue it for task completion
             }
             append_log(&format!("assistantΔ: {}", delta));
             app.approx_output_chars = app.approx_output_chars.saturating_add(delta.len());
@@ -1035,8 +1030,13 @@ where
             }
             let mut tail = app.answer_stream.finalize();
             pending.append(&mut tail);
-            if !pending.is_empty() {
-                insert_history_lines(terminal, pending);
+            // Store final assistant message for proper display order
+            if !pending.is_empty() || !message.is_empty() {
+                let full_message = if !message.is_empty() { message } else {
+                    pending.iter().map(|line| line.spans.iter().map(|span| span.content.to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
+                };
+                let cell = HistoryCell::new_assistant_message(full_message);
+                app.message_queue.push(cell);
             }
             append_log(&format!("assistant: {}", message));
         }
@@ -1142,8 +1142,9 @@ where
                 insert_history_lines(terminal, tail);
             }
 
-            // Display queued messages in correct order (user first, then assistant)
-            for msg in &app.message_queue {
+            // Display queued messages in reverse order for correct chronological display
+            // (insert_history_lines inserts at top, so reverse order gives correct final order)
+            for msg in app.message_queue.iter().rev() {
                 insert_history_lines(terminal, msg.lines());
             }
             app.message_queue.clear();
