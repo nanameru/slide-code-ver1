@@ -906,9 +906,38 @@ where
             app.app_event_tx.send(AppEvent::StartCommitAnimation);
         }
         CoreEvent::AgentMessageDelta { delta } => {
-            let lines = app.answer_stream.push_delta(&delta);
-            if !lines.is_empty() {
-                insert_history_lines(terminal, lines);
+            // Split incoming delta into normal text vs tool-execution annotations
+            let mut normal_buf = String::new();
+            let mut tool_lines: Vec<String> = Vec::new();
+            for raw in delta.split('\n') {
+                let line = raw.trim_end_matches('\r');
+                let t = line.trim_start();
+                let is_tool = t.starts_with("[Tool Execution]")
+                    || t.starts_with('▶')
+                    || t.starts_with("[Tool Execution Result]");
+                if is_tool {
+                    tool_lines.push(line.to_string());
+                } else {
+                    normal_buf.push_str(line);
+                    normal_buf.push('\n');
+                }
+            }
+
+            if !tool_lines.is_empty() {
+                // Flush any pending streamed answer before inserting tool block
+                let tail = app.answer_stream.finalize();
+                if !tail.is_empty() {
+                    insert_history_lines(terminal, tail);
+                }
+                let cell = HistoryCell::new_system_status(SystemLabel::Info, tool_lines);
+                insert_history_lines(terminal, cell.lines());
+            }
+
+            if !normal_buf.is_empty() {
+                let lines = app.answer_stream.push_delta(&normal_buf);
+                if !lines.is_empty() {
+                    insert_history_lines(terminal, lines);
+                }
             }
             append_log(&format!("assistantΔ: {}", delta));
             app.approx_output_chars = app.approx_output_chars.saturating_add(delta.len());
