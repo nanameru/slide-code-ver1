@@ -546,5 +546,32 @@ pub(crate) fn get_openai_tools(
 
 // Compatibility function for existing code
 pub fn render_tools_instructions(_config: &ToolsConfig, _approval_mode_hint: Option<&str>) -> String {
-    "Tools are available for execution.".to_string()
+    // Instruct the model to emit a single-line JSON object to trigger tools.
+    // The ToolExecutor looks for a line that starts with '{' and contains a
+    // "tool" key, or a <tool_call>{...}</tool_call> block. Any prose around
+    // it will prevent detection, so we must be explicit.
+    let mut lines: Vec<String> = Vec::new();
+    lines.push("To execute a tool, include exactly one of the following as a standalone line with no surrounding text:".to_string());
+    lines.push("".to_string());
+    lines.push("Examples:".to_string());
+    lines.push("- read a file:".to_string());
+    lines.push("  {\"tool\":\"read_file\",\"path\":\"/absolute/path/to/file\"}".to_string());
+    lines.push("- run a safe shell read command:".to_string());
+    lines.push("  {\"tool\":\"shell\",\"command\":[\"cat\",\"/absolute/path/to/file\"]}".to_string());
+    lines.push("- write a file:".to_string());
+    lines.push("  {\"tool\":\"write_file\",\"path\":\"/absolute/path/to/file\",\"content\":\"...\"}".to_string());
+    lines.push("- apply a patch (freeform diff string):".to_string());
+    lines.push("  {\"tool\":\"apply_patch\",\"input\":\"*** Begin Patch\\n*** Update File: path\\n- old\\n+ new\\n*** End Patch\"}".to_string());
+    lines.push("- list files in a directory:".to_string());
+    lines.push("  {\"tool\":\"list_files\",\"path\":\"/absolute/path/to/dir\"}".to_string());
+    lines.push("- search files by name substring:".to_string());
+    lines.push("  {\"tool\":\"search_files\",\"query\":\"needle\",\"path\":\"/absolute/path\"}".to_string());
+    lines.push("".to_string());
+    lines.push("Rules:".to_string());
+    lines.push("- Output the JSON on its own line. Do not prepend/append any explanation or formatting.".to_string());
+    lines.push("- Use only supported tool names: shell, read_file, write_file, apply_patch, list_files, search_files.".to_string());
+    lines.push("- Prefer absolute paths. Relative paths are resolved against the current working directory.".to_string());
+    lines.push("- For shell, prefer read-only commands (ls, cat, rg).".to_string());
+    lines.push("- Alternatively, you may wrap the JSON in <tool_call>{...}</tool_call> on a single line.".to_string());
+    lines.join("\n")
 }

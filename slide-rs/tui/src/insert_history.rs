@@ -23,6 +23,8 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use textwrap::Options as TwOptions;
 use textwrap::WordSplitter;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 /// Insert `lines` above the current viewport using inline viewport technique.
 /// This allows history to be preserved in terminal scrollback.
@@ -313,46 +315,27 @@ fn word_wrap_line(line: &Line, width: usize) -> Vec<Line<'static>> {
         span_bounds.push((start, cursor, s.style));
     }
 
-    // Use textwrap for robust word-aware wrapping; no hyphenation, no breaking words.
-    let opts = TwOptions::new(width)
-        .break_words(false)
-        .word_splitter(WordSplitter::NoHyphenation);
-    let wrapped = textwrap::wrap(&flat, &opts);
+    // Grapheme-aware, display-cell-width wrapping to handle CJK fullwidth correctly.
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let mut acc_cells: usize = 0;
+    let mut seg_start: usize = 0;
 
-    if wrapped.len() <= 1 {
+    for (byte_idx, g) in flat.grapheme_indices(true) {
+        let w = g.width().max(1);
+        if acc_cells > 0 && acc_cells + w > width {
+            out.push(slice_line_spans(line, &span_bounds, seg_start, byte_idx));
+            seg_start = byte_idx;
+            acc_cells = 0;
+        }
+        acc_cells = acc_cells.saturating_add(w);
+    }
+
+    // Tail
+    if seg_start == 0 {
+        // No wrap occurred
         return vec![to_owned_line(line)];
     }
-
-    // Map wrapped pieces back to byte ranges in `flat` sequentially.
-    let mut start_cursor = 0usize;
-    let mut out: Vec<Line<'static>> = Vec::with_capacity(wrapped.len());
-
-    for piece in wrapped {
-        let piece_str: &str = &piece;
-        if piece_str.is_empty() {
-            out.push(Line {
-                style: line.style,
-                alignment: line.alignment,
-                spans: Vec::new(),
-            });
-            continue;
-        }
-
-        // Find the next occurrence of piece_str at or after start_cursor.
-        if let Some(rel) = flat[start_cursor..].find(piece_str) {
-            let s = start_cursor + rel;
-            let e = s + piece_str.len();
-            out.push(slice_line_spans(line, &span_bounds, s, e));
-            start_cursor = e;
-        } else {
-            // Fallback: slice by length from cursor.
-            let s = start_cursor;
-            let e = (start_cursor + piece_str.len()).min(flat.len());
-            out.push(slice_line_spans(line, &span_bounds, s, e));
-            start_cursor = e;
-        }
-    }
-
+    out.push(slice_line_spans(line, &span_bounds, seg_start, flat.len()));
     out
 }
 
