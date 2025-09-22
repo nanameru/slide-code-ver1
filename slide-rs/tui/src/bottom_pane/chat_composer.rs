@@ -61,10 +61,12 @@ impl ChatComposer {
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        // Simple design: just left border space, no extra height
-        let textarea_height = self.textarea.desired_height(width.saturating_sub(2)); // Account for left border space
+        // Full border design: account for all borders
+        let inner_width = width.saturating_sub(4); // 2 for left/right borders + 2 for icon and space
+        let textarea_height = self.textarea.desired_height(inner_width);
         let hints_height = if self.show_hints { 1 } else { 0 };
-        textarea_height.saturating_add(hints_height)
+        // Add 2 for top/bottom borders
+        textarea_height.saturating_add(hints_height).saturating_add(2)
     }
 
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
@@ -156,12 +158,12 @@ impl ChatComposer {
         ])
         .areas(area);
 
-        // Simple design: just account for left border space
+        // Full border design: account for all borders
         let content_area = Rect {
-            x: textarea_rect.x + 2, // Space for "→ "
-            y: textarea_rect.y,
-            width: textarea_rect.width.saturating_sub(2),
-            height: textarea_rect.height,
+            x: textarea_rect.x + 3, // 1 for left border + 1 for icon + 1 for space
+            y: textarea_rect.y + 1, // 1 for top border
+            width: textarea_rect.width.saturating_sub(4), // 2 for left/right borders + 2 for icon and space
+            height: textarea_rect.height.saturating_sub(2), // 2 for top/bottom borders
         };
 
         let state = self.textarea_state.borrow();
@@ -298,27 +300,27 @@ impl WidgetRef for &ChatComposer {
             Style::default().add_modifier(Modifier::DIM)
         };
 
-        // Render left border like Claude Code
+        // Render full border (all sides)
         Block::default()
-            .borders(Borders::LEFT)
+            .borders(Borders::ALL)
             .border_type(BorderType::Plain)
             .border_style(border_style)
             .render_ref(textarea_rect, buf);
 
-        // Render prompt icon
+        // Render prompt icon inside the border
         let icon_line = Line::from("→").style(border_style);
         Paragraph::new(vec![icon_line])
             .render_ref(
-                Rect::new(textarea_rect.x + 1, textarea_rect.y, 1, 1),
+                Rect::new(textarea_rect.x + 1, textarea_rect.y + 1, 1, 1),
                 buf,
             );
 
-        // Content area (after icon and space)
+        // Content area (inside full border, after icon and space)
         let content_area = Rect {
-            x: textarea_rect.x + 2, // Space for "→ "
-            y: textarea_rect.y,
-            width: textarea_rect.width.saturating_sub(2),
-            height: textarea_rect.height,
+            x: textarea_rect.x + 3, // 1 for left border + 1 for icon + 1 for space
+            y: textarea_rect.y + 1, // 1 for top border
+            width: textarea_rect.width.saturating_sub(4), // 2 for left/right borders + 2 for icon and space
+            height: textarea_rect.height.saturating_sub(2), // 2 for top/bottom borders
         };
 
         // Render textarea with explicit text color
