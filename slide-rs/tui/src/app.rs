@@ -227,9 +227,8 @@ impl App {
             return;
         }
 
-        let cell = HistoryCell::new_user_prompt(text.clone());
-        self.history.push(cell);
-        self.follow_bottom_after_change();
+        // ユーザーメッセージは即座に履歴に追加しない（codex-1と同じ動作）
+        // 代わりにTaskComplete時のリプレイで表示される
         append_log(&format!("user: {}", text));
 
         if let Some(agent) = &self.agent {
