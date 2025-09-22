@@ -26,6 +26,7 @@ use slide_core::codex::Event as CoreEvent;
 use slide_core::codex::Op;
 use slide_core::protocol::InputItem;
 use slide_core::protocol::ReasoningEffort as ReasoningEffortConfig;
+use slide_core::protocol::{CoreAskForApproval as AskForApproval, CoreSandboxPolicy as SandboxPolicy};
 
 // (leftover from earlier spinner impl) — intentionally removed
 
@@ -261,6 +262,60 @@ impl App {
                         }
                     },
                     {
+                        let tx = self.app_event_tx.clone();
+                        crate::bottom_pane::list_selection_view::SelectionItem {
+                            name: "Workspace Write + Network".to_string(),
+                            description: Some("Codex can work in the workspace with network access; approval required for operations outside workspace".to_string()),
+                            is_current: false,
+                            actions: vec![Box::new(move |t: &AppEventSender| {
+                                t.send(AppEvent::UpdateAskForApprovalPolicy(AskForApproval::OnRequest));
+                                t.send(AppEvent::UpdateSandboxPolicy(SandboxPolicy::WorkspaceWrite {
+                                    writable_roots: Vec::new(),
+                                    network_access: true,
+                                    exclude_tmpdir_env_var: false,
+                                    exclude_system_tmp: false,
+                                }));
+                                tx.send(AppEvent::ToolOutput { text: "Approval preset: Workspace Write + Network".to_string() });
+                            })],
+                        }
+                    },
+                    {
+                        let tx = self.app_event_tx.clone();
+                        crate::bottom_pane::list_selection_view::SelectionItem {
+                            name: "Unless Trusted + Workspace Write".to_string(),
+                            description: Some("Fewer prompts when trusted; workspace-write with no network".to_string()),
+                            is_current: false,
+                            actions: vec![Box::new(move |t: &AppEventSender| {
+                                t.send(AppEvent::UpdateAskForApprovalPolicy(AskForApproval::UnlessTrusted));
+                                t.send(AppEvent::UpdateSandboxPolicy(SandboxPolicy::WorkspaceWrite {
+                                    writable_roots: Vec::new(),
+                                    network_access: false,
+                                    exclude_tmpdir_env_var: false,
+                                    exclude_system_tmp: false,
+                                }));
+                                tx.send(AppEvent::ToolOutput { text: "Approval preset: Unless Trusted + Workspace Write".to_string() });
+                            })],
+                        }
+                    },
+                    {
+                        let tx = self.app_event_tx.clone();
+                        crate::bottom_pane::list_selection_view::SelectionItem {
+                            name: "On Failure + Workspace Write".to_string(),
+                            description: Some("Only ask when operations fail; workspace-write with no network".to_string()),
+                            is_current: false,
+                            actions: vec![Box::new(move |t: &AppEventSender| {
+                                t.send(AppEvent::UpdateAskForApprovalPolicy(AskForApproval::OnFailure));
+                                t.send(AppEvent::UpdateSandboxPolicy(SandboxPolicy::WorkspaceWrite {
+                                    writable_roots: Vec::new(),
+                                    network_access: false,
+                                    exclude_tmpdir_env_var: false,
+                                    exclude_system_tmp: false,
+                                }));
+                                tx.send(AppEvent::ToolOutput { text: "Approval preset: On Failure + Workspace Write".to_string() });
+                            })],
+                        }
+                    },
+                    {
                         let tx = tx.clone();
                         crate::bottom_pane::list_selection_view::SelectionItem {
                             name: "o4-mini".to_string(),
@@ -285,45 +340,49 @@ impl App {
                 return;
             }
             KeyEvent { code: KeyCode::Char('a'), modifiers: KeyModifiers::CONTROL, .. } => {
-                // Approvals popup (approval policy + sandbox)
-                use slide_core::protocol::{CoreAskForApproval as AskForApproval, CoreSandboxPolicy as SandboxPolicy};
+                // Approvals popup aligned to codex-1 presets
                 let items: Vec<crate::bottom_pane::list_selection_view::SelectionItem> = vec![
                     {
                         let tx = self.app_event_tx.clone();
                         crate::bottom_pane::list_selection_view::SelectionItem {
-                            name: "On-request + Workspace-write".to_string(),
-                            description: Some("ask on request; write in workspace; no network".to_string()),
+                            name: "Read Only".to_string(),
+                            description: Some("Codex can read files and answer questions. Codex requires approval to make edits, run commands, or access network".to_string()),
                             is_current: false,
                             actions: vec![Box::new(move |t: &AppEventSender| {
                                 t.send(AppEvent::UpdateAskForApprovalPolicy(AskForApproval::OnRequest));
-                                t.send(AppEvent::UpdateSandboxPolicy(SandboxPolicy::default()));
-                                tx.send(AppEvent::ToolOutput { text: "Approval: on-request, Sandbox: workspace-write".to_string() });
+                                t.send(AppEvent::UpdateSandboxPolicy(SandboxPolicy::ReadOnly));
+                                tx.send(AppEvent::ToolOutput { text: "Approval preset: Read Only".to_string() });
                             })],
                         }
                     },
                     {
                         let tx = self.app_event_tx.clone();
                         crate::bottom_pane::list_selection_view::SelectionItem {
-                            name: "Unless-trusted + Read-only".to_string(),
-                            description: Some("ask unless trusted; read-only".to_string()),
+                            name: "Auto".to_string(),
+                            description: Some("Codex can read files, make edits, and run commands in the workspace. Codex requires approval to work outside the workspace or access network".to_string()),
                             is_current: false,
                             actions: vec![Box::new(move |t: &AppEventSender| {
-                                t.send(AppEvent::UpdateAskForApprovalPolicy(AskForApproval::UnlessTrusted));
-                                t.send(AppEvent::UpdateSandboxPolicy(SandboxPolicy::ReadOnly));
-                                tx.send(AppEvent::ToolOutput { text: "Approval: unless-trusted, Sandbox: read-only".to_string() });
+                                t.send(AppEvent::UpdateAskForApprovalPolicy(AskForApproval::OnRequest));
+                                t.send(AppEvent::UpdateSandboxPolicy(SandboxPolicy::WorkspaceWrite {
+                                    writable_roots: Vec::new(),
+                                    network_access: false,
+                                    exclude_tmpdir_env_var: false,
+                                    exclude_system_tmp: false,
+                                }));
+                                tx.send(AppEvent::ToolOutput { text: "Approval preset: Auto".to_string() });
                             })],
                         }
                     },
                     {
                         let tx = self.app_event_tx.clone();
                         crate::bottom_pane::list_selection_view::SelectionItem {
-                            name: "Never + Danger-full-access".to_string(),
-                            description: Some("no prompts; full access (danger)".to_string()),
+                            name: "Full Access".to_string(),
+                            description: Some("Codex can read files, make edits, and run commands with network access, without approval. Exercise caution".to_string()),
                             is_current: false,
                             actions: vec![Box::new(move |t: &AppEventSender| {
                                 t.send(AppEvent::UpdateAskForApprovalPolicy(AskForApproval::Never));
                                 t.send(AppEvent::UpdateSandboxPolicy(SandboxPolicy::DangerFullAccess));
-                                tx.send(AppEvent::ToolOutput { text: "Approval: never, Sandbox: danger-full-access".to_string() });
+                                tx.send(AppEvent::ToolOutput { text: "Approval preset: Full Access".to_string() });
                             })],
                         }
                     },
@@ -331,7 +390,7 @@ impl App {
                 self.bottom_pane.show_selection_view(
                     "Select approval & sandbox".to_string(),
                     None,
-                    Some("Enter to confirm, Esc to dismiss".to_string()),
+                    Some("Press Enter to confirm or Esc to go back".to_string()),
                     items,
                     self.app_event_tx.clone(),
                 );
