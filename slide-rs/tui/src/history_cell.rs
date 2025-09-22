@@ -124,8 +124,8 @@ enum RoleLabel {
 impl RoleLabel {
     fn heading_span(&self) -> Span<'static> {
         match self {
-            RoleLabel::User => "user".cyan().bold(),
-            RoleLabel::Assistant => "assistant".green().bold(),
+            RoleLabel::User => "> ".dark_gray(),
+            RoleLabel::Assistant => "・ ".white(),
         }
     }
 }
@@ -154,7 +154,10 @@ fn build_role_block(role: RoleLabel, body: &str) -> Vec<Line<'static>> {
         let line = line.trim_end_matches('\r');
         let formatted = match role {
             RoleLabel::Assistant => format_content_line(line),
-            RoleLabel::User => Line::from(line.to_string()),
+            RoleLabel::User => Line::from(Span::styled(
+                line.to_string(),
+                Style::default().fg(Color::DarkGray),
+            )),
         };
         out.push(formatted);
     }
