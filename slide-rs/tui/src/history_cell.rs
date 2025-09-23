@@ -61,18 +61,49 @@ impl HistoryCellTrait for AgentMessageCell {
         let mut out = Vec::new();
         if self.is_first_line {
             out.push(Line::from(""));
-            out.push(assistant_heading_line());
+            
+            // 最初の非空行を探してプレフィックスを付与
+            if let Some((first_idx, first_line)) = self.lines.iter().enumerate()
+                .find(|(_, line)| !line.to_string().trim().is_empty()) {
+                
+                // プレフィックスと最初の内容行を同一行に表示
+                let mut spans = vec![Span::styled("・ ", ratatui::style::Style::default().fg(ratatui::style::Color::White))];
+                spans.extend(first_line.spans.clone());
+                out.push(Line::from(spans));
+                
+                // 残りの行を追加
+                out.extend(self.lines.iter().skip(first_idx + 1).cloned());
+            } else {
+                // 全て空行の場合はプレフィックスのみ
+                out.push(assistant_heading_line());
+            }
+        } else {
+            out.extend(self.lines.clone());
         }
-        out.extend(self.lines.clone());
         out
     }
 
     fn transcript_lines(&self) -> Vec<Line<'static>> {
         let mut out: Vec<Line<'static>> = Vec::new();
         if self.is_first_line {
-            out.push(assistant_heading_line());
+            // 最初の非空行を探してプレフィックスを付与
+            if let Some((first_idx, first_line)) = self.lines.iter().enumerate()
+                .find(|(_, line)| !line.to_string().trim().is_empty()) {
+                
+                // プレフィックスと最初の内容行を同一行に表示
+                let mut spans = vec![Span::styled("・ ", ratatui::style::Style::default().fg(ratatui::style::Color::White))];
+                spans.extend(first_line.spans.clone());
+                out.push(Line::from(spans));
+                
+                // 残りの行を追加
+                out.extend(self.lines.iter().skip(first_idx + 1).cloned());
+            } else {
+                // 全て空行の場合はプレフィックスのみ
+                out.push(assistant_heading_line());
+            }
+        } else {
+            out.extend(self.lines.clone());
         }
-        out.extend(self.lines.clone());
         out
     }
 
