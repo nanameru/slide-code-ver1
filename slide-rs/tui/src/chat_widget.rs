@@ -112,7 +112,8 @@ impl ChatWidget {
             match &result {
                 InputResult::Submitted(text) => {
                     if !text.trim().is_empty() {
-                        self.submit_message(text.clone());
+                        // Handle submission with images support
+                        self.submit_message_with_images(text.clone());
                     }
                 }
                 InputResult::None => {}
@@ -279,14 +280,19 @@ impl ChatWidget {
     }
 
     pub(crate) fn submit_message_with_images(&mut self, text: String) {
-        // Insert user message
+        // Insert user message (only once)
         let cell = HistoryCell::new_user_prompt(text.clone());
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
 
         // Handle images
         let images = self.take_recent_submission_images();
+        
+        // Submit to agent (with or without images)
         if images.is_empty() {
-            self.submit_message(text);
+            // Text only - submit directly to agent
+            if let Some(agent) = &self.agent {
+                agent.submit_text_bg(text);
+            }
         } else {
             // Build items: text then LocalImage(s)
             let mut items: Vec<InputItem> = Vec::new();
@@ -388,28 +394,26 @@ impl ChatWidget {
     
     fn submit_user_message(&mut self, user_message: UserMessage) {
         let UserMessage { text, image_paths } = user_message;
-        let mut items: Vec<InputItem> = Vec::new();
+        
+        // Only show the text portion in conversation history (once)
+        if !text.is_empty() {
+            let cell = HistoryCell::new_user_prompt(text.clone());
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        }
 
+        // Submit to agent
+        let mut items: Vec<InputItem> = Vec::new();
         if !text.is_empty() {
             items.push(InputItem::Text { text: text.clone() });
         }
-
         for path in image_paths {
             items.push(InputItem::LocalImage { path });
         }
 
-        if items.is_empty() {
-            return;
-        }
-
-        if let Some(agent) = &self.agent {
-            agent.submit_items_bg(items);
-        }
-
-        // Only show the text portion in conversation history.
-        if !text.is_empty() {
-            let cell = HistoryCell::new_user_prompt(text);
-            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        if !items.is_empty() {
+            if let Some(agent) = &self.agent {
+                agent.submit_items_bg(items);
+            }
         }
     }
     

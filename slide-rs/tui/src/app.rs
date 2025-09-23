@@ -382,23 +382,15 @@ impl App {
             }
         }
 
-        if let Some(result) = self.chat_widget.handle_key_event(key) {
-            use crate::bottom_pane::InputResult;
-            match result {
-                InputResult::Submitted(text) => {
-                    if text.trim().is_empty() {
-                        return;
-                    }
-                    // Delegate message submission to ChatWidget
-                    self.chat_widget.submit_message_with_images(text);
-                    
-                    // Update app state for running
-                    self.status = RunStatus::Running;
-                    self.last_tick = Instant::now();
-                    self.thinking_frame_idx = 0;
-                    self.thinking_last_change = Instant::now();
-                }
-                InputResult::None => {}
+        // ChatWidget handles all input processing internally
+        if let Some(_result) = self.chat_widget.handle_key_event(key) {
+            // ChatWidget will handle the submission internally
+            // Just update app running state when needed
+            if self.chat_widget.is_task_running() {
+                self.status = RunStatus::Running;
+                self.last_tick = Instant::now();
+                self.thinking_frame_idx = 0;
+                self.thinking_last_change = Instant::now();
             }
         }
     }
