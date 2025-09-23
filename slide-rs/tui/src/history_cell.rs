@@ -254,10 +254,30 @@ fn build_role_block(role: RoleLabel, body: &str) -> Vec<Line<'static>> {
         let first_line = lines[0].trim_end_matches('\r');
         let first_formatted = match role {
             RoleLabel::Assistant => {
-                // Assistantの場合：「・ 」+ 最初の行の内容
+                // Assistantの場合：最初の行が空でない場合のみプレフィックスを付けて同一行に表示
                 if first_line.trim().is_empty() {
-                    // 空行の場合はプレフィックスのみ
-                    Line::from(vec![role.heading_span()])
+                    // 空行をスキップして次の非空行を探す
+                    let mut found_content = false;
+                    for (i, line) in lines.iter().enumerate().skip(1) {
+                        if !line.trim().is_empty() {
+                            let mut spans = vec![role.heading_span()];
+                            spans.extend(format_content_line(line.trim_end_matches('\r')).spans);
+                            out.push(Line::from(spans));
+                            
+                            // 残りの行を処理
+                            for remaining_line in &lines[(i + 1)..] {
+                                let line = remaining_line.trim_end_matches('\r');
+                                out.push(format_content_line(line));
+                            }
+                            found_content = true;
+                            break;
+                        }
+                    }
+                    if !found_content {
+                        // 全て空行の場合はプレフィックスのみ
+                        out.push(Line::from(vec![role.heading_span()]));
+                    }
+                    return out;
                 } else {
                     let mut spans = vec![role.heading_span()];
                     spans.extend(format_content_line(first_line).spans);
