@@ -219,3 +219,4 @@ mod tests {
         assert!(response.tools.iter().any(|t| t.name == "slide-reply"));
     }
 }
+
