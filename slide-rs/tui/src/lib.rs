@@ -6,6 +6,7 @@ pub mod app_event;
 pub mod app_event_sender;
 pub mod clipboard_paste;
 pub mod bottom_pane;
+pub mod chat_widget;
 pub mod custom_terminal;
 pub mod history_cell;
 pub mod history_store;

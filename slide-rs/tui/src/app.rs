@@ -19,10 +19,9 @@ use tokio::time::{sleep, Duration};
 use crate::agent::AgentHandle;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-use crate::bottom_pane::{BottomPane, BottomPaneParams};
+use crate::chat_widget::{ChatWidget, ChatWidgetInit};
 use crate::history_cell::{HistoryCell, SystemLabel};
 use crate::insert_history::insert_history_lines;
-use crate::streaming::controller::{StreamController, AppEventHistorySink};
 use crate::user_approval_widget::ApprovalRequest;
 use crate::widgets::banner::banner_history_lines;
 use crate::pager_overlay::PagerOverlay;
@@ -71,22 +70,21 @@ pub struct RunResult {
     pub recent_files: Vec<String>,
 }
 
-/// Codex風に簡略化されたアプリケーション状態
+/// Simplified application state with ChatWidget delegation
 pub struct App {
     should_quit: bool,
     mode: Mode,
     status: RunStatus,
     last_tick: Instant,
-    // Chat state represented as history cells
-    history: Vec<HistoryCell>,
-    // Chat scroll state
-    chat_scroll_top: usize,
-    chat_follow_bottom: bool,
-    chat_viewport_height: usize,
+    
+    // ChatWidget delegation (codex-1 style)
+    chat_widget: ChatWidget,
+    
     // UI state
     show_modal: bool,
     modal_title: String,
     modal_body: String,
+    
     // Popup state
     active_popup: Option<PopupKind>,
     popup_title: String,
@@ -94,82 +92,60 @@ pub struct App {
     popup_filtered_indices: Vec<usize>,
     popup_selected: usize,
     popup_filter: String,
+    
     // Next action
     preview_path: Option<PathBuf>,
     // MRU files
     recent_files: Vec<String>,
-    // Agent integration
-    agent: Option<AgentHandle>,
-    // Bottom pane integration (Codex風の統合UI)
-    bottom_pane: BottomPane,
+    
     // App event channel
     app_event_rx: tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
     app_event_tx: AppEventSender,
-    // Inline viewport history (pending lines to insert above)
-    // pending_history_lines removed - messages now insert directly
-    // Assistant応答の行単位ストリーミング状態
-    stream_controller: StreamController,
+    
     // Thinking... spinner state
     thinking_frame_idx: usize,
     thinking_last_change: Instant,
-    // Preview of last assistant message (for notifications)
-    last_agent_preview: String,
-    // Simple running output size counter for token approximation
-    approx_output_chars: usize,
+    
     // Transcript/Diff overlay
     overlay: PagerOverlay,
+    
     // --- Tool/Exec rendering state (codex-like grouping) ---
-    pending_exec_block: Option<Vec<String>>, // captures [Tool Execution]..Result lines as one block
-    pending_tool_block: Option<Vec<String>>, // captures generic tool blocks ([Tool Execution] ... [Tool Execution Result])
+    pending_exec_block: Option<Vec<String>>,
+    pending_tool_block: Option<Vec<String>>,
     pending_exec_started_at: Option<Instant>,
     pending_tool_started_at: Option<Instant>,
 }
 
 impl App {
-    fn clamp_scroll_top(&mut self) {
-        let max_top = self.max_scroll_top();
-        if self.chat_scroll_top > max_top {
-            self.chat_scroll_top = max_top;
-        }
-    }
-
-    fn max_scroll_top(&self) -> usize {
-        let total_lines = self.total_chat_lines();
-        total_lines.saturating_sub(self.chat_viewport_height)
-    }
-
-    fn follow_bottom_after_change(&mut self) {
-        if self.chat_follow_bottom {
-            self.chat_scroll_top = usize::MAX;
-        } else {
-            self.clamp_scroll_top();
-        }
-    }
+    // Chat management methods delegated to ChatWidget
     pub fn new() -> Self {
         Self::new_with_recents(Vec::new())
     }
 
-    fn total_chat_lines(&self) -> usize {
-        let mut history_lines: usize = self.history.iter().map(HistoryCell::line_count).sum();
-        if !self.history.is_empty() {
-            history_lines = history_lines.saturating_sub(1);
-        }
-        // plus one prompt line always
-        history_lines + 1
-    }
+    // total_chat_lines delegated to ChatWidget
 
     pub fn new_with_recents(recent_files: Vec<String>) -> Self {
         let (app_tx_raw, app_rx) = tokio::sync::mpsc::unbounded_channel();
         let app_tx = AppEventSender::new(app_tx_raw);
+        
+        // Create ChatWidget with delegation
+        let chat_widget_init = ChatWidgetInit {
+            app_event_tx: app_tx.clone(),
+            agent: None,
+            initial_prompt: None,
+            initial_images: Vec::new(),
+        };
+        let chat_widget = ChatWidget::new(chat_widget_init);
+        
         let s = Self {
             should_quit: false,
             mode: Mode::Normal,
             status: RunStatus::Idle,
             last_tick: Instant::now(),
-            history: vec![HistoryCell::banner()],
-            chat_scroll_top: 0,
-            chat_follow_bottom: true,
-            chat_viewport_height: 0,
+            
+            // ChatWidget delegation
+            chat_widget,
+            
             show_modal: false,
             modal_title: "Help".into(),
             modal_body: "Keybindings:\n- i: Insert (compose)\n- Esc: Normal\n- Enter: Send message\n- h: Toggle help modal\n- c: Clear messages\n- q: Quit".into(),
@@ -181,17 +157,10 @@ impl App {
             popup_filter: String::new(),
             preview_path: None,
             recent_files,
-            agent: None,
-            // Empty placeholder to hide any ghost text in input
-            bottom_pane: BottomPane::new(BottomPaneParams{ has_input_focus: true, placeholder_text: "Add a follow-up".into()}),
             app_event_rx: app_rx,
             app_event_tx: app_tx,
-            // pending_history_lines removed - history cells now insert directly
-            stream_controller: StreamController::new(),
             thinking_frame_idx: 0,
             thinking_last_change: Instant::now(),
-            last_agent_preview: String::new(),
-            approx_output_chars: 0,
             overlay: PagerOverlay::new(),
             pending_exec_block: None,
             pending_tool_block: None,
@@ -226,7 +195,7 @@ impl App {
         // 表示は AppEvent::InsertHistoryCell 側で処理する
         append_log(&format!("user: {}", text));
 
-        if let Some(agent) = &self.agent {
+        if let Some(agent) = self.chat_widget.get_agent() {
             agent.submit_text_bg(text);
         }
 
@@ -264,11 +233,9 @@ impl App {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             }
-            | KeyEvent { code: KeyCode::Esc, .. } => {
-                if self.bottom_pane.is_task_running() {
-                    if let Some(agent) = &self.agent {
-                        agent.interrupt_bg();
-                    }
+            |             KeyEvent { code: KeyCode::Esc, .. } => {
+                if self.chat_widget.is_task_running() {
+                    self.chat_widget.interrupt_agent();
                     return;
                 }
                 if self.show_modal {
@@ -302,7 +269,7 @@ impl App {
                         })],
                     });
                 }
-                self.bottom_pane.show_selection_view(
+                self.chat_widget.show_selection_view(
                     "Select model and reasoning level".to_string(),
                     Some("Switch model for this session".to_string()),
                     Some("Enter to confirm, Esc to dismiss".to_string()),
@@ -331,7 +298,7 @@ impl App {
                         })],
                     });
                 }
-                self.bottom_pane.show_selection_view(
+                self.chat_widget.show_selection_view(
                     "Select approval & sandbox".to_string(),
                     None,
                     Some("Press Enter to confirm or Esc to go back".to_string()),
@@ -353,11 +320,11 @@ impl App {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                self.history.clear();
+                self.chat_widget.clear_history();
                 return;
             }
             KeyEvent { code: KeyCode::Char('i'), .. } if self.mode == Mode::Normal => { self.mode = Mode::Insert; return; }
-            KeyEvent { code: KeyCode::Char('/'), .. } if self.mode == Mode::Insert && !self.bottom_pane.is_intercepting_input() => {
+            KeyEvent { code: KeyCode::Char('/'), .. } if self.mode == Mode::Insert && !self.chat_widget.is_intercepting_input() => {
                 // Open command palette or file search depending on input later. For now show search popup directly for /open-file UX
                 self.open_file_search();
                 return;
@@ -370,18 +337,18 @@ impl App {
 
         // Delegate to bottom pane for input handling
         // If file-search popup is active, intercept keys here
-        if self.bottom_pane.is_intercepting_input() {
+        if self.chat_widget.is_intercepting_input() {
             // Minimal key handling for search: type to update query, Enter to select, Esc to close
             use crossterm::event::KeyCode::*;
-            if let Some(popup) = self.bottom_pane.file_search_mut() {
+            if let Some(popup) = self.chat_widget.file_search_mut() {
                 match key.code {
-                    Esc => { self.bottom_pane.hide_file_search(); return; }
+                    Esc => { self.chat_widget.hide_file_search(); return; }
                     Enter => {
                         if let Some(rel) = popup.selected_match() {
                             // Resolve relative path from cwd
                             let path = rel.to_string();
                             self.app_event_tx.send(AppEvent::FileReadRequest { path });
-                            self.bottom_pane.hide_file_search();
+                            self.chat_widget.hide_file_search();
                             return;
                         }
                     }
@@ -405,49 +372,28 @@ impl App {
                         });
                         return;
                     }
-                    Up => { if let Some(p) = self.bottom_pane.file_search_mut() { p.move_up(); } return; }
-                    Down => { if let Some(p) = self.bottom_pane.file_search_mut() { p.move_down(); } return; }
+                    Up => { if let Some(p) = self.chat_widget.file_search_mut() { p.move_up(); } return; }
+                    Down => { if let Some(p) = self.chat_widget.file_search_mut() { p.move_down(); } return; }
                     _ => {}
                 }
             }
         }
 
-        if let Some(result) = self.bottom_pane.handle_key_event(key) {
+        if let Some(result) = self.chat_widget.handle_key_event(key) {
             use crate::bottom_pane::InputResult;
             match result {
                 InputResult::Submitted(text) => {
                     if text.trim().is_empty() {
                         return;
                     }
-                    // Insert via unified AppEvent so ordering is consistent
-                    let cell = HistoryCell::new_user_prompt(text.clone());
-                    self.app_event_tx
-                        .send(AppEvent::InsertHistoryCell(Box::new(cell)));
-                    // then update internal state and dispatch to agent
-                    // If we had image attachments queued, include them in the submission (core wire-up simplified)
-                    {
-                        let images = self.bottom_pane.take_recent_submission_images();
-                        if images.is_empty() {
-                    self.submit_message(text);
-                        } else {
-                            // Build items: text then LocalImage(s)
-                            let mut items: Vec<InputItem> = Vec::new();
-                            if !text.is_empty() {
-                                items.push(InputItem::Text { text: text.clone() });
-                            }
-                            for p in images {
-                                items.push(InputItem::LocalImage { path: p });
-                            }
-                            if let Some(agent) = &self.agent {
-                                agent.submit_items_bg(items);
-                            }
-                            // Mark generating state similarly to submit_message
-                            self.status = RunStatus::Running;
-                            self.last_tick = Instant::now();
-                            self.thinking_frame_idx = 0;
-                            self.thinking_last_change = Instant::now();
-                        }
-                    }
+                    // Delegate message submission to ChatWidget
+                    self.chat_widget.submit_message_with_images(text);
+                    
+                    // Update app state for running
+                    self.status = RunStatus::Running;
+                    self.last_tick = Instant::now();
+                    self.thinking_frame_idx = 0;
+                    self.thinking_last_change = Instant::now();
                 }
                 InputResult::None => {}
             }
@@ -638,14 +584,17 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
     let mut terminal = Terminal::with_options(backend)?;
 
     let mut app = App::new_with_recents(init_recent_files);
-    // Spawn core agent
+    // Spawn core agent and set it in ChatWidget
     match crate::agent::AgentHandle::spawn().await {
-        Ok(agent) => app.agent = Some(agent),
+        Ok(agent) => {
+            app.chat_widget.set_agent(Some(agent));
+        }
         Err(_e) => {
-            app.history.push(HistoryCell::new_system_status(
+            let cell = HistoryCell::new_system_status(
                 SystemLabel::Info,
                 ["(failed to start agent; using local demo)"],
-            ));
+            );
+            app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
         }
     }
 
@@ -688,7 +637,7 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
 
         // Drain core events (non-blocking) without holding borrow on app.agent
         let mut drained_events = Vec::new();
-        if let Some(agent) = app.agent.as_mut() {
+        if let Some(agent) = app.chat_widget.get_agent_mut() {
             loop {
                 match agent.rx.try_recv() {
                     Ok(ev) => drained_events.push(ev),
@@ -766,9 +715,9 @@ where
         if app.overlay.is_active() {
             app.overlay.render_ref(Rect { x: input_area.x, y: input_area.y, width: input_area.width, height: bottom_height }, f.buffer_mut());
         } else {
-            // Bottom pane (input area) using render_ref
-            app.bottom_pane.render_ref(Rect { x: input_area.x, y: input_area.y + status_height, width: input_area.width, height: bottom_height }, f.buffer_mut());
-            if let Some((x, y)) = app.bottom_pane.cursor_pos(Rect { x: input_area.x, y: input_area.y + status_height, width: input_area.width, height: bottom_height }) {
+            // Chat widget (input area) using render_ref
+            app.chat_widget.render_ref(Rect { x: input_area.x, y: input_area.y + status_height, width: input_area.width, height: bottom_height }, f.buffer_mut());
+            if let Some((x, y)) = app.chat_widget.cursor_pos(Rect { x: input_area.x, y: input_area.y + status_height, width: input_area.width, height: bottom_height }) {
             f.set_cursor_position((x, y));
             }
         }
@@ -790,6 +739,7 @@ where
             app.app_event_tx.send(AppEvent::StartCommitAnimation);
         }
         CoreEvent::AgentMessageDelta { delta } => {
+            app.chat_widget.handle_agent_message_delta(&delta);
             // Split incoming delta into normal text vs tool/exec annotations, and group blocks
             // IMPORTANT: preserve original newline semantics using split_inclusive('\n')
             let mut normal_buf = String::new();
@@ -885,25 +835,7 @@ where
         }
         CoreEvent::AgentMessage { message } => {
             if !message.is_empty() {
-                let sink = AppEventHistorySink(app.app_event_tx.clone());
-                if !app.stream_controller.is_write_cycle_active() {
-                    app.stream_controller.begin(&sink);
-                }
-                app.stream_controller.push_and_maybe_commit(&message, &sink);
-                app.stream_controller.finalize(true, &sink);
-                
-                // keep a short preview for notification
-                use unicode_segmentation::UnicodeSegmentation;
-                let mut preview = String::new();
-                let mut count = 0usize;
-                for g in message.graphemes(true) {
-                    let next = count + g.len();
-                    if next > 200 { break; }
-                    preview.push_str(g);
-                    count = next;
-                }
-                app.last_agent_preview = preview;
-                app.approx_output_chars = app.approx_output_chars.saturating_add(message.len());
+                app.chat_widget.handle_agent_message(&message);
             }
             let message_for_log = message.clone();
             append_log(&format!("assistant: {}", message_for_log));
@@ -915,7 +847,7 @@ where
             app.stream_controller.finalize(true, &sink);
             app.pending_tool_block = Some(vec![format!("▶ {}", summary)]);
             app.pending_tool_started_at = Some(Instant::now());
-            app.bottom_pane.update_status_header(format!("Tool: {}", summary));
+            app.chat_widget.update_status_header(format!("Tool: {}", summary));
             let cell = HistoryCell::new_system_status(label, [format!("▶ {}", summary)]);
             app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
         }
@@ -932,7 +864,7 @@ where
                 let cell = HistoryCell::new_system_status(label, blk);
                 app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
             }
-            app.bottom_pane.update_status_header("Working".to_string());
+            app.chat_widget.update_status_header("Working".to_string());
         }
         CoreEvent::ExecCommandBegin { command, .. } => {
             // Flush assistant stream and start a new exec block
@@ -940,7 +872,7 @@ where
             app.stream_controller.finalize(true, &sink);
             app.pending_exec_block = Some(vec![format!("$ {}", command.join(" "))]);
             app.pending_exec_started_at = Some(Instant::now());
-            app.bottom_pane.update_status_header(format!("Running: {}", command.join(" ")));
+            app.chat_widget.update_status_header(format!("Running: {}", command.join(" ")));
             append_log("[exec] begin");
         }
         CoreEvent::ExecCommandEnd { exit_code, .. } => {
@@ -958,7 +890,7 @@ where
                 let cell = HistoryCell::new_system_status(SystemLabel::Exec, [exit_line.clone()]);
                 app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
             }
-            app.bottom_pane.update_status_header("Working".to_string());
+            app.chat_widget.update_status_header("Working".to_string());
             append_log("[exec] end");
         }
         CoreEvent::ApplyPatchApprovalRequest {
@@ -977,7 +909,7 @@ where
                 changes: items,
                 reason,
             };
-            app.bottom_pane
+            app.chat_widget
                 .show_approval_modal(req, app.app_event_tx.clone());
             append_log("[approve] apply_patch requested");
         }
@@ -1003,12 +935,11 @@ where
         }
         CoreEvent::TaskComplete => {
             app.status = RunStatus::Idle;
-            app.bottom_pane.set_task_running(false);
-            // 念のため残りをフラッシュ
-            let sink = AppEventHistorySink(app.app_event_tx.clone());
-            app.stream_controller.finalize(true, &sink);
+            app.chat_widget.set_task_running(false);
+            
+            // Delegate task completion to ChatWidget
+            app.chat_widget.handle_task_complete();
 
-            // ユーザーメッセージのリプレイは行わない（即時表示へ変更済み）
             // Flush any pending tool/exec blocks to avoid dangling groups
             if let Some(mut blk) = app.pending_tool_block.take() {
                 if let Some(st) = app.pending_tool_started_at.take() {
@@ -1029,31 +960,15 @@ where
                 let cell = HistoryCell::new_system_status(SystemLabel::Exec, blk);
                 app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
             }
-            app.bottom_pane.update_status_header("Working".to_string());
+            app.chat_widget.update_status_header("Working".to_string());
             append_log("[task] complete");
             app.app_event_tx.send(AppEvent::StopCommitAnimation);
-            // simple inline notification (one-line)
-            let should_show_note = !app.bottom_pane.is_intercepting_input();
-            if should_show_note && !app.last_agent_preview.is_empty() {
-                let note = format!("✓ {}", app.last_agent_preview);
-                let cell = HistoryCell::new_system_status(SystemLabel::Info, [note]);
-                app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
-                app.last_agent_preview.clear();
-            }
-            // Approximate tokens (rough heuristic: 4 chars per token)
-            if app.approx_output_chars > 0 {
-                let approx_tokens = (app.approx_output_chars as f32 / 4.0).ceil() as u64;
-                let line = format!("Token approx: ~{} tokens", approx_tokens);
-                let cell = HistoryCell::new_system_status(SystemLabel::Info, [line]);
-                app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
-                app.approx_output_chars = 0;
-            }
         }
         CoreEvent::Error { message } => {
             let cell = HistoryCell::new_system_status(SystemLabel::Error, [message.clone()]);
             app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
             app.status = RunStatus::Error;
-            app.bottom_pane.set_task_running(false);
+            app.chat_widget.set_task_running(false);
             append_log(&format!("[error] {}", message));
             app.app_event_tx.send(AppEvent::StopCommitAnimation);
         }
@@ -1069,7 +984,7 @@ where
                 command,
                 reason,
             };
-            app.bottom_pane
+            app.chat_widget
                 .show_approval_modal(req, app.app_event_tx.clone());
             append_log("[approve] exec requested");
         }
@@ -1102,35 +1017,35 @@ where
             let dots = [".", "..", "...", "…." ];
             app.thinking_frame_idx = app.thinking_frame_idx.wrapping_add(1);
             let idx = (app.thinking_frame_idx as usize) % dots.len();
-            app.bottom_pane.update_status_header(format!("Working{}", dots[idx]));
+            app.chat_widget.update_status_header(format!("Working{}", dots[idx]));
         }
         AppEvent::StopCommitAnimation => {
             app.bottom_pane.set_task_running(false);
         }
         AppEvent::UpdateModel(model) => {
-            if let Some(agent) = &app.agent {
+            if let Some(agent) = app.chat_widget.get_agent() {
                 agent.override_turn_context_bg(Some(model.clone()), None, None, None);
             }
             app.bottom_pane.set_composer_placeholder(format!("Model: {}", model));
         }
         AppEvent::UpdateReasoningEffort(effort) => {
-            if let Some(agent) = &app.agent {
+            if let Some(agent) = app.chat_widget.get_agent() {
                 agent.override_turn_context_bg(None, effort, None, None);
             }
         }
         AppEvent::UpdateAskForApprovalPolicy(policy) => {
-            if let Some(agent) = &app.agent {
+            if let Some(agent) = app.chat_widget.get_agent() {
                 agent.override_turn_context_bg(None, None, Some(policy), None);
             }
         }
         AppEvent::UpdateSandboxPolicy(policy) => {
-            if let Some(agent) = &app.agent {
+            if let Some(agent) = app.chat_widget.get_agent() {
                 agent.override_turn_context_bg(None, None, None, Some(policy));
             }
         }
         AppEvent::PersistModelSelection { .. } => {}
         AppEvent::ExecApproval { id, decision } => {
-            if let Some(agent) = &app.agent {
+            if let Some(agent) = app.chat_widget.get_agent() {
                 let c = agent.codex.clone();
                 tokio::spawn(async move {
                     let _ = c.submit(Op::ExecApproval { id, decision }).await;
@@ -1138,7 +1053,7 @@ where
             }
         }
         AppEvent::PatchApproval { id, decision } => {
-            if let Some(agent) = &app.agent {
+            if let Some(agent) = app.chat_widget.get_agent() {
                 let c = agent.codex.clone();
                 tokio::spawn(async move {
                     let _ = c.submit(Op::PatchApproval { id, decision }).await;

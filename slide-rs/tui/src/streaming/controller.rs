@@ -176,4 +176,59 @@ impl StreamController {
     pub(crate) fn has_seen_delta(&self) -> bool {
         self.state.has_seen_delta
     }
+
+    /// Apply a full final answer: replace queued content with only the remaining tail,
+    /// then finalize immediately and notify completion.
+    pub(crate) fn apply_final_answer(&mut self, message: &str, sink: &impl HistorySink) -> bool {
+        self.begin(sink);
+
+        {
+            let state = &mut self.state;
+            // Only inject the final full message if we have not seen any deltas for this stream.
+            if !state.has_seen_delta && !message.is_empty() {
+                // normalize to end with newline
+                let mut msg = message.to_owned();
+                if !msg.ends_with('\n') {
+                    msg.push('\n');
+                }
+
+                // replace while preserving already committed count
+                let committed = state.collector.committed_count();
+                state
+                    .collector
+                    .replace_with_and_mark_committed(&msg, committed);
+            }
+        }
+        self.finalize(true, sink)
+    }
+
+    /// Step animation: commit at most one queued line and handle end-of-drain cleanup.
+    pub(crate) fn on_commit_tick(&mut self, sink: &impl HistorySink) -> bool {
+        if !self.active {
+            return false;
+        }
+        let step = { self.state.step() };
+        if !step.history.is_empty() {
+            sink.insert_history_cell(Box::new(AgentMessageCell::new(
+                step.history,
+                self.header.maybe_emit_header(),
+            )));
+        }
+
+        let is_idle = self.state.is_idle();
+        if is_idle {
+            sink.stop_commit_animation();
+            if self.finishing_after_drain {
+                // Reset and notify
+                self.state.clear();
+                self.header.allow_reemit_in_turn();
+                self.header.reset_for_stream();
+                self.active = false;
+                self.finishing_after_drain = false;
+                return true;
+            }
+        }
+        false
+    }
+
 }
