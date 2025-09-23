@@ -219,7 +219,7 @@ impl BottomPane {
     pub(crate) fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
         
-        // 🔄 ChatComposerにタスク状態を伝達
+        // タスク状態をChatComposerに通知（アニメーション表示用）
         self.composer.set_task_running(running);
 
         if running {
