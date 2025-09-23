@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 use std::path::Path;
+use sha2::{Sha256, Digest};
 
 /// Approval policy for AI commands and tool usage
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -28,6 +29,21 @@ pub struct ApprovalManager {
     policy: AskForApproval,
     approved_commands: HashSet<Vec<String>>,
     trusted_commands: HashSet<String>,
+    approved_patches: HashSet<String>, // パッチのハッシュを保存
+    session_approvals: HashMap<String, bool>, // セッション内承認の記録
+}
+
+/// パッチ適用の承認結果
+#[derive(Debug, Clone, PartialEq)]
+pub enum ApprovalResult {
+    /// 自動承認
+    AutoApproved,
+    /// ユーザーによる承認
+    UserApproved,
+    /// 拒否
+    Denied { reason: String },
+    /// ユーザーの判断が必要
+    RequiresUserInput,
 }
 
 impl Default for ApprovalManager {
@@ -46,6 +62,8 @@ impl Default for ApprovalManager {
             policy: AskForApproval::default(),
             approved_commands: HashSet::new(),
             trusted_commands,
+            approved_patches: HashSet::new(),
+            session_approvals: HashMap::new(),
         }
     }
 }
@@ -250,4 +268,177 @@ mod tests {
         assert!(desc.contains("escalated permissions"));
         assert!(desc.contains("Push changes to remote"));
     }
+}
+
+/// パッチ適用の安全性評価結果
+#[derive(Debug, Clone, PartialEq)]
+enum PatchSafetyAssessment {
+    Safe,
+    RequiresApproval { reason: String },
+    Dangerous { reason: String },
+}
+
+/// パッチ承認関連の実装をApprovalManagerに追加
+impl ApprovalManager {
+    /// パッチ適用の承認を評価
+    pub fn evaluate_patch_approval(&mut self, patch_content: &str, session_id: Option<&str>) -> ApprovalResult {
+        let patch_hash = self.calculate_patch_hash(patch_content);
+        
+        // 既に承認済みのパッチかチェック
+        if self.approved_patches.contains(&patch_hash) {
+            return ApprovalResult::AutoApproved;
+        }
+
+        // セッション内承認をチェック
+        if let Some(session_id) = session_id {
+            let session_key = format!("patch_{}", session_id);
+            if let Some(&approved) = self.session_approvals.get(&session_key) {
+                if approved {
+                    return ApprovalResult::AutoApproved;
+                } else {
+                    return ApprovalResult::Denied {
+                        reason: "Previously denied in this session".to_string(),
+                    };
+                }
+            }
+        }
+
+        // パッチの安全性を評価
+        match self.assess_patch_safety(patch_content) {
+            PatchSafetyAssessment::Safe => {
+                self.approved_patches.insert(patch_hash);
+                ApprovalResult::AutoApproved
+            }
+            PatchSafetyAssessment::RequiresApproval { reason: _ } => {
+                match self.policy {
+                    AskForApproval::Never => {
+                        self.approved_patches.insert(patch_hash);
+                        ApprovalResult::AutoApproved
+                    }
+                    _ => ApprovalResult::RequiresUserInput,
+                }
+            }
+            PatchSafetyAssessment::Dangerous { reason } => {
+                ApprovalResult::Denied { reason }
+            }
+        }
+    }
+
+    /// パッチのハッシュを計算
+    fn calculate_patch_hash(&self, patch_content: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(patch_content.as_bytes());
+        format!("{:x}", hasher.finalize())
+    }
+
+    /// パッチの安全性を評価
+    fn assess_patch_safety(&self, patch_content: &str) -> PatchSafetyAssessment {
+        // 危険なパターンをチェック
+        let dangerous_patterns = [
+            "rm -rf", "sudo", "chmod +x", "/etc/", "/sys/", "/proc/",
+            "password", "private_key", "secret", "token"
+        ];
+
+        for pattern in &dangerous_patterns {
+            if patch_content.contains(pattern) {
+                return PatchSafetyAssessment::Dangerous {
+                    reason: format!("Contains dangerous pattern: {}", pattern),
+                };
+            }
+        }
+
+        // 大きなファイルの変更をチェック
+        if patch_content.len() > 100_000 {
+            return PatchSafetyAssessment::RequiresApproval {
+                reason: "Large patch requires manual review".to_string(),
+            };
+        }
+
+        // バイナリファイルの検出
+        if patch_content.contains("Binary file") || has_binary_content(patch_content) {
+            return PatchSafetyAssessment::RequiresApproval {
+                reason: "Binary file changes require approval".to_string(),
+            };
+        }
+
+        PatchSafetyAssessment::Safe
+    }
+
+    /// ユーザー承認を記録
+    pub fn record_user_approval(&mut self, patch_content: &str, approved: bool, session_id: Option<&str>) {
+        let patch_hash = self.calculate_patch_hash(patch_content);
+        
+        if approved {
+            self.approved_patches.insert(patch_hash);
+        }
+
+        if let Some(session_id) = session_id {
+            let session_key = format!("patch_{}", session_id);
+            self.session_approvals.insert(session_key, approved);
+        }
+    }
+
+    /// コマンド実行の承認を評価（拡張版）
+    pub fn evaluate_command_approval(&mut self, command: &[String]) -> ApprovalResult {
+        if command.is_empty() {
+            return ApprovalResult::Denied {
+                reason: "Empty command".to_string(),
+            };
+        }
+
+        let cmd = &command[0];
+        
+        // 既に承認されているコマンドかチェック
+        if self.approved_commands.contains(command) {
+            return ApprovalResult::AutoApproved;
+        }
+
+        // 信頼できるコマンドかチェック
+        if self.trusted_commands.contains(cmd) {
+            self.approved_commands.insert(command.clone());
+            return ApprovalResult::AutoApproved;
+        }
+
+        // 危険なコマンドかチェック
+        let dangerous_commands = [
+            "rm", "rmdir", "del", "format", "fdisk", "dd", "mkfs",
+            "mount", "umount", "sudo", "su", "kill", "killall",
+            "shutdown", "reboot", "halt"
+        ];
+
+        if dangerous_commands.contains(&cmd.as_str()) {
+            return ApprovalResult::Denied {
+                reason: format!("Dangerous command: {}", cmd),
+            };
+        }
+
+        // ポリシーに基づいて決定
+        match self.policy {
+            AskForApproval::Never => {
+                self.approved_commands.insert(command.clone());
+                ApprovalResult::AutoApproved
+            }
+            AskForApproval::OnRequest => ApprovalResult::RequiresUserInput,
+            AskForApproval::UnlessTrusted => ApprovalResult::RequiresUserInput,
+            AskForApproval::OnFailure => {
+                self.approved_commands.insert(command.clone());
+                ApprovalResult::AutoApproved
+            }
+        }
+    }
+}
+
+/// バイナリコンテンツの検出ヘルパー関数
+fn has_binary_content(content: &str) -> bool {
+    // 非ASCII文字の割合をチェック
+    let total_chars = content.len();
+    if total_chars == 0 {
+        return false;
+    }
+
+    let non_ascii_count = content.chars().filter(|c| !c.is_ascii()).count();
+    let non_ascii_ratio = non_ascii_count as f32 / total_chars as f32;
+    
+    // 30%以上が非ASCII文字の場合はバイナリと判定
+    non_ascii_ratio > 0.3
 }

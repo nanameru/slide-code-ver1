@@ -56,7 +56,7 @@ pub(crate) fn create_apply_patch_freeform_tool() -> OpenAiTool {
 
 use crate::safety::SafetyCheck;
 use crate::safety::assess_patch_safety;
-use crate::approval_manager::AskForApproval;
+use crate::approval_manager::{AskForApproval, ApprovalResult, ApprovalManager};
 use crate::seatbelt::SandboxPolicy;
 use protocol::models::{FunctionCallOutputPayload, ResponseInputItem};
 use protocol::{FileChange, ReviewDecision};

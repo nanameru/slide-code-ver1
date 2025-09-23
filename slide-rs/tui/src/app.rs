@@ -678,7 +678,6 @@ fn handle_core_event(tui: &mut Tui, app: &mut App, ev: CoreEvent)
             app.app_event_tx.send(AppEvent::StartCommitAnimation);
         }
         CoreEvent::AgentMessageDelta { delta } => {
-            app.chat_widget.handle_agent_message_delta(&delta);
             // Split incoming delta into normal text vs tool/exec annotations, and group blocks
             // IMPORTANT: preserve original newline semantics using split_inclusive('\n')
             let mut normal_buf = String::new();

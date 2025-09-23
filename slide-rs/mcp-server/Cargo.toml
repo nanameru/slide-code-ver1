@@ -1,0 +1,21 @@
+[package]
+name = "slide-mcp-server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+tracing = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+async-channel = "2.0"
+
+# Workspace dependencies
+slide-core = { path = "../core" }
+slide-common = { path = "../common" }
+protocol = { path = "../protocol" }
+mcp-types = "0.7"
