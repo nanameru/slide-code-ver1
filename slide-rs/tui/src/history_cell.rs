@@ -357,6 +357,12 @@ fn build_status_block(label: SystemLabel, lines: &[String]) -> Vec<Line<'static>
 
     for line in lines {
         let line = line.trim_end_matches('\r');
+        
+        // HTTPサーバーエラーメッセージをフィルタリング
+        if label == SystemLabel::Error && should_filter_http_server_error(line) {
+            continue;
+        }
+        
         let rendered = match label {
             SystemLabel::Exec => format_exec_line(line),
             SystemLabel::Patch => format_patch_line(line),
@@ -491,5 +497,25 @@ fn looks_like_numbered_list(s: &str) -> bool {
         }
         break;
     }
+    false
+}
+
+/// HTTPサーバーエラーメッセージをフィルタリングするかどうか判定
+fn should_filter_http_server_error(line: &str) -> bool {
+    let line_lower = line.to_lowercase();
+    
+    // "Failed to start HTTP server on port XXXX: Address already in use" パターンをチェック
+    if line_lower.contains("failed to start http server") && 
+       line_lower.contains("address already in use") {
+        return true;
+    }
+    
+    // より一般的なパターンもチェック
+    if line_lower.contains("http server") && 
+       line_lower.contains("port") &&
+       (line_lower.contains("address already in use") || line_lower.contains("addrinuse")) {
+        return true;
+    }
+    
     false
 }
