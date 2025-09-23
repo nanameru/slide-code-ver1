@@ -8,7 +8,8 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph, WidgetRef},
 };
 
-use crate::app_event_sender::{AppEvent, AppEventSender};
+use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::scroll_state::ScrollState;
 use crate::bottom_pane::selection_popup_common::{render_rows, GenericDisplayRow};
 use slide_core::codex::ReviewDecision;

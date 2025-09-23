@@ -1,8 +1,85 @@
 use ratatui::style::Stylize;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
+use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::text::Text;
+use std::any::Any;
 
 use crate::widgets::banner::banner_lines;
+
+/// Unified role heading helpers for transcript/history.
+pub(crate) fn user_heading_line() -> Line<'static> {
+    Line::from("> ".dark_gray())
+}
+
+pub(crate) fn assistant_heading_line() -> Line<'static> {
+    Line::from("・ ".white())
+}
+
+/// Represents an event to display in the conversation history. Returns its
+/// `Vec<Line<'static>>` representation to make it easier to display in a
+/// scrollable list.
+pub(crate) trait HistoryCellTrait: std::fmt::Debug + Send + Sync + Any {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
+
+    fn transcript_lines(&self) -> Vec<Line<'static>> {
+        self.display_lines(u16::MAX)
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        self.display_lines(width).len() as u16
+    }
+
+    fn is_stream_continuation(&self) -> bool {
+        false
+    }
+}
+
+impl dyn HistoryCellTrait {
+    pub(crate) fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct AgentMessageCell {
+    lines: Vec<Line<'static>>,
+    is_first_line: bool,
+}
+
+impl AgentMessageCell {
+    pub(crate) fn new(lines: Vec<Line<'static>>, is_first_line: bool) -> Self {
+        Self {
+            lines,
+            is_first_line,
+        }
+    }
+}
+
+impl HistoryCellTrait for AgentMessageCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        let mut out = Vec::new();
+        if self.is_first_line {
+            out.push(Line::from(""));
+            out.push(assistant_heading_line());
+        }
+        out.extend(self.lines.clone());
+        out
+    }
+
+    fn transcript_lines(&self) -> Vec<Line<'static>> {
+        let mut out: Vec<Line<'static>> = Vec::new();
+        if self.is_first_line {
+            out.push(assistant_heading_line());
+        }
+        out.extend(self.lines.clone());
+        out
+    }
+
+    fn is_stream_continuation(&self) -> bool {
+        !self.is_first_line
+    }
+}
 
 #[derive(Clone, Debug)]
 pub enum HistoryCell {
@@ -112,6 +189,16 @@ impl HistoryCell {
 
     pub fn line_count(&self) -> usize {
         self.lines().len()
+    }
+}
+
+impl HistoryCellTrait for HistoryCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        self.lines()
+    }
+
+    fn transcript_lines(&self) -> Vec<Line<'static>> {
+        self.lines()
     }
 }
 

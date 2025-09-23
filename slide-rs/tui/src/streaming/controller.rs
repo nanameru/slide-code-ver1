@@ -1,5 +1,5 @@
-use crate::history_cell::HistoryCell;
-use crate::app_event_sender::AppEvent;
+use crate::history_cell::{HistoryCellTrait, AgentMessageCell};
+use crate::app_event::AppEvent;
 use ratatui::text::Line;
 
 use super::HeaderEmitter;
@@ -7,7 +7,7 @@ use super::StreamState;
 
 /// Sink for history insertions and animation control.
 pub(crate) trait HistorySink {
-    fn insert_history_cell(&self, cell: HistoryCell);
+    fn insert_history_cell(&self, cell: Box<dyn HistoryCellTrait>);
     fn start_commit_animation(&self);
     fn stop_commit_animation(&self);
 }
@@ -16,15 +16,17 @@ pub(crate) trait HistorySink {
 pub(crate) struct AppEventHistorySink(pub(crate) crate::app_event_sender::AppEventSender);
 
 impl HistorySink for AppEventHistorySink {
-    fn insert_history_cell(&self, cell: HistoryCell) {
+    fn insert_history_cell(&self, cell: Box<dyn HistoryCellTrait>) {
         self.0
             .send(AppEvent::InsertHistoryCell(cell))
     }
     fn start_commit_animation(&self) {
-        // No animation for now, simplified implementation
+        self.0
+            .send(AppEvent::StartCommitAnimation)
     }
     fn stop_commit_animation(&self) {
-        // No animation for now, simplified implementation
+        self.0
+            .send(AppEvent::StopCommitAnimation)
     }
 }
 
@@ -117,13 +119,10 @@ impl StreamController {
             }
             if !out_lines.is_empty() {
                 // Insert as a HistoryCell so display drops the header while transcript keeps it.
-                let cell = HistoryCell::new_assistant_message(
-                    out_lines.iter()
-                        .map(|line| line.spans.iter().map(|span| span.content.to_string()).collect::<String>())
-                        .collect::<Vec<String>>()
-                        .join("\n")
-                );
-                sink.insert_history_cell(cell);
+                sink.insert_history_cell(Box::new(AgentMessageCell::new(
+                    out_lines,
+                    self.header.maybe_emit_header(),
+                )));
             }
 
             // Cleanup
@@ -152,13 +151,10 @@ impl StreamController {
     pub(crate) fn step(&mut self, sink: &impl HistorySink) -> bool {
         let step = self.state.step();
         if !step.history.is_empty() {
-            let cell = HistoryCell::new_assistant_message(
-                step.history.iter()
-                    .map(|line| line.spans.iter().map(|span| span.content.to_string()).collect::<String>())
-                    .collect::<Vec<String>>()
-                    .join("\n")
-            );
-            sink.insert_history_cell(cell);
+            sink.insert_history_cell(Box::new(AgentMessageCell::new(
+                step.history,
+                self.header.maybe_emit_header(),
+            )));
         }
 
         if self.finishing_after_drain && self.state.is_idle() {

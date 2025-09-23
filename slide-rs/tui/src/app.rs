@@ -17,7 +17,8 @@ use std::{io, path::PathBuf, time::Instant};
 use tokio::time::{sleep, Duration};
 
 use crate::agent::AgentHandle;
-use crate::app_event_sender::{AppEvent, AppEventSender};
+use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::{BottomPane, BottomPaneParams};
 use crate::history_cell::{HistoryCell, SystemLabel};
 use crate::insert_history::insert_history_lines;
@@ -421,7 +422,7 @@ impl App {
                     // Insert via unified AppEvent so ordering is consistent
                     let cell = HistoryCell::new_user_prompt(text.clone());
                     self.app_event_tx
-                        .send(AppEvent::InsertHistoryCell(cell));
+                        .send(AppEvent::InsertHistoryCell(Box::new(cell)));
                     // then update internal state and dispatch to agent
                     // If we had image attachments queued, include them in the submission (core wire-up simplified)
                     {
@@ -826,10 +827,10 @@ where
                                 }
                                 blk.push(line.to_string());
                                 let cell = HistoryCell::new_system_status(SystemLabel::Exec, blk);
-                                insert_history_lines(terminal, cell.lines());
+                                app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
                             } else {
                                 let cell = HistoryCell::new_system_status(SystemLabel::Exec, [line.to_string()]);
-                                insert_history_lines(terminal, cell.lines());
+                                app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
                             }
                         }
                         continue;
@@ -857,7 +858,7 @@ where
                                 SystemLabel::Info
                             };
                             let cell = HistoryCell::new_system_status(label, blk);
-                            insert_history_lines(terminal, cell.lines());
+                            app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
                         }
                     }
                 } else {
@@ -916,12 +917,12 @@ where
             app.pending_tool_started_at = Some(Instant::now());
             app.bottom_pane.update_status_header(format!("Tool: {}", summary));
             let cell = HistoryCell::new_system_status(label, [format!("▶ {}", summary)]);
-            insert_history_lines(terminal, cell.lines());
+            app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
         }
         CoreEvent::ToolOutput { id: _id, stream: _, line } => {
             // Render 1 line immediately (use content formatter; stderr coloring handled by prefix in core in future)
             let styled = crate::history_cell::format_content_line(&line);
-            insert_history_lines(terminal, vec![styled]);
+            app.app_event_tx.send(AppEvent::ToolOutput { text: line });
         }
         CoreEvent::ToolEnd { id: _id, ok: _, exit_code, took_ms } => {
             if let Some(mut blk) = app.pending_tool_block.take() {
@@ -929,7 +930,7 @@ where
                 if let Some(code) = exit_code { blk.push(format!("exit {}", code)); }
                 let label = SystemLabel::Exec; // unknown kind in this context; Exec as default
                 let cell = HistoryCell::new_system_status(label, blk);
-                insert_history_lines(terminal, cell.lines());
+                app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
             }
             app.bottom_pane.update_status_header("Working".to_string());
         }
@@ -952,10 +953,10 @@ where
                 }
                 blk.push(exit_line);
                 let cell = HistoryCell::new_system_status(SystemLabel::Exec, blk);
-                insert_history_lines(terminal, cell.lines());
+                app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
             } else {
                 let cell = HistoryCell::new_system_status(SystemLabel::Exec, [exit_line.clone()]);
-                insert_history_lines(terminal, cell.lines());
+                app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
             }
             app.bottom_pane.update_status_header("Working".to_string());
             append_log("[exec] end");
@@ -982,13 +983,13 @@ where
         }
         CoreEvent::PatchApplyBegin { .. } => {
             let cell = HistoryCell::new_system_status(SystemLabel::Patch, ["applying..."]);
-            insert_history_lines(terminal, cell.lines());
+            app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
             append_log("[patch] applying...");
         }
         CoreEvent::PatchApplyEnd { success, .. } => {
             let status = if success { "ok" } else { "failed" };
             let cell = HistoryCell::new_system_status(SystemLabel::Patch, [status.to_string()]);
-            insert_history_lines(terminal, cell.lines());
+            app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
             append_log(&format!("[patch] {}", status));
         }
         CoreEvent::TurnDiff { unified_diff } => {
@@ -1022,11 +1023,11 @@ where
                     SystemLabel::Info
                 };
                 let cell = HistoryCell::new_system_status(label, blk);
-                insert_history_lines(terminal, cell.lines());
+                app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
             }
             if let Some(blk) = app.pending_exec_block.take() {
                 let cell = HistoryCell::new_system_status(SystemLabel::Exec, blk);
-                insert_history_lines(terminal, cell.lines());
+                app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
             }
             app.bottom_pane.update_status_header("Working".to_string());
             append_log("[task] complete");
@@ -1036,7 +1037,7 @@ where
             if should_show_note && !app.last_agent_preview.is_empty() {
                 let note = format!("✓ {}", app.last_agent_preview);
                 let cell = HistoryCell::new_system_status(SystemLabel::Info, [note]);
-                insert_history_lines(terminal, cell.lines());
+                app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
                 app.last_agent_preview.clear();
             }
             // Approximate tokens (rough heuristic: 4 chars per token)
@@ -1044,13 +1045,13 @@ where
                 let approx_tokens = (app.approx_output_chars as f32 / 4.0).ceil() as u64;
                 let line = format!("Token approx: ~{} tokens", approx_tokens);
                 let cell = HistoryCell::new_system_status(SystemLabel::Info, [line]);
-                insert_history_lines(terminal, cell.lines());
+                app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
                 app.approx_output_chars = 0;
             }
         }
         CoreEvent::Error { message } => {
             let cell = HistoryCell::new_system_status(SystemLabel::Error, [message.clone()]);
-            insert_history_lines(terminal, cell.lines());
+            app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
             app.status = RunStatus::Error;
             app.bottom_pane.set_task_running(false);
             append_log(&format!("[error] {}", message));
@@ -1088,11 +1089,11 @@ where
         }
         AppEvent::InsertHistoryCell(cell) => {
             // すべてのメッセージを即時表示（codex と同様）
-            insert_history_lines(terminal, cell.lines());
+            insert_history_lines(terminal, cell.display_lines(80));
         }
         AppEvent::ToolOutput { text } => {
             let cell = HistoryCell::new_system_status(SystemLabel::Info, [text]);
-            insert_history_lines(terminal, cell.lines());
+            app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
         }
         AppEvent::StartCommitAnimation => {
             app.bottom_pane.set_task_running(true);
@@ -1205,17 +1206,35 @@ where
                 for l in text.lines() {
                     lines.push(crate::history_cell::format_content_line(l));
                 }
-                insert_history_lines(terminal, lines);
+                // Convert to HistoryCell for unified processing
+                use crate::history_cell::AgentMessageCell;
+                let cell = AgentMessageCell::new(lines, true);
+                app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
             }
             Err(err) => {
                 let cell = HistoryCell::new_system_status(SystemLabel::Error, [format!("open: {path} — {err}")]);
-                insert_history_lines(terminal, cell.lines());
+                app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
             }
         },
         AppEvent::FileSearchResults { query, matches } => {
             if let Some(p) = app.bottom_pane.file_search_mut() {
                 p.set_matches(&query, matches);
             }
+        }
+        AppEvent::CodexEvent(_) => {
+            // Handle codex events if needed
+        }
+        AppEvent::NewSession => {
+            // Handle new session if needed
+        }
+        AppEvent::ExitRequest => {
+            // Handle exit request if needed
+        }
+        AppEvent::CodexOp(_) => {
+            // Handle codex operations if needed
+        }
+        AppEvent::DiffResult(_) => {
+            // Handle diff result if needed
         }
     }
 }
