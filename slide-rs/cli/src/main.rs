@@ -61,11 +61,12 @@ async fn cli_main(
     is_slide_mode: bool,
 ) -> anyhow::Result<()> {
     info!("Starting Slide CLI v0.0.1");
-    println!("Slide CLI v0.0.1");
+    if !is_slide_mode {
+        println!("Slide CLI v0.0.1");
+    }
 
     if is_slide_mode {
         info!("Running in Slide mode");
-        println!("Running in Slide mode");
     }
 
     // Start a tiny local log viewer HTTP server in background
