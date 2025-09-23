@@ -28,6 +28,7 @@ pub mod pager_overlay;
 pub mod model_presets;
 pub mod approval_presets;
 pub mod settings;
+pub mod ui_consts;
 
 use anyhow::Result;
 use clap::Parser;

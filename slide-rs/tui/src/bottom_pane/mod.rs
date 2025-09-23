@@ -221,7 +221,14 @@ impl BottomPane {
         
         // タスク状態をChatComposerに通知（アニメーション表示用）
         self.composer.set_task_running(running);
+    }
 
+    pub(crate) fn set_has_focus(&mut self, has_focus: bool) {
+        self.has_input_focus = has_focus;
+        self.composer.set_has_focus(has_focus);
+    }
+
+    fn _setup_task_status(&mut self, running: bool) {
         if running {
             if self.status.is_none() {
                 self.status = Some(StatusIndicatorWidget::new());

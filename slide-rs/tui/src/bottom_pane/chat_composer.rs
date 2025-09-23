@@ -10,6 +10,7 @@ use ratatui::{
 use std::cell::RefCell;
 
 use crate::animations::AnimationManager;
+use crate::ui_consts::LIVE_PREFIX_COLS;
 
 use super::{
     chat_composer_history::ChatComposerHistory,
@@ -67,13 +68,11 @@ impl ChatComposer {
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        // 🔄 全周囲ボーダー対応: 上下ボーダー + 左右マージン
-        let inner_width = width.saturating_sub(4); // 左右ボーダー + 矢印 + スペース
+        // Leave columns for the left border and padding
+        let inner_width = width.saturating_sub(LIVE_PREFIX_COLS);
         let textarea_height = self.textarea.desired_height(inner_width);
         let hints_height = if self.show_hints { 1 } else { 0 };
-        textarea_height
-            .saturating_add(2)  // 🔄 上下ボーダー分
-            .saturating_add(hints_height)
+        textarea_height.saturating_add(hints_height)
     }
 
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
@@ -233,6 +232,10 @@ impl ChatComposer {
         self.is_task_running = running;
     }
 
+    pub fn set_has_focus(&mut self, has_focus: bool) {
+        self.has_focus = has_focus;
+    }
+
     fn clear_hints(&mut self) {
         self.ctrl_c_quit_hint = false;
         self.esc_backtrack_hint = false;
@@ -305,42 +308,27 @@ impl WidgetRef for &ChatComposer {
         ])
         .areas(area);
 
-        // 🎨 全周囲ボーダー（薄いグレー固定）
-        let border_style = Style::default().add_modifier(Modifier::DIM);
-        
-        Block::default()
-            .borders(Borders::ALL)  // 🔄 全周囲ボーダー
-            .border_type(BorderType::Plain)
-            .border_style(border_style)
-            .render_ref(textarea_rect, buf);
-
-        // 🎬 アニメーション付き矢印アイコン
-        let icon_text = if self.is_task_running {
-            // ⚡ タスク実行中はスピナー
-            self.animations.spinner_char()
+        // 🎨 左側青色バー（codex-1風）
+        let border_style = if self.has_focus {
+            Style::default().fg(Color::Cyan)    // フォーカス時: シアン（青）
         } else {
-            // ➡️ 通常時は矢印
-            "→"
+            Style::default().add_modifier(Modifier::DIM)    // 非フォーカス時: 薄い
         };
         
-        let icon_line = Line::from(icon_text).style(Style::default().add_modifier(Modifier::DIM));
-        Paragraph::new(vec![icon_line])
+        Block::default()
+            .borders(Borders::LEFT)             // 左側ボーダーのみ
+            .border_type(BorderType::QuadrantOutside)
+            .border_style(border_style)
             .render_ref(
-                Rect::new(
-                    textarea_rect.x + 1,  // 左ボーダー内側
-                    textarea_rect.y + 1,  // 🔄 上ボーダー内側
-                    1, 1
-                ),
+                Rect::new(textarea_rect.x, textarea_rect.y, 1, textarea_rect.height),
                 buf,
             );
 
-        // 📐 コンテンツエリア（ボーダー内側）
-        let content_area = Rect {
-            x: textarea_rect.x + 3,  // ボーダー + 矢印 + スペース
-            y: textarea_rect.y + 1,  // 🔄 上ボーダー分
-            width: textarea_rect.width.saturating_sub(4),  // 🔄 左右ボーダー分
-            height: textarea_rect.height.saturating_sub(2),  // 🔄 上下ボーダー分
-        };
+        // 📐 テキストエリア用の調整
+        let mut content_area = textarea_rect;
+        // Leave space for border and padding
+        content_area.width = content_area.width.saturating_sub(LIVE_PREFIX_COLS);
+        content_area.x = content_area.x.saturating_add(LIVE_PREFIX_COLS);
 
         // 📝 テキストエリア描画
         {
