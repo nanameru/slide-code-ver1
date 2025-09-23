@@ -192,10 +192,6 @@ impl ChatComposer {
         self.textarea.insert_str(text);
     }
 
-    pub fn set_focus(&mut self, has_focus: bool) {
-        self.has_focus = has_focus;
-    }
-
     pub fn set_text(&mut self, text: &str) {
         self.textarea.set_text(text);
     }
@@ -309,11 +305,8 @@ impl WidgetRef for &ChatComposer {
         .areas(area);
 
         // 🎨 左側青色バー（codex-1風）
-        let border_style = if self.has_focus {
-            Style::default().fg(Color::Cyan)    // フォーカス時: シアン（青）
-        } else {
-            Style::default().add_modifier(Modifier::DIM)    // 非フォーカス時: 薄い
-        };
+        // テスト: 強制的に青色で表示してボーダー自体が動作するか確認
+        let border_style = Style::default().fg(Color::Cyan);  // 常に青色でテスト
         
         Block::default()
             .borders(Borders::LEFT)             // 左側ボーダーのみ

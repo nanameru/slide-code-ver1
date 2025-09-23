@@ -245,7 +245,16 @@ impl BottomPane {
     /// 簡易描画（Paragraph ベース）
     pub fn render_ref(&mut self, area: Rect, buf: &mut Buffer) {
         let composer_has_focus = self.has_input_focus && self.active_view.is_none();
-        self.composer.set_focus(composer_has_focus && self.status.is_none());
+        let final_focus = composer_has_focus && self.status.is_none();
+        
+        // デバッグ: フォーカス状態を確認
+        tracing::debug!("BottomPane has_input_focus: {}, active_view: {}, status: {}, final_focus: {}", 
+                       self.has_input_focus, 
+                       self.active_view.is_some(), 
+                       self.status.is_some(),
+                       final_focus);
+        
+        self.composer.set_has_focus(final_focus);
         let [status_area, content] = self.layout(area);
 
         // When a modal view is active, it owns the whole content area.
