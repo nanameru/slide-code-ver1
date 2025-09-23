@@ -13,7 +13,7 @@ pub(crate) fn user_heading_line() -> Line<'static> {
 }
 
 pub(crate) fn assistant_heading_line() -> Line<'static> {
-    Line::from("・ ".white())
+    Line::from("⚫︎ ".white())
 }
 
 /// Represents an event to display in the conversation history. Returns its
@@ -67,7 +67,7 @@ impl HistoryCellTrait for AgentMessageCell {
                 .find(|(_, line)| !line.to_string().trim().is_empty()) {
                 
                 // プレフィックスと最初の内容行を同一行に表示
-                let mut spans = vec![Span::styled("・ ", ratatui::style::Style::default().fg(ratatui::style::Color::White))];
+                let mut spans = vec![Span::styled("⚫︎ ", ratatui::style::Style::default().fg(ratatui::style::Color::White))];
                 spans.extend(first_line.spans.clone());
                 out.push(Line::from(spans));
                 
@@ -91,7 +91,7 @@ impl HistoryCellTrait for AgentMessageCell {
                 .find(|(_, line)| !line.to_string().trim().is_empty()) {
                 
                 // プレフィックスと最初の内容行を同一行に表示
-                let mut spans = vec![Span::styled("・ ", ratatui::style::Style::default().fg(ratatui::style::Color::White))];
+                let mut spans = vec![Span::styled("⚫︎ ", ratatui::style::Style::default().fg(ratatui::style::Color::White))];
                 spans.extend(first_line.spans.clone());
                 out.push(Line::from(spans));
                 
@@ -212,7 +212,7 @@ impl HistoryCell {
             HistoryCell::AssistantMessage { content } => {
                 let lines = split_preserving_empty(content);
                 if lines.is_empty() {
-                    vec!["・ ".to_string()]
+                    vec!["⚫︎ ".to_string()]
                 } else {
                     let mut out = Vec::new();
                     // 最初の行はプレフィックス付き
@@ -257,7 +257,7 @@ impl RoleLabel {
     fn heading_span(&self) -> Span<'static> {
         match self {
             RoleLabel::User => "> ".dark_gray(),
-            RoleLabel::Assistant => "・ ".white(),
+            RoleLabel::Assistant => "⚫︎ ".white(),
         }
     }
 }
