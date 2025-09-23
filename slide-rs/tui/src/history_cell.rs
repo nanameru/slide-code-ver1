@@ -166,16 +166,30 @@ impl HistoryCell {
         match self {
             HistoryCell::Banner => banner_lines().into_iter().map(line_to_plain).collect(),
             HistoryCell::UserPrompt { prompt } => {
-                let mut out = Vec::new();
-                out.push("> ".to_string());
-                out.extend(split_preserving_empty(prompt));
-                out
+                let lines = split_preserving_empty(prompt);
+                if lines.is_empty() {
+                    vec!["> ".to_string()]
+                } else {
+                    let mut out = Vec::new();
+                    // 最初の行はプレフィックス付き
+                    out.push(format!("> {}", lines[0]));
+                    // 残りの行はそのまま
+                    out.extend(lines[1..].iter().cloned());
+                    out
+                }
             }
             HistoryCell::AssistantMessage { content } => {
-                let mut out = Vec::new();
-                out.push("・ ".to_string());
-                out.extend(split_preserving_empty(content));
-                out
+                let lines = split_preserving_empty(content);
+                if lines.is_empty() {
+                    vec!["・ ".to_string()]
+                } else {
+                    let mut out = Vec::new();
+                    // 最初の行はプレフィックス付き
+                    out.push(format!("・ {}", lines[0]));
+                    // 残りの行はそのまま
+                    out.extend(lines[1..].iter().cloned());
+                    out
+                }
             }
             HistoryCell::SystemStatus { label, lines } => {
                 let mut out = Vec::new();
@@ -241,16 +255,26 @@ fn build_role_block(role: RoleLabel, body: &str) -> Vec<Line<'static>> {
         let first_formatted = match role {
             RoleLabel::Assistant => {
                 // Assistantの場合：「・ 」+ 最初の行の内容
-                let mut spans = vec![role.heading_span()];
-                spans.extend(format_content_line(first_line).spans);
-                Line::from(spans)
+                if first_line.trim().is_empty() {
+                    // 空行の場合はプレフィックスのみ
+                    Line::from(vec![role.heading_span()])
+                } else {
+                    let mut spans = vec![role.heading_span()];
+                    spans.extend(format_content_line(first_line).spans);
+                    Line::from(spans)
+                }
             }
             RoleLabel::User => {
                 // Userの場合：「> 」+ 最初の行の内容
-                Line::from(vec![
-                    role.heading_span(),
-                    Span::styled(first_line.to_string(), Style::default().fg(Color::DarkGray))
-                ])
+                if first_line.trim().is_empty() {
+                    // 空行の場合はプレフィックスのみ
+                    Line::from(vec![role.heading_span()])
+                } else {
+                    Line::from(vec![
+                        role.heading_span(),
+                        Span::styled(first_line.to_string(), Style::default().fg(Color::DarkGray))
+                    ])
+                }
             }
         };
         out.push(first_formatted);
