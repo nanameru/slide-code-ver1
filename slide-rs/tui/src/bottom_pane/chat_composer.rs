@@ -9,6 +9,8 @@ use ratatui::{
 };
 use std::cell::RefCell;
 
+use crate::animations::AnimationManager;
+
 use super::{
     chat_composer_history::ChatComposerHistory,
     textarea::{TextArea, TextAreaState},
@@ -33,6 +35,8 @@ pub struct ChatComposer {
     esc_backtrack_hint: bool,
     use_shift_enter_hint: bool,
     show_hints: bool,
+    animations: AnimationManager,
+    is_task_running: bool,
 }
 
 impl ChatComposer {
@@ -47,6 +51,8 @@ impl ChatComposer {
             esc_backtrack_hint: false,
             use_shift_enter_hint: true,
             show_hints: true,
+            animations: AnimationManager::new(),
+            is_task_running: false,
         }
     }
 
@@ -61,11 +67,13 @@ impl ChatComposer {
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        // Left border design: account for left border only
-        let inner_width = width.saturating_sub(3); // 1 for left border + 2 for icon and space
+        // 🔄 全周囲ボーダー対応: 上下ボーダー + 左右マージン
+        let inner_width = width.saturating_sub(4); // 左右ボーダー + 矢印 + スペース
         let textarea_height = self.textarea.desired_height(inner_width);
         let hints_height = if self.show_hints { 1 } else { 0 };
-        textarea_height.saturating_add(hints_height)
+        textarea_height
+            .saturating_add(2)  // 🔄 上下ボーダー分
+            .saturating_add(hints_height)
     }
 
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
@@ -157,12 +165,12 @@ impl ChatComposer {
         ])
         .areas(area);
 
-        // Left border design: account for left border only
+        // 🔄 全周囲ボーダー対応
         let content_area = Rect {
-            x: textarea_rect.x + 3, // 1 for left border + 1 for icon + 1 for space
-            y: textarea_rect.y,
-            width: textarea_rect.width.saturating_sub(3), // 1 for left border + 2 for icon and space
-            height: textarea_rect.height,
+            x: textarea_rect.x + 3,  // ボーダー + 矢印 + スペース
+            y: textarea_rect.y + 1,  // 🔄 上ボーダー分
+            width: textarea_rect.width.saturating_sub(4),  // 🔄 左右ボーダー分
+            height: textarea_rect.height.saturating_sub(2),  // 🔄 上下ボーダー分
         };
 
         let state = self.textarea_state.borrow();
@@ -219,6 +227,10 @@ impl ChatComposer {
 
     pub fn clear_esc_backtrack_hint(&mut self) {
         self.esc_backtrack_hint = false;
+    }
+
+    pub fn set_task_running(&mut self, running: bool) {
+        self.is_task_running = running;
     }
 
     fn clear_hints(&mut self) {
@@ -293,50 +305,68 @@ impl WidgetRef for &ChatComposer {
         ])
         .areas(area);
 
-        let border_style = if self.has_focus {
-            Style::default().fg(Color::Cyan)
-        } else {
-            Style::default().add_modifier(Modifier::DIM)
-        };
-
-        // Render left border only
+        // 🎨 全周囲ボーダー（薄いグレー固定）
+        let border_style = Style::default().add_modifier(Modifier::DIM);
+        
         Block::default()
-            .borders(Borders::LEFT)
+            .borders(Borders::ALL)  // 🔄 全周囲ボーダー
             .border_type(BorderType::Plain)
             .border_style(border_style)
             .render_ref(textarea_rect, buf);
 
-        // Render prompt icon inside the border
-        let icon_line = Line::from("→").style(border_style);
+        // 🎬 アニメーション付き矢印アイコン
+        let icon_text = if self.is_task_running {
+            // ⚡ タスク実行中はスピナー
+            self.animations.spinner_char()
+        } else {
+            // ➡️ 通常時は矢印
+            "→"
+        };
+        
+        let icon_line = Line::from(icon_text).style(Style::default().add_modifier(Modifier::DIM));
         Paragraph::new(vec![icon_line])
             .render_ref(
-                Rect::new(textarea_rect.x + 1, textarea_rect.y, 1, 1),
+                Rect::new(
+                    textarea_rect.x + 1,  // 左ボーダー内側
+                    textarea_rect.y + 1,  // 🔄 上ボーダー内側
+                    1, 1
+                ),
                 buf,
             );
 
-        // Content area (inside left border, after icon and space)
+        // 📐 コンテンツエリア（ボーダー内側）
         let content_area = Rect {
-            x: textarea_rect.x + 3, // 1 for left border + 1 for icon + 1 for space
-            y: textarea_rect.y,
-            width: textarea_rect.width.saturating_sub(3), // 1 for left border + 2 for icon and space
-            height: textarea_rect.height,
+            x: textarea_rect.x + 3,  // ボーダー + 矢印 + スペース
+            y: textarea_rect.y + 1,  // 🔄 上ボーダー分
+            width: textarea_rect.width.saturating_sub(4),  // 🔄 左右ボーダー分
+            height: textarea_rect.height.saturating_sub(2),  // 🔄 上下ボーダー分
         };
 
-        // Render textarea with explicit text color
+        // 📝 テキストエリア描画
         {
             let mut state = self.textarea_state.borrow_mut();
             StatefulWidgetRef::render_ref(&&self.textarea, content_area, buf, &mut *state);
         }
 
-        // Render placeholder if textarea is empty
+        // 💭 プレースホルダー表示（アニメーション付き）
         if self.textarea.is_empty() && !self.placeholder_text.is_empty() {
-            let placeholder_line = Line::from(self.placeholder_text.as_str())
-                .style(Style::default().add_modifier(Modifier::DIM));
+            let placeholder_spans = if self.is_task_running {
+                // 🎬 タスク実行中はシマーエフェクト
+                self.animations.shimmer_spans(&self.placeholder_text)
+            } else {
+                // 🔘 通常時は薄いグレー
+                vec![Span::styled(
+                    self.placeholder_text.clone(),
+                    Style::default().add_modifier(Modifier::DIM)
+                )]
+            };
+            
+            let placeholder_line = Line::from(placeholder_spans);
             Paragraph::new(vec![placeholder_line])
                 .render_ref(content_area, buf);
         }
 
-        // Render hints if enabled
+        // 💡 ヒント表示
         if self.show_hints && hint_rect.height > 0 {
             self.render_hints(hint_rect, buf);
         }

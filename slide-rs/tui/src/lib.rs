@@ -1,6 +1,7 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 pub mod agent;
+pub mod animations;
 pub mod app;
 pub mod app_event;
 pub mod app_event_sender;
