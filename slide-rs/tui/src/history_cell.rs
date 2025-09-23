@@ -233,20 +233,43 @@ impl SystemLabel {
 
 fn build_role_block(role: RoleLabel, body: &str) -> Vec<Line<'static>> {
     let mut out = Vec::new();
-    out.push(Line::from(""));
-
-    out.push(Line::from(vec![role.heading_span()]));
-
-    for line in split_preserving_empty(body) {
-        let line = line.trim_end_matches('\r');
-        let formatted = match role {
-            RoleLabel::Assistant => format_content_line(line),
-            RoleLabel::User => Line::from(Span::styled(
-                line.to_string(),
-                Style::default().fg(Color::DarkGray),
-            )),
+    
+    // プレフィックスと最初の行を同一行に表示
+    let lines: Vec<String> = split_preserving_empty(body);
+    if !lines.is_empty() {
+        let first_line = lines[0].trim_end_matches('\r');
+        let first_formatted = match role {
+            RoleLabel::Assistant => {
+                // Assistantの場合：「・ 」+ 最初の行の内容
+                let mut spans = vec![role.heading_span()];
+                spans.extend(format_content_line(first_line).spans);
+                Line::from(spans)
+            }
+            RoleLabel::User => {
+                // Userの場合：「> 」+ 最初の行の内容
+                Line::from(vec![
+                    role.heading_span(),
+                    Span::styled(first_line.to_string(), Style::default().fg(Color::DarkGray))
+                ])
+            }
         };
-        out.push(formatted);
+        out.push(first_formatted);
+        
+        // 残りの行を処理
+        for line in &lines[1..] {
+            let line = line.trim_end_matches('\r');
+            let formatted = match role {
+                RoleLabel::Assistant => format_content_line(line),
+                RoleLabel::User => Line::from(Span::styled(
+                    line.to_string(),
+                    Style::default().fg(Color::DarkGray),
+                )),
+            };
+            out.push(formatted);
+        }
+    } else {
+        // 空のメッセージの場合はプレフィックスのみ
+        out.push(Line::from(vec![role.heading_span()]));
     }
 
     out
