@@ -703,6 +703,7 @@ where
     };
 
     // Update viewport area to match current terminal size
+    // Start with minimal height and let insert_history_lines expand it downward
     terminal.set_viewport_area(input_area);
 
     terminal.draw(|f| {

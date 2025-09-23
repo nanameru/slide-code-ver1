@@ -63,66 +63,64 @@ pub fn insert_history_lines_to_writer<B, W>(
         .max(20);
     let wrapped = word_wrap_lines_borrowed(&lines, wrap_width as usize);
     let wrapped_lines = wrapped.len() as u16;
-    let cursor_top = if area.bottom() < screen_size.height {
-        // If the viewport is not at the bottom of the screen, scroll it down to make room.
-        // Don't scroll it past the bottom of the screen.
-        let scroll_amount = wrapped_lines.min(screen_size.height - area.bottom());
 
-        // Emit ANSI to scroll the lower region (from the top of the viewport to the bottom
-        // of the screen) downward by `scroll_amount` lines. We do this by:
-        //   1) Limiting the scroll region to [area.top()+1 .. screen_height] (1-based bounds)
-        //   2) Placing the cursor at the top margin of that region
-        //   3) Emitting Reverse Index (RI, ESC M) `scroll_amount` times
-        //   4) Resetting the scroll region back to full screen
-        let top_1based = area.top() + 1; // Convert 0-based row to 1-based for DECSTBM
-        queue!(writer, SetScrollRegion(top_1based..screen_size.height)).ok();
-        queue!(writer, MoveTo(0, area.top())).ok();
-        for _ in 0..scroll_amount {
-            // Reverse Index (RI): ESC M
-            queue!(writer, Print("\x1bM")).ok();
+    // 下方向挿入: 現在位置の直下に新しい行を順次追加
+    // 各メッセージを時系列順で下に積み重ねる
+    
+    // 現在のビューポート下端から挿入開始
+    let mut current_insert_row = area.bottom();
+    
+    // 画面下端までの利用可能スペースを確認
+    let max_available_rows = screen_size.height.saturating_sub(current_insert_row);
+    
+    if max_available_rows > 0 {
+        // スペースがある場合、下方向に順次追加
+        
+        // カーソルを挿入開始位置に移動
+        queue!(writer, MoveTo(0, current_insert_row)).ok();
+        
+        // 各行を順番に下方向に追加
+        for (line_idx, line) in wrapped.iter().enumerate() {
+            // 最初の行以外は改行を追加
+            if line_idx > 0 {
+                current_insert_row += 1;
+                if current_insert_row >= screen_size.height {
+                    break; // 画面をはみ出る場合は停止
+                }
+                queue!(writer, MoveTo(0, current_insert_row)).ok();
+            }
+            
+            // 行の内容を出力
+            let merged_spans: Vec<Span> = line
+                .spans
+                .iter()
+                .map(|s| Span { style: s.style.patch(line.style), content: s.content.clone() })
+                .collect();
+            write_spans(writer, merged_spans.iter()).ok();
         }
-        queue!(writer, ResetScrollRegion).ok();
-
-        let cursor_top = area.top().saturating_sub(1);
-        area.y += scroll_amount;
+        
+        // ビューポートを拡張して新しい行を含める
+        let new_height = area.height.saturating_add(wrapped_lines).min(screen_size.height - area.y);
+        area.height = new_height;
         terminal.set_viewport_area(area);
-        cursor_top
+        
     } else {
-        area.top().saturating_sub(1)
-    };
-
-    // Limit the scroll region to the lines from the top of the screen to the
-    // top of the viewport. With this in place, when we add lines inside this
-    // area, only the lines in this area will be scrolled. We place the cursor
-    // at the end of the scroll region, and add lines starting there.
-    //
-    // ┌─Screen───────────────────────┐
-    // │┌╌Scroll region╌╌╌╌╌╌╌╌╌╌╌╌╌╌┐│
-    // │┆                            ┆│
-    // │┆                            ┆│
-    // │┆                            ┆│
-    // │█╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┘│
-    // │╭─Viewport───────────────────╮│
-    // ││                            ││
-    // │╰────────────────────────────╯│
-    // └──────────────────────────────┘
-    queue!(writer, SetScrollRegion(1..area.top())).ok();
-
-    // NB: we are using MoveTo instead of set_cursor_position here to avoid messing with the
-    // terminal's last_known_cursor_position, which hopefully will still be accurate after we
-    // fetch/restore the cursor position. insert_history_lines should be cursor-position-neutral :)
-    queue!(writer, MoveTo(0, cursor_top)).ok();
-
-    for line in wrapped {
-        queue!(writer, Print("\r\n")).ok();
-        // Merge line-level style into each span so that ANSI reflects line styling
-        // across all wrapped fragments (e.g., blockquotes, list markers).
-        let merged_spans: Vec<Span> = line
-            .spans
-            .iter()
-            .map(|s| Span { style: s.style.patch(line.style), content: s.content.clone() })
-            .collect();
-        write_spans(writer, merged_spans.iter()).ok();
+        // スペースがない場合、上方向スクロールで既存の領域に挿入
+        // （従来の動作を維持）
+        queue!(writer, SetScrollRegion(1..area.top())).ok();
+        queue!(writer, MoveTo(0, area.top().saturating_sub(1))).ok();
+        
+        for line in wrapped {
+            queue!(writer, Print("\r\n")).ok();
+            let merged_spans: Vec<Span> = line
+                .spans
+                .iter()
+                .map(|s| Span { style: s.style.patch(line.style), content: s.content.clone() })
+                .collect();
+            write_spans(writer, merged_spans.iter()).ok();
+        }
+        
+        queue!(writer, ResetScrollRegion).ok();
     }
 
     queue!(writer, ResetScrollRegion).ok();
