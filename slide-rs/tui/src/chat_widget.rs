@@ -481,14 +481,8 @@ impl ChatWidget {
 
 impl WidgetRef for &ChatWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        // Temporary simplified implementation - just render bottom pane
-        // The actual chat history is now rendered via insert_history_lines
-        use ratatui::widgets::{Widget, Clear};
-        
-        // Clear the area
-        Clear.render(area, buf);
-        
-        // For now, just indicate that ChatWidget is active but using insert_history_lines for actual chat
-        // In the real implementation, this would integrate with the existing chat rendering system
+        // 🎯 codex-1風の実装：bottom_paneを正しく描画
+        // 暫定的に全エリアをbottom_paneに割り当て
+        (&self.bottom_pane).render_ref(area, buf);
     }
 }

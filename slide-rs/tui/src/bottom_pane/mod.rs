@@ -242,40 +242,36 @@ impl BottomPane {
         }
     }
 
-    /// 簡易描画（Paragraph ベース）
-    pub fn render_ref(&mut self, area: Rect, buf: &mut Buffer) {
-        let composer_has_focus = self.has_input_focus && self.active_view.is_none();
-        let final_focus = composer_has_focus && self.status.is_none();
+}
+
+impl WidgetRef for &BottomPane {
+    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        // 🚨 問題：フォーカス状態の設定ができない（&selfのため）
+        // codex-1では別の方法でフォーカス状態を管理している可能性
         
-        // デバッグ: フォーカス状態を確認
-        tracing::debug!("BottomPane has_input_focus: {}, active_view: {}, status: {}, final_focus: {}", 
-                       self.has_input_focus, 
-                       self.active_view.is_some(), 
-                       self.status.is_some(),
-                       final_focus);
-        
-        self.composer.set_has_focus(final_focus);
         let [status_area, content] = self.layout(area);
 
         // When a modal view is active, it owns the whole content area.
-        if let Some(view) = self.active_view.as_mut() {
+        if let Some(view) = &self.active_view {
             view.render(content, buf);
         } else {
             // No active modal:
             // If a status indicator is active, render it above the composer.
-            if let Some(status) = self.status.as_ref() {
+            if let Some(status) = &self.status {
                 status.render_ref(status_area, buf);
             }
 
             // Render the composer or the file-search popup
-            if let Some(p) = self.file_search.as_ref() {
+            if let Some(p) = &self.file_search {
                 p.render_ref(content, buf);
             } else {
                 (&self.composer).render_ref(content, buf);
             }
         }
     }
+}
 
+impl BottomPane {
     /// Whether there is an active overlay view that should intercept input
     pub fn is_intercepting_input(&self) -> bool {
         self.active_view.is_some() || self.file_search.is_some()
@@ -305,9 +301,7 @@ impl BottomPane {
             title, subtitle, footer_hint, items, app_event_tx,
         )));
     }
-}
 
-impl BottomPane {
     /// 承認モーダルの表示
     pub fn show_approval_modal(&mut self, req: ApprovalRequest, tx: AppEventSender) {
         self.active_view = Some(Box::new(ApprovalModalView::new(req, tx)));

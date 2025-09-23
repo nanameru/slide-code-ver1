@@ -46,7 +46,7 @@ impl ChatComposer {
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
             history: ChatComposerHistory::new(),
-            has_focus: has_input_focus,
+            has_focus: true,  // 🎯 強制的にフォーカス状態をtrueに（テスト用）
             placeholder_text,
             ctrl_c_quit_hint: false,
             esc_backtrack_hint: false,
@@ -305,8 +305,11 @@ impl WidgetRef for &ChatComposer {
         .areas(area);
 
         // 🎨 左側青色バー（codex-1風）
-        // テスト: 強制的に青色で表示してボーダー自体が動作するか確認
-        let border_style = Style::default().fg(Color::Cyan);  // 常に青色でテスト
+        let border_style = if self.has_focus {
+            Style::default().fg(Color::Cyan)    // フォーカス時: シアン（青）
+        } else {
+            Style::default().add_modifier(Modifier::DIM)    // 非フォーカス時: 薄い
+        };
         
         Block::default()
             .borders(Borders::LEFT)             // 左側ボーダーのみ
