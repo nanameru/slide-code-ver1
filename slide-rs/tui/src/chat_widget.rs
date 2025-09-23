@@ -482,8 +482,8 @@ impl ChatWidget {
 impl WidgetRef for &ChatWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         // 🧹 背景をクリアして、後ろのシェル履歴が透けて見えないようにする
-        use ratatui::widgets::Clear;
-        Clear.render_ref(area, buf);
+        use ratatui::widgets::{Clear, Widget};
+        Clear.render(area, buf);
         
         // 🎯 codex-1風の実装：bottom_paneを正しく描画
         // 暫定的に全エリアをbottom_paneに割り当て

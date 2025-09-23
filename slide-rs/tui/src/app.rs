@@ -110,6 +110,9 @@ pub struct App {
     
     // --- Tool/Exec rendering state (codex-like grouping) ---
     pending_exec_block: Option<Vec<String>>,
+    
+    // --- Chat history spacing ---
+    has_emitted_history: bool,
     pending_tool_block: Option<Vec<String>>,
     pending_exec_started_at: Option<Instant>,
     pending_tool_started_at: Option<Instant>,
@@ -161,6 +164,7 @@ impl App {
             thinking_last_change: Instant::now(),
             overlay: PagerOverlay::new(),
             pending_exec_block: None,
+            has_emitted_history: false,
             pending_tool_block: None,
             pending_exec_started_at: None,
             pending_tool_started_at: None,
@@ -933,7 +937,18 @@ fn handle_app_event(tui: &mut Tui, app: &mut App, ev: AppEvent)
         }
         AppEvent::InsertHistoryCell(cell) => {
             // Queue history lines for ordered rendering (codex-1 style)
-            tui.insert_history_lines(cell.display_lines(80));
+            let mut lines = cell.display_lines(80);
+            
+            // Add spacing between messages (like codex-1 tests)
+            if app.has_emitted_history 
+                && !cell.is_stream_continuation() 
+                && !lines.is_empty() 
+            {
+                lines.insert(0, "".into()); // 空行を先頭に追加
+            }
+            app.has_emitted_history = true;
+            
+            tui.insert_history_lines(lines);
         }
         AppEvent::ToolOutput { text } => {
             let cell = HistoryCell::new_system_status(SystemLabel::Info, [text]);
