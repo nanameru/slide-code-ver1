@@ -941,16 +941,10 @@ fn handle_app_event(tui: &mut Tui, app: &mut App, ev: AppEvent)
             // Queue history lines for ordered rendering (codex-1 style)
             let mut lines = cell.display_lines(80);
             
-            // Add spacing between conversation turns (not between every message)
-            // Only add space when starting a new conversation turn:
-            // - Previous message was from assistant AND current is from user (new turn)
-            if app.has_emitted_history 
-                && !cell.is_stream_continuation() 
-                && !lines.is_empty()
-                && app.last_message_was_assistant
-                && cell.is_user()
-            {
-                lines.insert(0, "".into()); // 空行を先頭に追加（新しい会話ターンの開始）
+            // Add spacing after AI messages to separate conversation blocks
+            // AI message gets a trailing empty line for visual separation
+            if cell.is_assistant() && !cell.is_stream_continuation() && !lines.is_empty() {
+                lines.push("".into()); // AIメッセージの後に空行を追加
             }
             
             // Update tracking state
