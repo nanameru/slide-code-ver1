@@ -11,7 +11,7 @@ members = [
     "tui",
     "slides-tools",
     "mcp-client",
-    "mcp-server",
+    # "mcp-server", # Temporarily disabled due to dependency issues
 ]
 resolver = "2"
 

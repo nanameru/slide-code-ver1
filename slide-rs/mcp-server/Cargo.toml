@@ -18,4 +18,6 @@ async-channel = "2.0"
 slide-core = { path = "../core" }
 slide-common = { path = "../common" }
 protocol = { path = "../protocol" }
-mcp-types = "0.7"
+mcp-types = "0.1"
+schemars = "0.8"
+toml = "0.8"

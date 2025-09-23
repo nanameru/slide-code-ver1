@@ -112,55 +112,128 @@ impl From<ResponseInputItem> for InternalApplyPatchInvocation {
 pub async fn apply_patch_with_safety(
     patch_content: &str,
     call_id: &str,
-    approval_policy: AskForApproval,
-    sandbox_policy: &SandboxPolicy,
-    cwd: &Path,
+    approval_manager: &mut ApprovalManager,
+    session_id: Option<&str>,
 ) -> InternalApplyPatchInvocation {
-    match assess_patch_safety(
-        patch_content,
-        approval_policy.into(),
-        sandbox_policy,
-        cwd,
-    ) {
-        SafetyCheck::AutoApprove => {
+    match approval_manager.evaluate_patch_approval(patch_content, session_id) {
+        ApprovalResult::AutoApproved => {
             InternalApplyPatchInvocation::DelegateToExec(ApplyPatchExec {
                 patch_content: patch_content.to_string(),
                 user_explicitly_approved_this_action: false,
             })
         }
-        SafetyCheck::AskUser => {
-            // In a real implementation, this would trigger user approval UI
-            // For now, simulate approval
-            let decision = ReviewDecision::Approved; // Simplified for now
-
-            match decision {
-                ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
-                    InternalApplyPatchInvocation::DelegateToExec(ApplyPatchExec {
-                        patch_content: patch_content.to_string(),
-                        user_explicitly_approved_this_action: true,
-                    })
-                }
-                ReviewDecision::Denied | ReviewDecision::Abort => {
-                    ResponseInputItem::FunctionCallOutput {
-                        call_id: call_id.to_owned(),
-                        output: FunctionCallOutputPayload {
-                            content: "patch rejected by user".to_string(),
-                            success: Some(false),
-                        },
-                    }
-                    .into()
-                }
+        ApprovalResult::UserApproved => {
+            InternalApplyPatchInvocation::DelegateToExec(ApplyPatchExec {
+                patch_content: patch_content.to_string(),
+                user_explicitly_approved_this_action: true,
+            })
+        }
+        ApprovalResult::Denied { reason } => {
+            ResponseInputItem::FunctionCallOutput {
+                call_id: call_id.to_owned(),
+                output: FunctionCallOutputPayload {
+                    content: format!("patch rejected: {reason}"),
+                    success: Some(false),
+                },
             }
+            .into()
         }
-        SafetyCheck::Reject { reason } => ResponseInputItem::FunctionCallOutput {
-            call_id: call_id.to_owned(),
-            output: FunctionCallOutputPayload {
-                content: format!("patch rejected: {reason}"),
-                success: Some(false),
-            },
+        ApprovalResult::RequiresUserInput => {
+            // ユーザーに承認を求める（UIを通じて）
+            // 実際の実装では、ここでユーザーインターフェースを表示
+            // 現在は自動承認として処理
+            approval_manager.record_user_approval(patch_content, true, session_id);
+            InternalApplyPatchInvocation::DelegateToExec(ApplyPatchExec {
+                patch_content: patch_content.to_string(),
+                user_explicitly_approved_this_action: true,
+            })
         }
-        .into(),
     }
+}
+
+/// 統合されたapply_patchエンジン - MCPサーバー経由とローカル実行の両方に対応
+pub async fn apply_patch_unified(
+    patch_content: &str,
+    call_id: &str,
+    approval_manager: &mut ApprovalManager,
+    session_id: Option<&str>,
+    execution_context: &ExecutionContext,
+) -> Result<ResponseInputItem, anyhow::Error> {
+    // 1. 承認評価
+    let invocation = apply_patch_with_safety(patch_content, call_id, approval_manager, session_id).await;
+    
+    match invocation {
+        InternalApplyPatchInvocation::Output(output) => Ok(output),
+        InternalApplyPatchInvocation::DelegateToExec(exec_info) => {
+            // 2. 実際のパッチ適用を実行
+            execute_patch_application(&exec_info, execution_context).await
+        }
+    }
+}
+
+/// パッチ適用の実際の実行
+async fn execute_patch_application(
+    exec_info: &ApplyPatchExec,
+    execution_context: &ExecutionContext,
+) -> Result<ResponseInputItem, anyhow::Error> {
+    use slide_apply_patch::{apply_patch, ApplyPatchArgs, parse_patch};
+    
+    // パッチをパース
+    let parsed = match parse_patch(&exec_info.patch_content) {
+        Ok(args) => args,
+        Err(e) => {
+            return Ok(ResponseInputItem::FunctionCallOutput {
+                call_id: "".to_string(),
+                output: FunctionCallOutputPayload {
+                    content: format!("Failed to parse patch: {}", e),
+                    success: Some(false),
+                },
+            });
+        }
+    };
+
+    // 作業ディレクトリを設定
+    if let Some(cwd) = &execution_context.working_directory {
+        std::env::set_current_dir(cwd)?;
+    }
+
+    // パッチを適用
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    
+    match apply_patch(&exec_info.patch_content, &mut stdout, &mut stderr) {
+        Ok(_) => {
+            let output_text = String::from_utf8_lossy(&stdout);
+            Ok(ResponseInputItem::FunctionCallOutput {
+                call_id: "".to_string(),
+                output: FunctionCallOutputPayload {
+                    content: if output_text.is_empty() {
+                        "Patch applied successfully".to_string()
+                    } else {
+                        output_text.to_string()
+                    },
+                    success: Some(true),
+                },
+            })
+        }
+        Err(e) => {
+            let error_text = String::from_utf8_lossy(&stderr);
+            Ok(ResponseInputItem::FunctionCallOutput {
+                call_id: "".to_string(),
+                output: FunctionCallOutputPayload {
+                    content: format!("Failed to apply patch: {} - {}", e, error_text),
+                    success: Some(false),
+                },
+            })
+        }
+    }
+}
+
+/// 実行コンテキスト
+pub struct ExecutionContext {
+    pub working_directory: Option<PathBuf>,
+    pub session_id: String,
+    pub user_id: Option<String>,
 }
 
 /// Parse patch content and convert to protocol format

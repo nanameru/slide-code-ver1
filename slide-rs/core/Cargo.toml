@@ -7,9 +7,11 @@ edition = { workspace = true }
 workspace = true
 
 [dependencies]
+sha2 = "0.10"
 anyhow = "1"
 slide-common = { path = "../common" }
 slide-chatgpt = { path = "../chatgpt" }
+slide-apply-patch = { path = "../apply-patch" }
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
 uuid = { version = "1", features = ["v4"] }

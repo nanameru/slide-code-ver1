@@ -1,6 +1,7 @@
 use crossterm::event::KeyEvent;
 use ratatui::{buffer::Buffer, layout::Rect};
 
+use crate::user_approval_widget::ApprovalRequest;
 use super::{BottomPane, CancellationEvent};
 
 /// 下部ペインに表示できるビューが実装するトレイト
@@ -23,4 +24,13 @@ pub(crate) trait BottomPaneView {
 
     /// コンテンツの描画（コンポーザーの代わりに描画される）
     fn render(&self, area: Rect, buf: &mut Buffer);
+
+    /// Try to handle approval request; return the original value if not
+    /// consumed.
+    fn try_consume_approval_request(
+        &mut self,
+        request: ApprovalRequest,
+    ) -> Option<ApprovalRequest> {
+        Some(request)
+    }
 }

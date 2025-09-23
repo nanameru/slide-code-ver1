@@ -395,7 +395,7 @@ impl ApprovalManager {
 
         // 信頼できるコマンドかチェック
         if self.trusted_commands.contains(cmd) {
-            self.approved_commands.insert(command.clone());
+            self.approved_commands.insert(command.to_vec());
             return ApprovalResult::AutoApproved;
         }
 
@@ -415,13 +415,13 @@ impl ApprovalManager {
         // ポリシーに基づいて決定
         match self.policy {
             AskForApproval::Never => {
-                self.approved_commands.insert(command.clone());
+                self.approved_commands.insert(command.to_vec());
                 ApprovalResult::AutoApproved
             }
             AskForApproval::OnRequest => ApprovalResult::RequiresUserInput,
             AskForApproval::UnlessTrusted => ApprovalResult::RequiresUserInput,
             AskForApproval::OnFailure => {
-                self.approved_commands.insert(command.clone());
+                self.approved_commands.insert(command.to_vec());
                 ApprovalResult::AutoApproved
             }
         }
