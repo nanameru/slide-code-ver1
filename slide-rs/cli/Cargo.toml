@@ -21,3 +21,6 @@ slide-arg0 = { path = "../arg0" }
 tiny_http = "0.12"
 webbrowser = "0.8"
 html-escape = "0.2"
+tracing = { version = "0.1", features = ["log"] }
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+tracing-appender = "0.2"

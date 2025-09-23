@@ -10,6 +10,7 @@ use crate::history_cell::{HistoryCell, HistoryCellTrait, SystemLabel, AgentMessa
 use crate::user_approval_widget::ApprovalRequest;
 use crate::streaming::controller::{StreamController, AppEventHistorySink};
 use crate::agent::AgentHandle;
+use crate::tui::FrameRequester;
 
 use crossterm::event::{KeyEvent, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Rect, Layout, Constraint};
@@ -25,6 +26,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) agent: Option<AgentHandle>,
     pub(crate) initial_prompt: Option<String>,
     pub(crate) initial_images: Vec<PathBuf>,
+    pub(crate) frame_requester: FrameRequester,
 }
 
 // Track information about an in-flight exec command.
@@ -50,6 +52,7 @@ pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: Option<UnboundedSender<Op>>,
     bottom_pane: BottomPane,
+    frame_requester: FrameRequester,
     
     // Stream lifecycle controller
     stream: StreamController,
@@ -81,8 +84,9 @@ impl ChatWidget {
         let ChatWidgetInit {
             app_event_tx,
             agent,
-            initial_prompt,
-            initial_images,
+            initial_prompt: _,
+            initial_images: _,
+            frame_requester,
         } = init;
 
         Self {
@@ -92,6 +96,7 @@ impl ChatWidget {
                 has_input_focus: true,
                 placeholder_text: "Ask Slide Code to do anything".into(),
             }),
+            frame_requester,
             stream: StreamController::new(),
             running_commands: HashMap::new(),
             task_complete_pending: false,
@@ -459,6 +464,18 @@ impl ChatWidget {
     
     fn add_to_history(&mut self, cell: HistoryCell) {
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+    }
+
+    pub(crate) fn request_redraw(&self) {
+        self.frame_requester.schedule_frame();
+    }
+
+    pub(crate) fn handle_paste(&mut self, text: String) {
+        // Simplified paste handling - insert as user message
+        if !text.trim().is_empty() {
+            self.submit_message_with_images(text);
+            self.request_redraw();
+        }
     }
 }
 
