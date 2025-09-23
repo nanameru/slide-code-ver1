@@ -9,7 +9,7 @@ use crate::widgets::banner::banner_lines;
 
 /// Unified role heading helpers for transcript/history.
 pub(crate) fn user_heading_line() -> Line<'static> {
-    Line::from("> ".dark_gray())
+    Line::from("> ".fg(Color::Rgb(128, 128, 128)))
 }
 
 pub(crate) fn assistant_heading_line() -> Line<'static> {
@@ -256,7 +256,7 @@ enum RoleLabel {
 impl RoleLabel {
     fn heading_span(&self) -> Span<'static> {
         match self {
-            RoleLabel::User => "> ".dark_gray(),
+            RoleLabel::User => "> ".fg(Color::Rgb(128, 128, 128)),  // より薄いグレー
             RoleLabel::Assistant => "⚫︎ ".white(),
         }
     }
@@ -323,7 +323,7 @@ fn build_role_block(role: RoleLabel, body: &str) -> Vec<Line<'static>> {
                 } else {
                     Line::from(vec![
                         role.heading_span(),
-                        Span::styled(first_line.to_string(), Style::default().fg(Color::DarkGray))
+                        Span::styled(first_line.to_string(), Style::default().fg(Color::Rgb(128, 128, 128)))
                     ])
                 }
             }
@@ -337,7 +337,7 @@ fn build_role_block(role: RoleLabel, body: &str) -> Vec<Line<'static>> {
                 RoleLabel::Assistant => format_content_line(line),
                 RoleLabel::User => Line::from(Span::styled(
                     line.to_string(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(Color::Rgb(128, 128, 128)),
                 )),
             };
             out.push(formatted);
