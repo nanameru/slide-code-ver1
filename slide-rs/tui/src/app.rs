@@ -113,6 +113,7 @@ pub struct App {
     
     // --- Chat history spacing ---
     has_emitted_history: bool,
+    last_message_was_assistant: bool,
     pending_tool_block: Option<Vec<String>>,
     pending_exec_started_at: Option<Instant>,
     pending_tool_started_at: Option<Instant>,
@@ -165,6 +166,7 @@ impl App {
             overlay: PagerOverlay::new(),
             pending_exec_block: None,
             has_emitted_history: false,
+            last_message_was_assistant: false,
             pending_tool_block: None,
             pending_exec_started_at: None,
             pending_tool_started_at: None,
@@ -939,14 +941,21 @@ fn handle_app_event(tui: &mut Tui, app: &mut App, ev: AppEvent)
             // Queue history lines for ordered rendering (codex-1 style)
             let mut lines = cell.display_lines(80);
             
-            // Add spacing between messages (like codex-1 tests)
+            // Add spacing between conversation turns (not between every message)
+            // Only add space when starting a new conversation turn:
+            // - Previous message was from assistant AND current is from user (new turn)
             if app.has_emitted_history 
                 && !cell.is_stream_continuation() 
-                && !lines.is_empty() 
+                && !lines.is_empty()
+                && app.last_message_was_assistant
+                && cell.is_user()
             {
-                lines.insert(0, "".into()); // 空行を先頭に追加
+                lines.insert(0, "".into()); // 空行を先頭に追加（新しい会話ターンの開始）
             }
+            
+            // Update tracking state
             app.has_emitted_history = true;
+            app.last_message_was_assistant = cell.is_assistant();
             
             tui.insert_history_lines(lines);
         }

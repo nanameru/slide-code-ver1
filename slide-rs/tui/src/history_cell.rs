@@ -33,6 +33,14 @@ pub(crate) trait HistoryCellTrait: std::fmt::Debug + Send + Sync + Any {
     fn is_stream_continuation(&self) -> bool {
         false
     }
+    
+    fn is_user(&self) -> bool {
+        false
+    }
+    
+    fn is_assistant(&self) -> bool {
+        false
+    }
 }
 
 impl dyn HistoryCellTrait {
@@ -181,6 +189,10 @@ impl HistoryCell {
     pub fn is_assistant(&self) -> bool {
         matches!(self, Self::AssistantMessage { .. })
     }
+    
+    pub fn is_user(&self) -> bool {
+        matches!(self, Self::UserPrompt { .. })
+    }
 
     pub fn lines(&self) -> Vec<Line<'static>> {
         match self {
@@ -244,6 +256,14 @@ impl HistoryCellTrait for HistoryCell {
 
     fn transcript_lines(&self) -> Vec<Line<'static>> {
         self.lines()
+    }
+    
+    fn is_user(&self) -> bool {
+        self.is_user()
+    }
+    
+    fn is_assistant(&self) -> bool {
+        self.is_assistant()
     }
 }
 
