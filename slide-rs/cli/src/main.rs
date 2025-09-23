@@ -39,22 +39,14 @@ fn init_tracing() -> anyhow::Result<()> {
         .with_file(true)
         .with_ansi(false); // Disable ANSI codes for file output
     
-    // Create console layer for debugging
-    let console_layer = tracing_subscriber::fmt::layer()
-        .with_target(true)
-        .with_thread_ids(true)
-        .with_line_number(true)
-        .with_file(true);
-    
     // Set up environment filter (can be controlled via RUST_LOG env var)
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("slide_cli=debug,info"));
     
-    // Initialize the registry with both layers
+    // Initialize the registry with file layer only (no console output for TUI)
     tracing_subscriber::registry()
         .with(env_filter)
         .with(file_layer)
-        .with(console_layer)
         .init();
     
     // Ensure the guard is not dropped immediately
