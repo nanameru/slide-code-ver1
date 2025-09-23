@@ -164,13 +164,11 @@ impl ChatComposer {
         ])
         .areas(area);
 
-        // 🔄 全周囲ボーダー対応
-        let content_area = Rect {
-            x: textarea_rect.x + 3,  // ボーダー + 矢印 + スペース
-            y: textarea_rect.y + 1,  // 🔄 上ボーダー分
-            width: textarea_rect.width.saturating_sub(4),  // 🔄 左右ボーダー分
-            height: textarea_rect.height.saturating_sub(2),  // 🔄 上下ボーダー分
-        };
+        // 📐 テキストエリア用の調整（render_refと同じ計算）
+        let mut content_area = textarea_rect;
+        // Leave space for border and padding
+        content_area.width = content_area.width.saturating_sub(LIVE_PREFIX_COLS);
+        content_area.x = content_area.x.saturating_add(LIVE_PREFIX_COLS);
 
         let state = self.textarea_state.borrow();
         self.textarea.cursor_pos_with_state(content_area, &*state)
