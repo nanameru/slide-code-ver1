@@ -1,0 +1,1 @@
+cargo:rustc-env=MIME_TYPES_GENERATED_PATH=/Users/kimurataiyou/slide-code-test/target/release/build/mime_guess-659fdc6eb355b0c9/out/mime_types_generated.rs

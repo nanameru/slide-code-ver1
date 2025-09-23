@@ -152,10 +152,10 @@ pub fn normalize_pasted_path(pasted: &str) -> Option<PathBuf> {
     let pasted = pasted.trim();
 
     // file:// URL → filesystem path
-    if let Ok(url) = url::Url::parse(pasted)
-        && url.scheme() == "file"
-    {
-        return url.to_file_path().ok();
+    if let Ok(url) = url::Url::parse(pasted) {
+        if url.scheme() == "file" {
+            return url.to_file_path().ok();
+        }
     }
 
     // TODO: We'll improve the implementation/unit tests over time, as appropriate.

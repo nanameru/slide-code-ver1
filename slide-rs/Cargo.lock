@@ -2611,14 +2611,17 @@ dependencies = [
  "itertools 0.14.0",
  "pretty_assertions",
  "ratatui",
+ "shlex",
  "slide-common",
  "slide-core",
  "slide-file-search",
  "tempfile",
  "textwrap",
  "tokio",
+ "tracing",
  "unicode-segmentation",
  "unicode-width 0.1.14",
+ "url",
  "vt100",
 ]
 

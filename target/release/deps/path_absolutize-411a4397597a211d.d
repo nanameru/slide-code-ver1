@@ -1,0 +1,10 @@
+/Users/kimurataiyou/slide-code-test/target/release/deps/path_absolutize-411a4397597a211d.d: /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/path-absolutize-3.1.1/src/lib.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/path-absolutize-3.1.1/src/absolutize.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/path-absolutize-3.1.1/src/macros.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/path-absolutize-3.1.1/src/unix.rs
+
+/Users/kimurataiyou/slide-code-test/target/release/deps/libpath_absolutize-411a4397597a211d.rlib: /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/path-absolutize-3.1.1/src/lib.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/path-absolutize-3.1.1/src/absolutize.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/path-absolutize-3.1.1/src/macros.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/path-absolutize-3.1.1/src/unix.rs
+
+/Users/kimurataiyou/slide-code-test/target/release/deps/libpath_absolutize-411a4397597a211d.rmeta: /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/path-absolutize-3.1.1/src/lib.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/path-absolutize-3.1.1/src/absolutize.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/path-absolutize-3.1.1/src/macros.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/path-absolutize-3.1.1/src/unix.rs
+
+/Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/path-absolutize-3.1.1/src/lib.rs:
+/Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/path-absolutize-3.1.1/src/absolutize.rs:
+/Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/path-absolutize-3.1.1/src/macros.rs:
+/Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/path-absolutize-3.1.1/src/unix.rs:

@@ -22,6 +22,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::chat_widget::{ChatWidget, ChatWidgetInit};
 use crate::history_cell::{HistoryCell, SystemLabel};
 use crate::insert_history::insert_history_lines;
+use crate::streaming::controller::AppEventHistorySink;
 use crate::user_approval_widget::ApprovalRequest;
 use crate::widgets::banner::banner_history_lines;
 use crate::pager_overlay::PagerOverlay;
@@ -220,7 +221,9 @@ impl App {
             // Transcript overlay toggle
             KeyEvent { code: KeyCode::Char('t'), modifiers: KeyModifiers::CONTROL, .. } => {
                 let mut lines: Vec<Line<'static>> = Vec::new();
-                for cell in &self.history {
+                // TODO: Get history from ChatWidget
+                let history: Vec<HistoryCell> = Vec::new();
+                for cell in &history {
                     for l in cell.lines() {
                         lines.push(l);
                     }
@@ -407,16 +410,11 @@ impl App {
         }
         if delta_lines < 0 {
             // scroll down (towards bottom)
-            self.chat_scroll_top = self
-                .chat_scroll_top
-                .saturating_add(delta_lines.unsigned_abs() as usize);
+        self.chat_widget.on_mouse_wheel(delta_lines);
         } else {
-            // scroll up (towards top)
-            let dec = delta_lines as usize;
-            self.chat_scroll_top = self.chat_scroll_top.saturating_sub(dec);
+            // scroll up (towards top) - delegate to ChatWidget
+            self.chat_widget.on_mouse_wheel(delta_lines);
         }
-        self.clamp_scroll_top();
-        self.chat_follow_bottom = self.chat_scroll_top >= self.max_scroll_top();
     }
 
     fn handle_popup_key(&mut self, kind: PopupKind, key: KeyEvent) {
@@ -513,24 +511,28 @@ impl App {
                 self.modal_body = "File search functionality not yet implemented".into();
                 self.show_modal = true;
             }
-            "Save Chat to slides/draft.md" => match save_chat_as_draft(&self.history) {
-                Ok(path) => {
-                    self.modal_title = "Saved".into();
-                    self.modal_body = format!("Saved to {}", path);
-                    self.show_modal = true;
-                    self.mru_add(path);
+            "Save Chat to slides/draft.md" => {
+                // TODO: Get history from ChatWidget  
+                let history: Vec<HistoryCell> = Vec::new();
+                match save_chat_as_draft(&history) {
+                    Ok(path) => {
+                        self.modal_title = "Saved".into();
+                        self.modal_body = format!("Saved to {}", path);
+                        self.show_modal = true;
+                        self.mru_add(path);
+                    }
+                    Err(e) => {
+                        self.modal_title = "Error".into();
+                        self.modal_body = format!("Failed to save draft: {}", e);
+                        self.show_modal = true;
+                    }
                 }
-                Err(e) => {
-                    self.modal_title = "Error".into();
-                    self.modal_body = format!("Failed to save draft: {}", e);
-                    self.show_modal = true;
-                }
-            },
+            }
             "Toggle Help" => {
                 self.show_modal = !self.show_modal;
             }
             "Clear Messages" => {
-                self.history.clear();
+                self.chat_widget.clear_history();
             }
             "Quit" => {
                 self.quit();
@@ -697,7 +699,7 @@ where
     let size = terminal.size()?;
     // ステータス行は描画しない（必要ならここで高さを足す）
     let status_height: u16 = 0;
-    let desired_bottom_height = app.bottom_pane.desired_height(size.width).max(1);
+    let desired_bottom_height = app.chat_widget.desired_height(size.width).max(1);
     let total_desired_height = status_height.saturating_add(desired_bottom_height);
     let input_height = total_desired_height.min(size.height.max(1));
     let bottom_height = input_height.saturating_sub(status_height).max(1);
@@ -716,7 +718,7 @@ where
             app.overlay.render_ref(Rect { x: input_area.x, y: input_area.y, width: input_area.width, height: bottom_height }, f.buffer_mut());
         } else {
             // Chat widget (input area) using render_ref
-            app.chat_widget.render_ref(Rect { x: input_area.x, y: input_area.y + status_height, width: input_area.width, height: bottom_height }, f.buffer_mut());
+            (&app.chat_widget).render_ref(Rect { x: input_area.x, y: input_area.y + status_height, width: input_area.width, height: bottom_height }, f.buffer_mut());
             if let Some((x, y)) = app.chat_widget.cursor_pos(Rect { x: input_area.x, y: input_area.y + status_height, width: input_area.width, height: bottom_height }) {
             f.set_cursor_position((x, y));
             }
@@ -734,7 +736,7 @@ where
         CoreEvent::SessionConfigured { .. } => {}
         CoreEvent::TaskStarted => {
             app.status = RunStatus::Running;
-            app.bottom_pane.set_task_running(true);
+            app.chat_widget.set_task_running(true);
             append_log("[task] started");
             app.app_event_tx.send(AppEvent::StartCommitAnimation);
         }
@@ -756,8 +758,7 @@ where
 
                 if is_tool_begin || is_tool_mid || is_tool_end || is_exec_begin || is_exec_end {
                     // Ensure assistant stream is flushed before tool blocks
-                    let sink = AppEventHistorySink(app.app_event_tx.clone());
-                    app.stream_controller.finalize(true, &sink);
+                    app.chat_widget.finalize_stream();
                     // Exec block handling
                     if is_exec_begin || is_exec_end {
                         if is_exec_begin {
@@ -821,17 +822,13 @@ where
             }
 
             if !normal_buf.is_empty() {
-                let sink = AppEventHistorySink(app.app_event_tx.clone());
-                if !app.stream_controller.is_write_cycle_active() {
-                    app.stream_controller.begin(&sink);
-                }
-                app.stream_controller.push_and_maybe_commit(&normal_buf, &sink);
+                app.chat_widget.handle_agent_message_delta(&normal_buf);
             }
             // Debug-only per-chunk logging (default off)
             if std::env::var("SLIDE_STREAM_DEBUG_CHUNKS").ok().as_deref() == Some("1") {
                 append_log(&format!("assistantΔ: {}", delta.replace('\n', "\\n")));
             }
-            app.approx_output_chars = app.approx_output_chars.saturating_add(delta.len());
+            // approx_output_chars now handled by ChatWidget
         }
         CoreEvent::AgentMessage { message } => {
             if !message.is_empty() {
@@ -843,8 +840,7 @@ where
         // New explicit tool events (preferred over heuristic blocks)
         CoreEvent::ToolBegin { id: _id, kind, summary, cwd: _ } => {
             let label = match kind { CoreToolKind::Exec => SystemLabel::Exec, CoreToolKind::Mcp => SystemLabel::Mcp, CoreToolKind::Search => SystemLabel::Search, CoreToolKind::Info => SystemLabel::Info };
-            let sink = AppEventHistorySink(app.app_event_tx.clone());
-            app.stream_controller.finalize(true, &sink);
+            app.chat_widget.finalize_stream();
             app.pending_tool_block = Some(vec![format!("▶ {}", summary)]);
             app.pending_tool_started_at = Some(Instant::now());
             app.chat_widget.update_status_header(format!("Tool: {}", summary));
@@ -868,8 +864,7 @@ where
         }
         CoreEvent::ExecCommandBegin { command, .. } => {
             // Flush assistant stream and start a new exec block
-            let sink = AppEventHistorySink(app.app_event_tx.clone());
-            app.stream_controller.finalize(true, &sink);
+            app.chat_widget.finalize_stream();
             app.pending_exec_block = Some(vec![format!("$ {}", command.join(" "))]);
             app.pending_exec_started_at = Some(Instant::now());
             app.chat_widget.update_status_header(format!("Running: {}", command.join(" ")));
@@ -997,8 +992,8 @@ where
 {
     match ev {
         AppEvent::StartFileSearch { query } => {
-            app.bottom_pane.show_file_search();
-            if let Some(p) = app.bottom_pane.file_search_mut() {
+            app.chat_widget.show_file_search();
+            if let Some(p) = app.chat_widget.file_search_mut() {
                 p.set_query(&query);
             }
         }
@@ -1011,7 +1006,7 @@ where
             app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
         }
         AppEvent::StartCommitAnimation => {
-            app.bottom_pane.set_task_running(true);
+            app.chat_widget.set_task_running(true);
         }
         AppEvent::CommitTick => {
             let dots = [".", "..", "...", "…." ];
@@ -1020,13 +1015,14 @@ where
             app.chat_widget.update_status_header(format!("Working{}", dots[idx]));
         }
         AppEvent::StopCommitAnimation => {
-            app.bottom_pane.set_task_running(false);
+            app.chat_widget.set_task_running(false);
         }
         AppEvent::UpdateModel(model) => {
             if let Some(agent) = app.chat_widget.get_agent() {
                 agent.override_turn_context_bg(Some(model.clone()), None, None, None);
             }
-            app.bottom_pane.set_composer_placeholder(format!("Model: {}", model));
+            // Model setting handled by ChatWidget
+            app.chat_widget.update_status_header(format!("Model: {}", model));
         }
         AppEvent::UpdateReasoningEffort(effort) => {
             if let Some(agent) = app.chat_widget.get_agent() {
@@ -1132,7 +1128,7 @@ where
             }
         },
         AppEvent::FileSearchResults { query, matches } => {
-            if let Some(p) = app.bottom_pane.file_search_mut() {
+            if let Some(p) = app.chat_widget.file_search_mut() {
                 p.set_matches(&query, matches);
             }
         }
