@@ -6,6 +6,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
+use std::cell::RefCell;
 
 use crossterm::Command;
 use crossterm::event::Event;
@@ -57,11 +58,7 @@ impl FrameRequester {
     }
 }
 
-pub enum TuiEvent {
-    Key(KeyEvent),
-    Paste(String),
-    Draw,
-}
+// TuiEvent removed - using direct event handling
 
 pub struct Tui {
     terminal: Terminal,
@@ -163,32 +160,7 @@ impl Tui {
         Ok(())
     }
 
-    pub fn event_stream(&mut self) -> impl Stream<Item = TuiEvent> + '_ {
-        async_stream::stream! {
-            loop {
-                select! {
-                    // Check for scheduled frame draws
-                    Some(_instant) = self.frame_schedule_rx.recv() => {
-                        yield TuiEvent::Draw;
-                    }
-                    // Handle terminal events
-                    Ok(event) = tokio::time::timeout(Duration::from_millis(100), async {
-                        crossterm::event::read()
-                    }) => {
-                        match event {
-                            Ok(Event::Key(key)) => yield TuiEvent::Key(key),
-                            Ok(Event::Paste(paste)) => yield TuiEvent::Paste(paste),
-                            _ => {}
-                        }
-                    }
-                    // Timeout - yield Draw for regular updates
-                    _ = tokio::time::sleep(Duration::from_millis(16)) => {
-                        yield TuiEvent::Draw;
-                    }
-                }
-            }
-        }
-    }
+    // event_stream removed - using direct polling approach to avoid borrowing issues
 
     pub fn size(&self) -> Result<ratatui::layout::Size> {
         self.terminal.size()
