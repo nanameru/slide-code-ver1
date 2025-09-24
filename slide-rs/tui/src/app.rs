@@ -942,14 +942,25 @@ fn handle_app_event(tui: &mut Tui, app: &mut App, ev: AppEvent)
             let mut lines = cell.display_lines(80);
             
             // Add spacing for proper conversation flow
-            if !cell.is_stream_continuation() && !lines.is_empty() {
+            if !lines.is_empty() {
+                // Debug info
+                tracing::debug!(
+                    "Spacing logic: is_user={}, is_assistant={}, last_was_assistant={}, has_history={}",
+                    cell.is_user(),
+                    cell.is_assistant(),
+                    app.last_message_was_assistant,
+                    app.has_emitted_history
+                );
+                
                 // Add space before user messages when previous was AI (new conversation turn)
                 if cell.is_user() && app.last_message_was_assistant && app.has_emitted_history {
+                    tracing::debug!("Adding space before user message");
                     lines.insert(0, "".into()); // ユーザーメッセージの前に空行を追加
                 }
                 
                 // Add space after AI messages for visual separation
                 if cell.is_assistant() {
+                    tracing::debug!("Adding space after AI message");
                     lines.push("".into()); // AIメッセージの後に空行を追加
                 }
             }
