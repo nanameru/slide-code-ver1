@@ -1,26 +1,153 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ResponseItem {
-    pub id: Option<String>,
-    pub role: String,
-    pub content: Vec<ContentItem>,
+// codex-1レベルのResponseItem定義（7種類対応）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResponseItem {
+    Message {
+        #[serde(skip_serializing)]
+        id: Option<String>,
+        role: String,
+        content: Vec<ContentItem>,
+    },
+    Reasoning {
+        #[serde(default, skip_serializing)]
+        id: String,
+        summary: Vec<ReasoningItemReasoningSummary>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content: Option<Vec<ReasoningItemContent>>,
+        encrypted_content: Option<String>,
+    },
+    LocalShellCall {
+        /// Set when using the chat completions API.
+        #[serde(skip_serializing)]
+        id: Option<String>,
+        /// Set when using the Responses API.
+        call_id: Option<String>,
+        status: LocalShellStatus,
+        action: LocalShellAction,
+    },
+    FunctionCall {
+        #[serde(skip_serializing)]
+        id: Option<String>,
+        name: String,
+        arguments: String,
+        call_id: String,
+    },
+    FunctionCallOutput {
+        call_id: String,
+        output: FunctionCallOutputPayload,
+    },
+    CustomToolCall {
+        #[serde(skip_serializing)]
+        id: Option<String>,
+        call_id: String,
+        name: String,
+        input: String,
+        status: CustomToolStatus,
+    },
+    CustomToolCallOutput {
+        call_id: String,
+        output: String,
+    },
+    WebSearchCall {
+        #[serde(skip_serializing)]
+        id: Option<String>,
+        call_id: Option<String>,
+        action: WebSearchAction,
+    },
+    Other,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentItem {
-    Text { text: String },
+    InputText { text: String },
+    InputImage { image_url: String },
+    OutputText { text: String },
     FunctionCall { name: String, arguments: String },
     FunctionResult { result: String },
 }
 
-pub type ResponseInputItem = ResponseItem;
+// 推論関連の構造体
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ReasoningItemReasoningSummary {
+    SummaryText { text: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ReasoningItemContent {
+    ReasoningText { text: String },
+    Text { text: String },
+}
+
+// LocalShellCall関連の構造体
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalShellStatus {
+    Completed,
+    InProgress,
+    Incomplete,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum LocalShellAction {
+    Exec(LocalShellExecAction),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalShellExecAction {
+    pub command: Vec<String>,
+    pub timeout_ms: Option<u64>,
+    pub working_directory: Option<String>,
+    pub env: Option<HashMap<String, String>>,
+    pub user: Option<String>,
+}
+
+// CustomToolCall関連の構造体
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CustomToolStatus {
+    Completed,
+    InProgress,
+    Incomplete,
+}
+
+// WebSearchCall関連の構造体
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WebSearchAction {
+    Search { query: String },
+    #[serde(other)]
+    Other,
+}
+
+// codex-1レベルのResponseInputItem定義
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResponseInputItem {
+    Message {
+        role: String,
+        content: Vec<ContentItem>,
+    },
+    FunctionCallOutput {
+        call_id: String,
+        output: FunctionCallOutputPayload,
+    },
+    CustomToolCallOutput {
+        call_id: String,
+        output: String,
+    },
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionCallOutputPayload {
-    pub success: bool,
-    pub message: String,
-    pub output: Option<String>,
+    pub success: Option<bool>,
+    pub content: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -75,7 +202,18 @@ impl ConversationHistory {
 
 /// Check if an item should be included in the API conversation
 fn is_api_message(item: &ResponseItem) -> bool {
-    // Include messages from user and assistant roles
-    matches!(item.role.as_str(), "user" | "assistant" | "system")
+    match item {
+        ResponseItem::Message { role, .. } => {
+            matches!(role.as_str(), "user" | "assistant" | "system")
+        }
+        ResponseItem::Reasoning { .. }
+        | ResponseItem::LocalShellCall { .. }
+        | ResponseItem::FunctionCall { .. }
+        | ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::WebSearchCall { .. } => true,
+        ResponseItem::Other => false,
+    }
 }
 

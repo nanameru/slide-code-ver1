@@ -1562,51 +1562,99 @@ async fn handle_response_item(
     sub_id: &str,
     item: ResponseItem,
 ) -> CodexResult<Option<ResponseInputItem>> {
-    debug!(?item, "Processing response item");
+    use crate::conversation_history::ResponseItem;
     
-    match item {
-        ResponseItem::Message { role, content } if role == "assistant" => {
-            // Check if the message contains function calls
-            for content_item in &content {
-                if let ContentItem::FunctionCall { name, arguments } = content_item {
-                    // Generate a unique call_id for this function call
-                    let call_id = format!("call_{}", uuid::Uuid::new_v4());
-                    return Ok(Some(
-                        handle_function_call(
-                            sess,
-                            turn_context,
-                            turn_diff_tracker,
-                            sub_id.to_string(),
-                            name.clone(),
-                            arguments.clone(),
-                            call_id,
-                        )
-                        .await?,
-                    ));
+    debug!(?item, "Output item");
+    let output = match item {
+        ResponseItem::FunctionCall {
+            name,
+            arguments,
+            call_id,
+            ..
+        } => {
+            info!("FunctionCall: {name}({arguments})");
+            Some(
+                handle_function_call(
+                    sess,
+                    turn_context,
+                    turn_diff_tracker,
+                    sub_id.to_string(),
+                    name,
+                    arguments,
+                    call_id,
+                )
+                .await?,
+            )
+        }
+        ResponseItem::LocalShellCall {
+            id,
+            call_id,
+            status: _,
+            action,
+        } => {
+            Some(
+                handle_local_shell_call(
+                    sess,
+                    turn_context,
+                    turn_diff_tracker,
+                    sub_id.to_string(),
+                    id,
+                    call_id,
+                    action,
+                )
+                .await?,
+            )
+        }
+        ResponseItem::CustomToolCall {
+            id: _,
+            call_id,
+            name,
+            input,
+            status: _,
+        } => Some(
+            handle_custom_tool_call(
+                sess,
+                turn_context,
+                turn_diff_tracker,
+                sub_id.to_string(),
+                name,
+                input,
+                call_id,
+            )
+            .await?,
+        ),
+        ResponseItem::FunctionCallOutput { .. } => {
+            debug!("unexpected FunctionCallOutput from stream");
+            None
+        }
+        ResponseItem::CustomToolCallOutput { .. } => {
+            debug!("unexpected CustomToolCallOutput from stream");
+            None
+        }
+        ResponseItem::Message { .. }
+        | ResponseItem::Reasoning { .. }
+        | ResponseItem::WebSearchCall { .. } => {
+            // In review child threads, suppress assistant message events but
+            // keep reasoning/web search.
+            let msgs = match &item {
+                ResponseItem::Message { role, .. } if turn_context.is_review_mode => {
+                    trace!("suppressing assistant Message in review mode");
+                    Vec::new()
                 }
-            }
-            
-            // Send message event for regular assistant messages
-            let event = Event {
-                id: sub_id.to_string(),
-                msg: EventMsg::AgentMessage(AgentMessageEvent {
-                    message: content.iter()
-                        .filter_map(|c| match c {
-                            ContentItem::OutputText { text } => Some(text.clone()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join(""),
-                }),
+                _ => map_response_item_to_event_messages(&item, sess.show_raw_agent_reasoning),
             };
-            sess.send_event(event).await;
-            Ok(None)
+            for msg in msgs {
+                let event = Event {
+                    id: sub_id.to_string(),
+                    msg,
+                };
+                sess.send_event(event).await;
+            }
+            None
         }
-        _ => {
-            // For other types of response items, just return None
-            Ok(None)
-        }
-    }
+        ResponseItem::Other => None,
+    };
+    Ok(output)
 }
 
 /// Handle a function call by executing the tool and returning the result
@@ -1671,6 +1719,248 @@ async fn handle_function_call(
                 success: Some(false),
             },
         }),
+    }
+}
+
+/// Handle LocalShellCall execution
+async fn handle_local_shell_call(
+    sess: &Session,
+    turn_context: &TurnContext,
+    turn_diff_tracker: &mut TurnDiffTracker,
+    sub_id: String,
+    id: Option<String>,
+    call_id: Option<String>,
+    action: crate::conversation_history::LocalShellAction,
+) -> CodexResult<ResponseInputItem> {
+    use crate::conversation_history::{LocalShellAction, LocalShellExecAction};
+    
+    let LocalShellAction::Exec(action) = action;
+    tracing::info!("LocalShellCall: {action:?}");
+    
+    let effective_call_id = match (call_id, id) {
+        (Some(call_id), _) => call_id,
+        (None, Some(id)) => id,
+        (None, None) => {
+            error!("LocalShellCall without call_id or id");
+            return Ok(ResponseInputItem::FunctionCallOutput {
+                call_id: "".to_string(),
+                output: crate::conversation_history::FunctionCallOutputPayload {
+                    content: "LocalShellCall without call_id or id".to_string(),
+                    success: Some(false),
+                },
+            });
+        }
+    };
+
+    // Create shell command execution
+    let command_str = action.command.join(" ");
+    let start = std::time::Instant::now();
+    
+    // Send tool execution begin event
+    let begin_event = Event {
+        id: sub_id.clone(),
+        msg: EventMsg::ToolExecutionBegin(ToolExecutionBeginEvent {
+            call_id: effective_call_id.clone(),
+            tool_name: "shell".to_string(),
+            tool_input: command_str.clone(),
+        }),
+    };
+    sess.send_event(begin_event).await;
+    
+    // Execute shell command using ToolExecutor
+    let mut tool_executor = ToolExecutor::new(
+        AskForApproval::Never,
+        SandboxPolicy::Disabled,
+        turn_context.cwd.clone(),
+        turn_context.shell_environment_policy.clone(),
+    );
+    
+    let result = tool_executor.execute_function_call("shell", &command_str).await;
+    let duration_ms = start.elapsed().as_millis() as u64;
+    
+    // Send tool execution end event
+    let end_event = Event {
+        id: sub_id,
+        msg: EventMsg::ToolExecutionEnd(ToolExecutionEndEvent {
+            call_id: effective_call_id.clone(),
+            success: result.is_ok(),
+            duration_ms,
+        }),
+    };
+    sess.send_event(end_event).await;
+    
+    // Return the result as ResponseInputItem
+    match result {
+        Ok(output) => Ok(ResponseInputItem::FunctionCallOutput {
+            call_id: effective_call_id,
+            output: crate::conversation_history::FunctionCallOutputPayload {
+                content: output,
+                success: Some(true),
+            },
+        }),
+        Err(e) => Ok(ResponseInputItem::FunctionCallOutput {
+            call_id: effective_call_id,
+            output: crate::conversation_history::FunctionCallOutputPayload {
+                content: format!("Error: {}", e),
+                success: Some(false),
+            },
+        }),
+    }
+}
+
+/// Handle CustomToolCall execution
+async fn handle_custom_tool_call(
+    sess: &Session,
+    turn_context: &TurnContext,
+    _turn_diff_tracker: &mut TurnDiffTracker,
+    sub_id: String,
+    name: String,
+    input: String,
+    call_id: String,
+) -> CodexResult<ResponseInputItem> {
+    tracing::info!("CustomToolCall: {name}({input})");
+    
+    let start = std::time::Instant::now();
+    
+    // Send tool execution begin event
+    let begin_event = Event {
+        id: sub_id.clone(),
+        msg: EventMsg::ToolExecutionBegin(ToolExecutionBeginEvent {
+            call_id: call_id.clone(),
+            tool_name: name.clone(),
+            tool_input: input.clone(),
+        }),
+    };
+    sess.send_event(begin_event).await;
+    
+    // Execute custom tool using ToolExecutor
+    let mut tool_executor = ToolExecutor::new(
+        AskForApproval::Never,
+        SandboxPolicy::Disabled,
+        turn_context.cwd.clone(),
+        turn_context.shell_environment_policy.clone(),
+    );
+    
+    let result = tool_executor.execute_function_call(&name, &input).await;
+    let duration_ms = start.elapsed().as_millis() as u64;
+    
+    // Send tool execution end event
+    let end_event = Event {
+        id: sub_id,
+        msg: EventMsg::ToolExecutionEnd(ToolExecutionEndEvent {
+            call_id: call_id.clone(),
+            success: result.is_ok(),
+            duration_ms,
+        }),
+    };
+    sess.send_event(end_event).await;
+    
+    // Return the result as ResponseInputItem
+    match result {
+        Ok(output) => Ok(ResponseInputItem::CustomToolCallOutput {
+            call_id,
+            output,
+        }),
+        Err(e) => Ok(ResponseInputItem::CustomToolCallOutput {
+            call_id,
+            output: format!("Error: {}", e),
+        }),
+    }
+}
+
+/// Convert a ResponseItem into zero or more EventMsg values that the UI can render
+/// This is equivalent to codex-1's event_mapping.rs functionality
+fn map_response_item_to_event_messages(
+    item: &crate::conversation_history::ResponseItem,
+    show_raw_agent_reasoning: bool,
+) -> Vec<EventMsg> {
+    use crate::conversation_history::{ResponseItem, ContentItem, ReasoningItemReasoningSummary, ReasoningItemContent, WebSearchAction};
+    
+    match item {
+        ResponseItem::Message { role, content, .. } => {
+            // Do not surface system messages as user events.
+            if role == "system" {
+                return Vec::new();
+            }
+
+            let mut events: Vec<EventMsg> = Vec::new();
+            let mut message_parts: Vec<String> = Vec::new();
+            let mut images: Vec<String> = Vec::new();
+
+            for content_item in content.iter() {
+                match content_item {
+                    ContentItem::InputText { text } => {
+                        message_parts.push(text.clone());
+                    }
+                    ContentItem::InputImage { image_url } => {
+                        images.push(image_url.clone());
+                    }
+                    ContentItem::OutputText { text } => {
+                        events.push(EventMsg::AgentMessage(AgentMessageEvent {
+                            message: text.clone(),
+                        }));
+                    }
+                    ContentItem::FunctionCall { .. } | ContentItem::FunctionResult { .. } => {
+                        // These are handled by higher layers
+                    }
+                }
+            }
+
+            if !message_parts.is_empty() || !images.is_empty() {
+                let message = if message_parts.is_empty() {
+                    String::new()
+                } else {
+                    message_parts.join("")
+                };
+
+                events.push(EventMsg::UserMessage(UserMessageEvent {
+                    message,
+                    images: if images.is_empty() { None } else { Some(images) },
+                }));
+            }
+
+            events
+        }
+
+        ResponseItem::Reasoning { summary, content, .. } => {
+            let mut events = Vec::new();
+            for ReasoningItemReasoningSummary::SummaryText { text } in summary {
+                events.push(EventMsg::AgentReasoning(AgentReasoningEvent {
+                    text: text.clone(),
+                }));
+            }
+            if let Some(items) = content.as_ref().filter(|_| show_raw_agent_reasoning) {
+                for c in items {
+                    let text = match c {
+                        ReasoningItemContent::ReasoningText { text }
+                        | ReasoningItemContent::Text { text } => text,
+                    };
+                    events.push(EventMsg::AgentReasoningRawContent(
+                        AgentReasoningRawContentEvent { text: text.clone() },
+                    ));
+                }
+            }
+            events
+        }
+
+        ResponseItem::WebSearchCall { id, action, .. } => match action {
+            WebSearchAction::Search { query } => {
+                let call_id = id.clone().unwrap_or_else(|| "".to_string());
+                vec![EventMsg::WebSearchEnd(WebSearchEndEvent {
+                    call_id,
+                    query: query.clone(),
+                })]
+            }
+            WebSearchAction::Other => Vec::new(),
+        },
+
+        // Variants that require side effects are handled by higher layers and do not emit events here.
+        ResponseItem::FunctionCall { .. }
+        | ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::LocalShellCall { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::Other => Vec::new(),
     }
 }
 
