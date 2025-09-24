@@ -1,12 +1,39 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use tokio::sync::mpsc::Receiver;
+use crate::conversation_history::ResponseItem;
+use protocol::protocol::TokenUsage;
 
 #[derive(Debug, Clone)]
 pub enum ResponseEvent {
+    // 既存のイベント（互換性維持）
     TextDelta(String),
     Completed,
     Error(String),
+    
+    // codex-1レベルの拡張イベント
+    Created,
+    OutputItemDone(ResponseItem),
+    CompletedWithDetails {
+        response_id: String,
+        token_usage: Option<TokenUsage>,
+    },
+    OutputTextDelta(String),
+    ReasoningSummaryDelta(String),
+    ReasoningContentDelta(String),
+    WebSearchCallBegin {
+        call_id: String,
+    },
+    RateLimits(RateLimitSnapshot),
+}
+
+// RateLimitSnapshot構造体を定義
+#[derive(Debug, Clone)]
+pub struct RateLimitSnapshot {
+    pub requests_remaining: Option<u32>,
+    pub requests_reset_at: Option<u64>,
+    pub tokens_remaining: Option<u32>,
+    pub tokens_reset_at: Option<u64>,
 }
 
 #[async_trait]

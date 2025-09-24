@@ -5,6 +5,7 @@ pub mod approval_manager;
 pub mod client;
 pub mod codex2;
 pub mod config_types;
+pub mod conversation_history;
 pub mod exec_env;
 pub mod exec_sandboxed;
 pub mod is_safe_command;

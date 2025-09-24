@@ -1356,8 +1356,11 @@ async fn try_run_turn(
         .map_err(|_| CodexErr::InternalAgentDied)?;
 
     let mut assembled = String::new();
+    let mut output = Vec::new();
+    
     while let Some(ev) = rx.recv().await {
         match ev {
+            // 既存のイベント処理（互換性維持）
             ClientResponseEvent::TextDelta(delta) => {
                 assembled.push_str(&delta);
                 let event = Event {
@@ -1415,7 +1418,70 @@ async fn try_run_turn(
                 sess.send_event(event).await;
                 break;
             }
+            
+            // 新しいResponseEventの処理
+            ClientResponseEvent::Created => {
+                // Created イベントは特別な処理は不要
+                debug!("Response stream created");
+            }
+            ClientResponseEvent::OutputItemDone(item) => {
+                // 最重要: 直接的なResponseItem処理
+                let response = handle_response_item(
+                    sess,
+                    turn_context,
+                    turn_diff_tracker,
+                    sub_id,
+                    item.clone(),
+                )
+                .await?;
+                output.push(ProcessedResponseItem { item, response });
+            }
+            ClientResponseEvent::CompletedWithDetails { response_id: _, token_usage: _ } => {
+                // 詳細な完了情報付きの処理
+                // 現在は基本的なCompleted処理と同じ
+                break;
+            }
+            ClientResponseEvent::OutputTextDelta(delta) => {
+                // OutputTextDelta は TextDelta と同じ処理
+                assembled.push_str(&delta);
+                let event = Event {
+                    id: sub_id.to_string(),
+                    msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
+                };
+                sess.send_event(event).await;
+            }
+            ClientResponseEvent::ReasoningSummaryDelta(delta) => {
+                // 推論サマリーのデルタ処理
+                let event = Event {
+                    id: sub_id.to_string(),
+                    msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
+                };
+                sess.send_event(event).await;
+            }
+            ClientResponseEvent::ReasoningContentDelta(delta) => {
+                // 推論コンテンツのデルタ処理
+                let event = Event {
+                    id: sub_id.to_string(),
+                    msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
+                };
+                sess.send_event(event).await;
+            }
+            ClientResponseEvent::WebSearchCallBegin { call_id } => {
+                // Web検索開始イベント
+                debug!("Web search call began: {}", call_id);
+                // 必要に応じて専用イベントを送信
+            }
+            ClientResponseEvent::RateLimits(_snapshot) => {
+                // レート制限情報の処理
+                debug!("Rate limit information received");
+                // 必要に応じてレート制限イベントを送信
+            }
         }
+    }
+
+    // OutputItemDoneで処理されたアイテムがある場合はそれを返す
+    if !output.is_empty() {
+        return Ok(output);
     }
 
     Ok(Vec::new())

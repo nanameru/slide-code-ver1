@@ -541,6 +541,43 @@ impl Codex {
                                             let _ = tx_event.send(Event::Error { message }).await;
                                             break;
                                         }
+                                        // 新しいResponseEventの処理
+                                        ResponseEvent::Created => {
+                                            // Created イベントは特別な処理は不要
+                                        }
+                                        ResponseEvent::OutputItemDone(_item) => {
+                                            // OutputItemDone は現在の実装では未対応
+                                            // 将来的にはhandle_response_itemで処理
+                                        }
+                                        ResponseEvent::CompletedWithDetails { response_id: _, token_usage: _ } => {
+                                            // 詳細な完了情報付きの処理（現在は基本のCompletedと同じ）
+                                            break;
+                                        }
+                                        ResponseEvent::OutputTextDelta(delta) => {
+                                            // OutputTextDelta は TextDelta と同じ処理
+                                            assembled_resp.push_str(&delta);
+                                            let _ = tx_event
+                                                .send(Event::AgentMessageDelta { delta })
+                                                .await;
+                                        }
+                                        ResponseEvent::ReasoningSummaryDelta(delta) => {
+                                            // 推論サマリーのデルタ処理
+                                            let _ = tx_event
+                                                .send(Event::AgentMessageDelta { delta })
+                                                .await;
+                                        }
+                                        ResponseEvent::ReasoningContentDelta(delta) => {
+                                            // 推論コンテンツのデルタ処理
+                                            let _ = tx_event
+                                                .send(Event::AgentMessageDelta { delta })
+                                                .await;
+                                        }
+                                        ResponseEvent::WebSearchCallBegin { call_id: _ } => {
+                                            // Web検索開始イベント（現在は未対応）
+                                        }
+                                        ResponseEvent::RateLimits(_snapshot) => {
+                                            // レート制限情報の処理（現在は未対応）
+                                        }
                                     }
                                 }
                             }
@@ -678,6 +715,43 @@ impl Codex {
                                         ResponseEvent::Error(message) => {
                                             let _ = tx_event.send(Event::Error { message }).await;
                                             break;
+                                        }
+                                        // 新しいResponseEventの処理
+                                        ResponseEvent::Created => {
+                                            // Created イベントは特別な処理は不要
+                                        }
+                                        ResponseEvent::OutputItemDone(_item) => {
+                                            // OutputItemDone は現在の実装では未対応
+                                            // 将来的にはhandle_response_itemで処理
+                                        }
+                                        ResponseEvent::CompletedWithDetails { response_id: _, token_usage: _ } => {
+                                            // 詳細な完了情報付きの処理（現在は基本のCompletedと同じ）
+                                            break;
+                                        }
+                                        ResponseEvent::OutputTextDelta(delta) => {
+                                            // OutputTextDelta は TextDelta と同じ処理
+                                            assembled_resp.push_str(&delta);
+                                            let _ = tx_event
+                                                .send(Event::AgentMessageDelta { delta })
+                                                .await;
+                                        }
+                                        ResponseEvent::ReasoningSummaryDelta(delta) => {
+                                            // 推論サマリーのデルタ処理
+                                            let _ = tx_event
+                                                .send(Event::AgentMessageDelta { delta })
+                                                .await;
+                                        }
+                                        ResponseEvent::ReasoningContentDelta(delta) => {
+                                            // 推論コンテンツのデルタ処理
+                                            let _ = tx_event
+                                                .send(Event::AgentMessageDelta { delta })
+                                                .await;
+                                        }
+                                        ResponseEvent::WebSearchCallBegin { call_id: _ } => {
+                                            // Web検索開始イベント（現在は未対応）
+                                        }
+                                        ResponseEvent::RateLimits(_snapshot) => {
+                                            // レート制限情報の処理（現在は未対応）
                                         }
                                     }
                                 }
