@@ -142,6 +142,10 @@ pub enum ResponseInputItem {
         call_id: String,
         output: String,
     },
+    McpToolCallOutput {
+        call_id: String,
+        result: Result<mcp_types::CallToolResult, String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

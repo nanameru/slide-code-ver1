@@ -1134,6 +1134,14 @@ fn handle_app_event(tui: &mut Tui, app: &mut App, ev: AppEvent)
         AppEvent::ToolExecutionEnd(event) => {
             app.chat_widget.on_tool_execution_end(event);
         }
+        
+        // MCP関連イベントの処理
+        AppEvent::McpToolCallBegin(event) => {
+            app.chat_widget.on_mcp_tool_call_begin(event);
+        }
+        AppEvent::McpToolCallEnd(event) => {
+            app.chat_widget.on_mcp_tool_call_end(event);
+        }
     }
 }
 

@@ -4,7 +4,8 @@ use slide_core::codex::{Event, Op, ReviewDecision};
 // 連続実行関連イベントのインポート
 use slide_core::protocol::{
     ContinuousExecutionStartEvent, ContinuousExecutionStepEvent, ContinuousExecutionEndEvent,
-    ToolExecutionBeginEvent, ToolExecutionEndEvent
+    ToolExecutionBeginEvent, ToolExecutionEndEvent,
+    McpToolCallBeginEvent, McpToolCallEndEvent
 };
 
 use crate::history_cell::HistoryCellTrait;
@@ -86,4 +87,8 @@ pub(crate) enum AppEvent {
     ContinuousExecutionEnd(ContinuousExecutionEndEvent),
     ToolExecutionBegin(ToolExecutionBeginEvent),
     ToolExecutionEnd(ToolExecutionEndEvent),
+    
+    // MCP関連イベント
+    McpToolCallBegin(McpToolCallBeginEvent),
+    McpToolCallEnd(McpToolCallEndEvent),
 }

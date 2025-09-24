@@ -1667,58 +1667,72 @@ async fn handle_function_call(
     arguments: String,
     call_id: String,
 ) -> CodexResult<ResponseInputItem> {
-    let start = std::time::Instant::now();
-    
-    // Send tool execution begin event
-    let begin_event = Event {
-        id: sub_id.clone(),
-        msg: EventMsg::ToolExecutionBegin(ToolExecutionBeginEvent {
-            call_id: call_id.clone(),
-            tool_name: name.clone(),
-            tool_input: arguments.clone(),
-        }),
-    };
-    sess.send_event(begin_event).await;
-    
-    // Create tool executor
-    let mut tool_executor = ToolExecutor::new(
-        AskForApproval::Never,
-        SandboxPolicy::Disabled,
-        turn_context.cwd.clone(),
-        turn_context.shell_environment_policy.clone(),
-    );
-    
-    // Execute the function call
-    let result = tool_executor.execute_function_call(&name, &arguments).await;
-    let duration_ms = start.elapsed().as_millis() as u64;
-    
-    // Send tool execution end event
-    let end_event = Event {
-        id: sub_id,
-        msg: EventMsg::ToolExecutionEnd(ToolExecutionEndEvent {
-            call_id: call_id.clone(),
-            success: result.is_ok(),
-            duration_ms,
-        }),
-    };
-    sess.send_event(end_event).await;
-    
-    // Return the result as ResponseInputItem
-    match result {
-        Ok(output) => Ok(ResponseInputItem::FunctionCallOutput {
-            call_id,
-            output: protocol::models::FunctionCallOutputPayload {
-                content: output,
-                success: Some(true),
-            },
-        }),
-        Err(e) => Ok(ResponseInputItem::FunctionCallOutput {
-            call_id,
-            output: protocol::models::FunctionCallOutputPayload {
-                content: format!("Error: {}", e),
-                success: Some(false),
-            },
-        }),
+    // First, check if this is an MCP tool call
+    match sess.mcp_connection_manager.parse_tool_name(&name) {
+        Some((server, tool_name)) => {
+            // This is an MCP tool call - handle it via MCP
+            let timeout = None; // TODO: Determine appropriate timeout for tool call
+            Ok(handle_mcp_tool_call(
+                sess, &sub_id, call_id, server, tool_name, arguments, timeout,
+            )
+            .await)
+        }
+        None => {
+            // This is a regular tool call - handle it via ToolExecutor
+            let start = std::time::Instant::now();
+            
+            // Send tool execution begin event
+            let begin_event = Event {
+                id: sub_id.clone(),
+                msg: EventMsg::ToolExecutionBegin(ToolExecutionBeginEvent {
+                    call_id: call_id.clone(),
+                    tool_name: name.clone(),
+                    tool_input: arguments.clone(),
+                }),
+            };
+            sess.send_event(begin_event).await;
+            
+            // Create tool executor
+            let mut tool_executor = ToolExecutor::new(
+                AskForApproval::Never,
+                SandboxPolicy::Disabled,
+                turn_context.cwd.clone(),
+                turn_context.shell_environment_policy.clone(),
+            );
+            
+            // Execute the function call
+            let result = tool_executor.execute_function_call(&name, &arguments).await;
+            let duration_ms = start.elapsed().as_millis() as u64;
+            
+            // Send tool execution end event
+            let end_event = Event {
+                id: sub_id,
+                msg: EventMsg::ToolExecutionEnd(ToolExecutionEndEvent {
+                    call_id: call_id.clone(),
+                    success: result.is_ok(),
+                    duration_ms,
+                }),
+            };
+            sess.send_event(end_event).await;
+            
+            // Return the result as ResponseInputItem
+            match result {
+                Ok(output) => Ok(ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: protocol::models::FunctionCallOutputPayload {
+                        content: output,
+                        success: Some(true),
+                    },
+                }),
+                Err(e) => Ok(ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: protocol::models::FunctionCallOutputPayload {
+                        content: format!("Error: {}", e),
+                        success: Some(false),
+                    },
+                }),
+            }
+        }
     }
 }
 

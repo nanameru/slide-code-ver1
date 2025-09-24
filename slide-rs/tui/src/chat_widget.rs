@@ -21,7 +21,8 @@ use slide_core::protocol::{CoreAskForApproval as AskForApproval, CoreSandboxPoli
 // 連続実行関連イベントのインポート
 use slide_core::protocol::{
     ContinuousExecutionStartEvent, ContinuousExecutionStepEvent, ContinuousExecutionEndEvent,
-    ToolExecutionBeginEvent, ToolExecutionEndEvent
+    ToolExecutionBeginEvent, ToolExecutionEndEvent,
+    McpToolCallBeginEvent, McpToolCallEndEvent
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -533,6 +534,34 @@ impl ChatWidget {
         } else {
             self.update_status_header(format!("{} failed", event.tool_name));
         }
+    }
+
+    // MCP関連イベント処理メソッド
+    pub(crate) fn on_mcp_tool_call_begin(&mut self, event: McpToolCallBeginEvent) {
+        let cell = HistoryCell::new_system_status(
+            SystemLabel::Mcp,
+            [format!("🔗 MCP Tool '{}' (ID: {}) started on server '{}'", 
+                event.invocation.tool, 
+                event.call_id, 
+                event.invocation.server)]
+        );
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        self.update_status_header(format!("MCP: {} on {}", event.invocation.tool, event.invocation.server));
+    }
+
+    pub(crate) fn on_mcp_tool_call_end(&mut self, event: McpToolCallEndEvent) {
+        let status = if event.is_success() { "✅ Success" } else { "❌ Failed" };
+        let duration_ms = event.duration.as_millis();
+        let cell = HistoryCell::new_system_status(
+            if event.is_success() { SystemLabel::Info } else { SystemLabel::Error },
+            [format!("MCP Tool '{}' (ID: {}) finished in {}ms. Status: {}", 
+                event.invocation.tool, 
+                event.call_id, 
+                duration_ms, 
+                status)]
+        );
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        self.update_status_header(format!("MCP: {} - {}", event.invocation.tool, status));
     }
 }
 
