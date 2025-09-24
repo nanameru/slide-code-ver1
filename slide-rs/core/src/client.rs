@@ -21,6 +21,7 @@ pub enum ResponseEvent {
     OutputTextDelta(String),
     ReasoningSummaryDelta(String),
     ReasoningContentDelta(String),
+    ReasoningSummaryPartAdded,
     WebSearchCallBegin {
         call_id: String,
     },

@@ -575,6 +575,9 @@ impl Codex {
                                         ResponseEvent::WebSearchCallBegin { call_id: _ } => {
                                             // Web検索開始イベント（現在は未対応）
                                         }
+                                        ResponseEvent::ReasoningSummaryPartAdded => {
+                                            // 推論サマリー区切り処理（現在は未対応）
+                                        }
                                         ResponseEvent::RateLimits(_snapshot) => {
                                             // レート制限情報の処理（現在は未対応）
                                         }
@@ -749,6 +752,9 @@ impl Codex {
                                         }
                                         ResponseEvent::WebSearchCallBegin { call_id: _ } => {
                                             // Web検索開始イベント（現在は未対応）
+                                        }
+                                        ResponseEvent::ReasoningSummaryPartAdded => {
+                                            // 推論サマリー区切り処理（現在は未対応）
                                         }
                                         ResponseEvent::RateLimits(_snapshot) => {
                                             // レート制限情報の処理（現在は未対応）

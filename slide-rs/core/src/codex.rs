@@ -1436,9 +1436,26 @@ async fn try_run_turn(
                 .await?;
                 output.push(ProcessedResponseItem { item, response });
             }
-            ClientResponseEvent::CompletedWithDetails { response_id: _, token_usage: _ } => {
-                // 詳細な完了情報付きの処理
-                // 現在は基本的なCompleted処理と同じ
+            ClientResponseEvent::CompletedWithDetails { response_id: _, token_usage } => {
+                // 詳細な完了情報付きの処理（codex-1レベル）
+                
+                // トークン使用量情報の更新と送信
+                if let Some(token_usage) = &token_usage {
+                    let token_event = Event {
+                        id: sub_id.to_string(),
+                        msg: EventMsg::TokenCount(token_usage.clone()),
+                    };
+                    sess.send_event(token_event).await;
+                }
+                
+                // 差分情報の送信（turn_diff_trackerから取得）
+                // 注意: turn_diff_trackerの実装が必要な場合は後で追加
+                
+                // 処理されたアイテムがある場合は返す
+                if !output.is_empty() {
+                    return Ok(output);
+                }
+                
                 break;
             }
             ClientResponseEvent::OutputTextDelta(delta) => {
@@ -1451,30 +1468,43 @@ async fn try_run_turn(
                 sess.send_event(event).await;
             }
             ClientResponseEvent::ReasoningSummaryDelta(delta) => {
-                // 推論サマリーのデルタ処理
+                // 推論サマリーのデルタ処理（codex-1レベル）
                 let event = Event {
                     id: sub_id.to_string(),
-                    msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
+                    msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }),
                 };
                 sess.send_event(event).await;
             }
             ClientResponseEvent::ReasoningContentDelta(delta) => {
-                // 推論コンテンツのデルタ処理
+                // 推論コンテンツのデルタ処理（codex-1レベル）
                 let event = Event {
                     id: sub_id.to_string(),
-                    msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
+                    msg: EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent { delta }),
+                };
+                sess.send_event(event).await;
+            }
+            ClientResponseEvent::ReasoningSummaryPartAdded => {
+                // 推論サマリー区切り処理
+                let event = Event {
+                    id: sub_id.to_string(),
+                    msg: EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {}),
                 };
                 sess.send_event(event).await;
             }
             ClientResponseEvent::WebSearchCallBegin { call_id } => {
-                // Web検索開始イベント
-                debug!("Web search call began: {}", call_id);
-                // 必要に応じて専用イベントを送信
+                // Web検索開始イベント（codex-1レベル）
+                let event = Event {
+                    id: sub_id.to_string(),
+                    msg: EventMsg::WebSearchBegin(WebSearchBeginEvent { call_id }),
+                };
+                sess.send_event(event).await;
             }
-            ClientResponseEvent::RateLimits(_snapshot) => {
-                // レート制限情報の処理
-                debug!("Rate limit information received");
-                // 必要に応じてレート制限イベントを送信
+            ClientResponseEvent::RateLimits(snapshot) => {
+                // レート制限情報の処理（codex-1レベル）
+                debug!("Rate limit information received: {:?}", snapshot);
+                
+                // 将来的にはsess.update_rate_limits(snapshot)のような処理を追加
+                // 現在は基本的なログ出力のみ
             }
         }
     }
