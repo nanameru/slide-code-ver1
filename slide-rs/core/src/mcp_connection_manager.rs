@@ -155,18 +155,15 @@ impl McpConnectionManager {
                         // Initialize
                         let params = mcp_types::InitializeRequestParams {
                             capabilities: mcp_types::ClientCapabilities {
-                                experimental: None,
+                                experimental: std::collections::HashMap::new(),
                                 roots: None,
-                                sampling: None,
-                                elicitation: Some(serde_json::json!({})),
+                                sampling: serde_json::Map::new(),
                             },
                             client_info: mcp_types::Implementation {
                                 name: "slide-mcp-client".to_string(),
                                 version: env!("CARGO_PKG_VERSION").to_string(),
-                                title: Some("Slide".to_string()),
-                                user_agent: None,
                             },
-                            protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_string(),
+                            protocol_version: "2024-11-05".to_string(),
                         };
                         let initialize_notification_params = None;
                         match client

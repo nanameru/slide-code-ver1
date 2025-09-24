@@ -7,6 +7,8 @@ pub mod codex2;
 pub mod config_types;
 pub mod conversation_history;
 pub mod exec_env;
+pub mod mcp_connection_manager;
+pub mod mcp_tool_call;
 pub mod exec_sandboxed;
 pub mod is_safe_command;
 pub mod openai_tools;

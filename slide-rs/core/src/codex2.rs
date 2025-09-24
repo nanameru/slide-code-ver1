@@ -14,7 +14,44 @@ use crate::openai_tools::{render_tools_instructions, ToolsConfig, ToolsConfigPar
 use crate::protocol::{ReasoningEffort, ReasoningSummary};
 use protocol::protocol::InputItem;
 use crate::tool_executor::{ToolExecutor, ToolCall};
+use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mcp_tool_call::handle_mcp_tool_call;
 use slide_chatgpt::client::{ChatGptClient, SlideRequest};
+use regex;
+use uuid;
+
+// MCP関数呼び出しの構造体
+#[derive(Debug, Clone)]
+struct McpFunctionCall {
+    call_id: String,
+    server: String,
+    tool_name: String,
+    arguments: String,
+}
+
+// MCP関数呼び出しを検出する関数
+fn extract_mcp_function_call(text: &str) -> Option<McpFunctionCall> {
+    // 簡易的な正規表現でMCP関数呼び出しを検出
+    // 実際の実装では、より堅牢なパーサーを使用することを推奨
+    let re = regex::Regex::new(r#"<function_calls>\s*<invoke\s+name="([^"]+)"[^>]*>\s*<parameter\s+name="([^"]+)">([^<]*)</parameter>\s*</invoke>\s*</function_calls>"#).ok()?;
+    
+    if let Some(captures) = re.captures(text) {
+        let full_name = captures.get(1)?.as_str();
+        let arguments = captures.get(3)?.as_str();
+        
+        // MCP tool nameの形式: "server/tool" を解析
+        if let Some((server, tool_name)) = full_name.split_once('/') {
+            return Some(McpFunctionCall {
+                call_id: format!("call_{}", uuid::Uuid::new_v4()),
+                server: server.to_string(),
+                tool_name: tool_name.to_string(),
+                arguments: arguments.to_string(),
+            });
+        }
+    }
+    
+    None
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReviewDecision {
@@ -174,6 +211,9 @@ impl Codex {
             } else {
                 Arc::new(OpenAiAdapter::new(api_key.clone()))
             };
+            
+            // Initialize MCP Connection Manager
+            let mcp_manager = McpConnectionManager::default();
             // Handle to the currently running shell process (for interrupt)
             let running_child: Arc<tokio::sync::Mutex<Option<(u64, tokio::process::Child, Instant)>>> =
                 Arc::new(tokio::sync::Mutex::new(None));
@@ -337,23 +377,52 @@ impl Codex {
                                         }
                                         ResponseEvent::Completed => {
                                             // AIレスポンス完了時にツール実行を処理
-                                            match tool_executor.extract_tool_calls(&assembled_resp)
-                                            {
-                                                Ok(tool_calls) => {
-                                                    if tool_calls.is_empty() {
-                                                        if !assembled_resp.is_empty() {
-                                                            convo.push((
-                                                                "assistant".to_string(),
-                                                                assembled_resp.clone(),
-                                                            ));
-                                                            if convo.len() > MAX_HISTORY_MESSAGES {
-                                                                let drop = convo.len()
-                                                                    - MAX_HISTORY_MESSAGES;
-                                                                convo.drain(0..drop);
+                                            // まず、MCPツール呼び出しをチェック
+                                            if let Some(mcp_call) = extract_mcp_function_call(&assembled_resp) {
+                                                // MCP関数呼び出しを処理
+                                                let mcp_result = handle_mcp_tool_call(
+                                                    &mcp_manager,
+                                                    "user_input",
+                                                    mcp_call.call_id.clone(),
+                                                    mcp_call.server,
+                                                    mcp_call.tool_name,
+                                                    mcp_call.arguments,
+                                                    None, // timeout
+                                                ).await;
+                                                
+                                                // MCP結果をconversationに追加
+                                                match mcp_result {
+                                                    crate::conversation_history::ResponseInputItem::McpToolCallOutput { call_id: _, result } => {
+                                                        let result_text = match result {
+                                                            Ok(call_result) => format!("MCP Tool Result: {}", serde_json::to_string_pretty(&call_result).unwrap_or_else(|_| "Success".to_string())),
+                                                            Err(e) => format!("MCP Tool Error: {}", e),
+                                                        };
+                                                        convo.push(("assistant".to_string(), result_text));
+                                                    }
+                                                    _ => {
+                                                        // 他のResponseInputItemタイプの場合
+                                                        convo.push(("assistant".to_string(), "MCP tool executed".to_string()));
+                                                    }
+                                                }
+                                            } else {
+                                                // 通常のツール実行処理
+                                                match tool_executor.extract_tool_calls(&assembled_resp)
+                                                {
+                                                    Ok(tool_calls) => {
+                                                        if tool_calls.is_empty() {
+                                                            if !assembled_resp.is_empty() {
+                                                                convo.push((
+                                                                    "assistant".to_string(),
+                                                                    assembled_resp.clone(),
+                                                                ));
+                                                                if convo.len() > MAX_HISTORY_MESSAGES {
+                                                                    let drop = convo.len()
+                                                                        - MAX_HISTORY_MESSAGES;
+                                                                    convo.drain(0..drop);
+                                                                }
                                                             }
-                                                        }
-                                                    } else {
-                                                        let mut appended = String::new();
+                                                        } else {
+                                                            let mut appended = String::new();
 
                                                         for tool_call in tool_calls {
                                                             let id = next_tool_id; next_tool_id += 1;
@@ -533,6 +602,17 @@ impl Codex {
                                                         }
                                                     }
                                                 }
+                                                Err(e) => {
+                                                    let _ = tx_event.send(Event::Error { message: format!("Tool parsing failed: {}", e) }).await;
+                                                    if !assembled_resp.is_empty() {
+                                                        convo.push(("assistant".to_string(), assembled_resp.clone()));
+                                                        if convo.len() > MAX_HISTORY_MESSAGES {
+                                                            let drop = convo.len() - MAX_HISTORY_MESSAGES;
+                                                            convo.drain(0..drop);
+                                                        }
+                                                    }
+                                                }
+                                            }
                                             }
                                             let _ = tx_event.send(Event::TaskComplete).await;
                                             break;
