@@ -8,6 +8,8 @@ use serde_json::Value;
 use std::path::PathBuf;
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
+use std::time::Instant;
+use protocol::models::{ResponseInputItem, FunctionCallOutputPayload};
 
 /// ツール実行を管理する統合実行エンジン
 pub struct ToolExecutor {
@@ -66,6 +68,86 @@ impl ToolExecutor {
     pub async fn execute_function_call(&mut self, name: &str, arguments: &str) -> Result<String> {
         let call = self.parse_function_call(name, arguments)?;
         self.execute_tool_call(call).await
+    }
+
+    /// OpenAI Function Calling形式のツール実行（ResponseInputItem返却版）
+    pub async fn execute_function_call_structured(
+        &mut self,
+        name: &str,
+        arguments: &str,
+        call_id: String,
+    ) -> Result<ResponseInputItem> {
+        let start = Instant::now();
+        
+        match self.execute_function_call(name, arguments).await {
+            Ok(result) => {
+                let duration_ms = start.elapsed().as_millis() as u64;
+                Ok(ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content: result,
+                        success: Some(true),
+                    },
+                })
+            }
+            Err(e) => {
+                let duration_ms = start.elapsed().as_millis() as u64;
+                Ok(ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content: format!("Error: {}", e),
+                        success: Some(false),
+                    },
+                })
+            }
+        }
+    }
+
+    /// ツール呼び出しを構造化された形式で実行（リトライ機能付き）
+    pub async fn execute_tool_call_structured(
+        &mut self,
+        call: ToolCall,
+        call_id: String,
+    ) -> Result<ResponseInputItem> {
+        let start = Instant::now();
+        let max_retries = 3;
+        let mut retries = 0;
+        
+        loop {
+            match self.execute_tool_call(call.clone()).await {
+                Ok(result) => {
+                    let duration_ms = start.elapsed().as_millis() as u64;
+                    return Ok(ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: result,
+                            success: Some(true),
+                        },
+                    });
+                }
+                Err(e) => {
+                    if retries < max_retries {
+                        retries += 1;
+                        let delay = Duration::from_millis(100 * (1 << retries)); // 指数バックオフ
+                        tracing::warn!(
+                            "Tool execution failed (attempt {}/{}): {}. Retrying in {:?}...",
+                            retries, max_retries + 1, e, delay
+                        );
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    } else {
+                        let duration_ms = start.elapsed().as_millis() as u64;
+                        return Ok(ResponseInputItem::FunctionCallOutput {
+                            call_id,
+                            output: FunctionCallOutputPayload {
+                                content: format!("Error after {} retries: {}", max_retries, e),
+                                success: Some(false),
+                            },
+                        });
+                    }
+                }
+            }
+        }
     }
 
     /// レスポンスからツール呼び出しを抽出

@@ -1,6 +1,11 @@
 use slide_core::protocol::ReasoningEffort;
 use slide_core::protocol::{CoreAskForApproval as AskForApproval, CoreSandboxPolicy as SandboxPolicy};
 use slide_core::codex::{Event, Op, ReviewDecision};
+// 連続実行関連イベントのインポート
+use slide_core::protocol::{
+    ContinuousExecutionStartEvent, ContinuousExecutionStepEvent, ContinuousExecutionEndEvent,
+    ToolExecutionBeginEvent, ToolExecutionEndEvent
+};
 
 use crate::history_cell::HistoryCellTrait;
 
@@ -74,4 +79,11 @@ pub(crate) enum AppEvent {
     StartFileSearch {
         query: String,
     },
+    
+    // 連続実行関連イベント
+    ContinuousExecutionStart(ContinuousExecutionStartEvent),
+    ContinuousExecutionStep(ContinuousExecutionStepEvent),
+    ContinuousExecutionEnd(ContinuousExecutionEndEvent),
+    ToolExecutionBegin(ToolExecutionBeginEvent),
+    ToolExecutionEnd(ToolExecutionEndEvent),
 }

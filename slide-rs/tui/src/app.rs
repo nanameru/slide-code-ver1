@@ -1117,6 +1117,23 @@ fn handle_app_event(tui: &mut Tui, app: &mut App, ev: AppEvent)
         AppEvent::DiffResult(_) => {
             // Handle diff result if needed
         }
+        
+        // 連続実行関連イベントの処理
+        AppEvent::ContinuousExecutionStart(event) => {
+            app.chat_widget.on_continuous_execution_start(event);
+        }
+        AppEvent::ContinuousExecutionStep(event) => {
+            app.chat_widget.on_continuous_execution_step(event);
+        }
+        AppEvent::ContinuousExecutionEnd(event) => {
+            app.chat_widget.on_continuous_execution_end(event);
+        }
+        AppEvent::ToolExecutionBegin(event) => {
+            app.chat_widget.on_tool_execution_begin(event);
+        }
+        AppEvent::ToolExecutionEnd(event) => {
+            app.chat_widget.on_tool_execution_end(event);
+        }
     }
 }
 

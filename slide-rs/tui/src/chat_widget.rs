@@ -18,6 +18,11 @@ use ratatui::widgets::WidgetRef;
 use ratatui::buffer::Buffer;
 use slide_core::protocol::{InputItem, Op, TokenUsage};
 use slide_core::protocol::{CoreAskForApproval as AskForApproval, CoreSandboxPolicy as SandboxPolicy};
+// 連続実行関連イベントのインポート
+use slide_core::protocol::{
+    ContinuousExecutionStartEvent, ContinuousExecutionStepEvent, ContinuousExecutionEndEvent,
+    ToolExecutionBeginEvent, ToolExecutionEndEvent
+};
 use tokio::sync::mpsc::UnboundedSender;
 
 /// Common initialization parameters shared by all `ChatWidget` constructors.
@@ -475,6 +480,58 @@ impl ChatWidget {
         if !text.trim().is_empty() {
             self.submit_message_with_images(text);
             self.request_redraw();
+        }
+    }
+
+    // 連続実行関連のイベント処理メソッド
+    pub(crate) fn on_continuous_execution_start(&mut self, event: ContinuousExecutionStartEvent) {
+        let cell = HistoryCell::new_system_status(
+            SystemLabel::Info,
+            [format!("🚀 Starting continuous execution: {}", event.initial_input)]
+        );
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        self.update_status_header("Continuous execution started".to_string());
+    }
+
+    pub(crate) fn on_continuous_execution_step(&mut self, event: ContinuousExecutionStepEvent) {
+        let cell = HistoryCell::new_system_status(
+            SystemLabel::Info,
+            [format!("⚡ Step {}: {} - {}", event.step_number, event.tool_name, event.tool_input)]
+        );
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        self.update_status_header(format!("Executing step {}: {}", event.step_number, event.tool_name));
+    }
+
+    pub(crate) fn on_continuous_execution_end(&mut self, event: ContinuousExecutionEndEvent) {
+        let cell = HistoryCell::new_system_status(
+            SystemLabel::Info,
+            [format!("✅ Continuous execution completed in {} steps", event.total_steps)]
+        );
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        self.update_status_header("Continuous execution completed".to_string());
+    }
+
+    pub(crate) fn on_tool_execution_begin(&mut self, event: ToolExecutionBeginEvent) {
+        let cell = HistoryCell::new_system_status(
+            SystemLabel::Info,
+            [format!("🔧 Executing tool: {} ({})", event.tool_name, event.call_id)]
+        );
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        self.update_status_header(format!("Executing {}", event.tool_name));
+    }
+
+    pub(crate) fn on_tool_execution_end(&mut self, event: ToolExecutionEndEvent) {
+        let status_icon = if event.success { "✅" } else { "❌" };
+        let cell = HistoryCell::new_system_status(
+            SystemLabel::Info,
+            [format!("{} Tool {} completed in {}ms", status_icon, event.tool_name, event.duration_ms)]
+        );
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        
+        if event.success {
+            self.update_status_header(format!("{} completed successfully", event.tool_name));
+        } else {
+            self.update_status_header(format!("{} failed", event.tool_name));
         }
     }
 }

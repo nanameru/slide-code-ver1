@@ -90,6 +90,13 @@ use crate::protocol::Op;
 use crate::protocol::PatchApplyBeginEvent;
 use crate::protocol::PatchApplyEndEvent;
 use crate::protocol::ReviewDecision;
+// 連続実行関連のインポート
+use crate::protocol::ContinuousExecutionStartEvent;
+use crate::protocol::ContinuousExecutionStepEvent;
+use crate::protocol::ContinuousExecutionEndEvent;
+use crate::protocol::ToolExecutionBeginEvent;
+use crate::protocol::ToolExecutionEndEvent;
+use crate::protocol::ProcessedResponseItem;
 pub use crate::protocol::{Op, ReviewDecision as PublicReviewDecision};
 pub use crate::protocol::ReviewDecision as PublicReviewDecision;
 use crate::protocol::SandboxPolicy;
@@ -108,6 +115,7 @@ use crate::shell;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
+use std::time::Duration;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::custom_prompts::CustomPrompt;
@@ -1006,6 +1014,16 @@ async fn run_task(
         return;
     }
 
+    // 連続実行開始イベントを送信
+    let continuous_start_event = Event {
+        id: sub_id.clone(),
+        msg: EventMsg::ContinuousExecutionStart(ContinuousExecutionStartEvent {
+            session_id: sub_id.clone(),
+            initial_input: format!("{:?}", input),
+        }),
+    };
+    sess.tx_event.send(continuous_start_event).await.ok();
+
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
     sess.record_conversation_items(&[initial_input_for_turn.clone().into()])
         .await;
@@ -1014,8 +1032,10 @@ async fn run_task(
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let mut turn_diff_tracker = TurnDiffTracker::new();
+    let mut step_number = 0u32;
 
     loop {
+        step_number += 1;
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
@@ -1061,6 +1081,7 @@ async fn run_task(
                 let mut items_to_record_in_conversation_history = Vec::<ResponseItem>::new();
                 let mut responses = Vec::<ResponseInputItem>::new();
 
+                let mut has_tool_calls = false;
                 for processed_response_item in turn_output {
                     let ProcessedResponseItem { item, response } = processed_response_item;
                     match (&item, &response) {
@@ -1068,8 +1089,26 @@ async fn run_task(
                             // If the model returned a message, we need to record it.
                             items_to_record_in_conversation_history.push(item);
                         }
+                        (ResponseItem::FunctionCall { name, arguments, call_id, .. }, Some(_)) => {
+                            // ツール実行が検出された場合
+                            has_tool_calls = true;
+                            
+                            // ステップイベントを送信
+                            let step_event = Event {
+                                id: sub_id.clone(),
+                                msg: EventMsg::ContinuousExecutionStep(ContinuousExecutionStepEvent {
+                                    step_number,
+                                    tool_name: name.clone(),
+                                    tool_input: arguments.clone(),
+                                }),
+                            };
+                            sess.tx_event.send(step_event).await.ok();
+                            
+                            items_to_record_in_conversation_history.push(item);
+                        }
                         _ => {
-                            warn!("Unexpected response item: {item:?} with response: {response:?}");
+                            // その他のアイテムも記録
+                            items_to_record_in_conversation_history.push(item);
                         }
                     };
 
@@ -1085,16 +1124,31 @@ async fn run_task(
                 }
 
                 if responses.is_empty() {
-                    debug!("Turn completed");
+                    debug!("Turn completed - no more tool calls");
                     last_agent_message = get_last_assistant_message_from_turn(
                         &items_to_record_in_conversation_history,
                     );
+                    
+                    // 連続実行終了イベントを送信
+                    let continuous_end_event = Event {
+                        id: sub_id.clone(),
+                        msg: EventMsg::ContinuousExecutionEnd(ContinuousExecutionEndEvent {
+                            total_steps: step_number,
+                            final_result: last_agent_message.clone().unwrap_or_default(),
+                        }),
+                    };
+                    sess.tx_event.send(continuous_end_event).await.ok();
+                    
                     sess.maybe_notify(UserNotification::AgentTurnComplete {
                         turn_id: sub_id.clone(),
                         input_messages: turn_input_messages,
                         last_assistant_message: last_agent_message.clone(),
                     });
                     break;
+                } else {
+                    debug!("Continuing execution - {} tool responses to process", responses.len());
+                    // 次のターンの入力として responses を設定
+                    // これにより連続実行が継続される
                 }
             }
             Err(e) => {

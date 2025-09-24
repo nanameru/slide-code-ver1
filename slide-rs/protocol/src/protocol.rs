@@ -24,6 +24,7 @@ use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::message_history::HistoryEntry;
 use crate::models::ResponseItem;
+use crate::models::ResponseInputItem;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 
@@ -288,6 +289,12 @@ pub enum EventMsg {
     TurnAborted(TurnAbortedEvent),
     ShutdownComplete,
     ConversationHistory(ConversationHistoryResponseEvent),
+    // 連続実行関連イベント
+    ContinuousExecutionStart(ContinuousExecutionStartEvent),
+    ContinuousExecutionStep(ContinuousExecutionStepEvent),
+    ContinuousExecutionEnd(ContinuousExecutionEndEvent),
+    ToolExecutionBegin(ToolExecutionBeginEvent),
+    ToolExecutionEnd(ToolExecutionEndEvent),
 }
 
 // Payloads
@@ -575,6 +582,50 @@ pub struct Chunk {
 pub struct TurnAbortedEvent {
     pub reason: TurnAbortReason,
 }
+
+// 連続実行関連イベント構造体
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ContinuousExecutionStartEvent {
+    pub session_id: String,
+    pub initial_input: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ContinuousExecutionStepEvent {
+    pub step_number: u32,
+    pub tool_name: String,
+    pub tool_input: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ContinuousExecutionEndEvent {
+    pub total_steps: u32,
+    pub final_result: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ToolExecutionBeginEvent {
+    pub call_id: String,
+    pub tool_name: String,
+    pub arguments: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ToolExecutionEndEvent {
+    pub call_id: String,
+    pub tool_name: String,
+    pub result: String,
+    pub success: bool,
+    pub duration_ms: u64,
+}
+
+// 連続実行のためのレスポンス処理構造体
+#[derive(Debug, Clone)]
+pub struct ProcessedResponseItem {
+    pub item: ResponseItem,
+    pub response: Option<ResponseInputItem>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnAbortReason {
