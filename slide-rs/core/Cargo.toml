@@ -29,3 +29,4 @@ shlex = "1.3"
 maplit = "1.0"
 protocol = { path = "../protocol" }
 slide-mcp-client = { path = "../mcp-client" }
+regex = "1.0"

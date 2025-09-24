@@ -96,10 +96,12 @@ use crate::protocol::ContinuousExecutionStepEvent;
 use crate::protocol::ContinuousExecutionEndEvent;
 use crate::protocol::ToolExecutionBeginEvent;
 use crate::protocol::ToolExecutionEndEvent;
+use crate::tool_executor::ToolExecutor;
+use crate::approval_manager::AskForApproval;
+use crate::seatbelt::SandboxPolicy;
+use uuid;
 use crate::protocol::ProcessedResponseItem;
 pub use crate::protocol::{Op, ReviewDecision as PublicReviewDecision};
-pub use crate::protocol::ReviewDecision as PublicReviewDecision;
-use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
@@ -1089,17 +1091,25 @@ async fn run_task(
                             // If the model returned a message, we need to record it.
                             items_to_record_in_conversation_history.push(item);
                         }
-                        (ResponseItem::FunctionCall { name, arguments, call_id, .. }, Some(_)) => {
-                            // ツール実行が検出された場合
+                        (ResponseItem::Message { content, .. }, Some(_)) => {
+                            // Function call detected in message content
                             has_tool_calls = true;
+                            
+                            // Extract function call details for step event
+                            let (tool_name, tool_input) = content.iter()
+                                .find_map(|c| match c {
+                                    ContentItem::FunctionCall { name, arguments } => Some((name.clone(), arguments.clone())),
+                                    _ => None,
+                                })
+                                .unwrap_or_default();
                             
                             // ステップイベントを送信
                             let step_event = Event {
                                 id: sub_id.clone(),
                                 msg: EventMsg::ContinuousExecutionStep(ContinuousExecutionStepEvent {
                                     step_number,
-                                    tool_name: name.clone(),
-                                    tool_input: arguments.clone(),
+                                    tool_name,
+                                    tool_input,
                                 }),
                             };
                             sess.tx_event.send(step_event).await.ok();
@@ -1357,12 +1367,48 @@ async fn try_run_turn(
                 sess.send_event(event).await;
             }
             ClientResponseEvent::Completed => {
-                let event = Event {
-                    id: sub_id.to_string(),
-                    msg: EventMsg::AgentMessage(AgentMessageEvent { message: assembled.clone() }),
-                };
-                sess.send_event(event).await;
-                break;
+                // Process the assembled message to check for function calls
+                let mut processed_items = Vec::new();
+                
+                // Try to detect and parse function calls from the assembled text
+                if let Some(function_calls) = detect_function_calls_from_text(&assembled) {
+                    // Process each function call
+                    for (name, arguments) in function_calls {
+                        let function_call_item = ResponseItem::Message {
+                            role: "assistant".into(),
+                            content: vec![ContentItem::FunctionCall { name, arguments }],
+                        };
+                        
+                        let response = handle_response_item(
+                            sess,
+                            turn_context,
+                            turn_diff_tracker,
+                            sub_id,
+                            function_call_item.clone(),
+                        )
+                        .await?;
+                        
+                        processed_items.push(ProcessedResponseItem {
+                            item: function_call_item,
+                            response,
+                        });
+                    }
+                } else {
+                    // No function calls detected, treat as regular message
+                    let event = Event {
+                        id: sub_id.to_string(),
+                        msg: EventMsg::AgentMessage(AgentMessageEvent { message: assembled.clone() }),
+                    };
+                    sess.send_event(event).await;
+
+                    let item = ResponseItem::Message {
+                        role: "assistant".into(),
+                        content: vec![ContentItem::OutputText { text: assembled.clone() }],
+                    };
+                    processed_items.push(ProcessedResponseItem { item, response: None });
+                }
+                
+                return Ok(processed_items);
             }
             ClientResponseEvent::Error(message) => {
                 let event = Event { id: sub_id.to_string(), msg: EventMsg::Error(ErrorEvent { message }) };
@@ -1410,6 +1456,188 @@ async fn drain_to_completed(
     }
 
     Ok(())
+}
+
+/// Handle a response item from the model and potentially execute tools
+async fn handle_response_item(
+    sess: &Session,
+    turn_context: &TurnContext,
+    turn_diff_tracker: &mut TurnDiffTracker,
+    sub_id: &str,
+    item: ResponseItem,
+) -> CodexResult<Option<ResponseInputItem>> {
+    debug!(?item, "Processing response item");
+    
+    match item {
+        ResponseItem::Message { role, content } if role == "assistant" => {
+            // Check if the message contains function calls
+            for content_item in &content {
+                if let ContentItem::FunctionCall { name, arguments } = content_item {
+                    // Generate a unique call_id for this function call
+                    let call_id = format!("call_{}", uuid::Uuid::new_v4());
+                    return Ok(Some(
+                        handle_function_call(
+                            sess,
+                            turn_context,
+                            turn_diff_tracker,
+                            sub_id.to_string(),
+                            name.clone(),
+                            arguments.clone(),
+                            call_id,
+                        )
+                        .await?,
+                    ));
+                }
+            }
+            
+            // Send message event for regular assistant messages
+            let event = Event {
+                id: sub_id.to_string(),
+                msg: EventMsg::AgentMessage(AgentMessageEvent {
+                    message: content.iter()
+                        .filter_map(|c| match c {
+                            ContentItem::OutputText { text } => Some(text.clone()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join(""),
+                }),
+            };
+            sess.send_event(event).await;
+            Ok(None)
+        }
+        _ => {
+            // For other types of response items, just return None
+            Ok(None)
+        }
+    }
+}
+
+/// Handle a function call by executing the tool and returning the result
+async fn handle_function_call(
+    sess: &Session,
+    turn_context: &TurnContext,
+    _turn_diff_tracker: &mut TurnDiffTracker,
+    sub_id: String,
+    name: String,
+    arguments: String,
+    call_id: String,
+) -> CodexResult<ResponseInputItem> {
+    let start = std::time::Instant::now();
+    
+    // Send tool execution begin event
+    let begin_event = Event {
+        id: sub_id.clone(),
+        msg: EventMsg::ToolExecutionBegin(ToolExecutionBeginEvent {
+            call_id: call_id.clone(),
+            tool_name: name.clone(),
+            tool_input: arguments.clone(),
+        }),
+    };
+    sess.send_event(begin_event).await;
+    
+    // Create tool executor
+    let mut tool_executor = ToolExecutor::new(
+        AskForApproval::Never,
+        SandboxPolicy::Disabled,
+        turn_context.cwd.clone(),
+        turn_context.shell_environment_policy.clone(),
+    );
+    
+    // Execute the function call
+    let result = tool_executor.execute_function_call(&name, &arguments).await;
+    let duration_ms = start.elapsed().as_millis() as u64;
+    
+    // Send tool execution end event
+    let end_event = Event {
+        id: sub_id,
+        msg: EventMsg::ToolExecutionEnd(ToolExecutionEndEvent {
+            call_id: call_id.clone(),
+            success: result.is_ok(),
+            duration_ms,
+        }),
+    };
+    sess.send_event(end_event).await;
+    
+    // Return the result as ResponseInputItem
+    match result {
+        Ok(output) => Ok(ResponseInputItem::FunctionCallOutput {
+            call_id,
+            output: protocol::models::FunctionCallOutputPayload {
+                content: output,
+                success: Some(true),
+            },
+        }),
+        Err(e) => Ok(ResponseInputItem::FunctionCallOutput {
+            call_id,
+            output: protocol::models::FunctionCallOutputPayload {
+                content: format!("Error: {}", e),
+                success: Some(false),
+            },
+        }),
+    }
+}
+
+/// Detect function calls from assembled text
+/// This is a simple implementation that looks for JSON-like function call patterns
+fn detect_function_calls_from_text(text: &str) -> Option<Vec<(String, String)>> {
+    use regex::Regex;
+    
+    // Look for patterns like: function_name({"arg1": "value1", "arg2": "value2"})
+    // or more complex JSON structures
+    let re = Regex::new(r#"(\w+)\s*\(\s*(\{[^}]*\}|\{.*?\})\s*\)"#).ok()?;
+    let mut function_calls = Vec::new();
+    
+    for cap in re.captures_iter(text) {
+        if let (Some(name), Some(args)) = (cap.get(1), cap.get(2)) {
+            function_calls.push((name.as_str().to_string(), args.as_str().to_string()));
+        }
+    }
+    
+    // Also look for explicit tool call markers that some models use
+    if text.contains("<tool_call>") || text.contains("```json") {
+        if let Some(calls) = parse_structured_tool_calls(text) {
+            function_calls.extend(calls);
+        }
+    }
+    
+    if function_calls.is_empty() {
+        None
+    } else {
+        Some(function_calls)
+    }
+}
+
+/// Parse structured tool calls from text (e.g., markdown code blocks)
+fn parse_structured_tool_calls(text: &str) -> Option<Vec<(String, String)>> {
+    use regex::Regex;
+    
+    // Look for JSON code blocks that might contain tool calls
+    let re = Regex::new(r#"```json\s*\n(.*?)\n```"#).ok()?;
+    let mut function_calls = Vec::new();
+    
+    for cap in re.captures_iter(text) {
+        if let Some(json_text) = cap.get(1) {
+            // Try to parse as JSON and extract function call information
+            if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(json_text.as_str()) {
+                if let Some(obj) = json_value.as_object() {
+                    if let (Some(name), Some(args)) = (obj.get("function"), obj.get("arguments")) {
+                        if let (Some(name_str), Some(args_obj)) = (name.as_str(), args.as_object()) {
+                            if let Ok(args_json) = serde_json::to_string(args_obj) {
+                                function_calls.push((name_str.to_string(), args_json));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    if function_calls.is_empty() {
+        None
+    } else {
+        Some(function_calls)
+    }
 }
 
 fn get_last_assistant_message_from_turn(
