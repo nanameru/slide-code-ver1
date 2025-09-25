@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::{BottomPane, BottomPaneParams, InputResult};
-use crate::history_cell::{HistoryCell, HistoryCellTrait, SystemLabel, AgentMessageCell};
+use crate::history_cell::{HistoryCell, HistoryCellTrait, SystemLabel, AgentMessageCell, new_active_mcp_tool_call, new_completed_mcp_tool_call};
 use crate::user_approval_widget::ApprovalRequest;
 use crate::streaming::controller::{StreamController, AppEventHistorySink};
 use crate::agent::AgentHandle;
@@ -538,29 +538,22 @@ impl ChatWidget {
 
     // MCP関連イベント処理メソッド
     pub(crate) fn on_mcp_tool_call_begin(&mut self, event: McpToolCallBeginEvent) {
-        let cell = HistoryCell::new_system_status(
-            SystemLabel::Mcp,
-            [format!("🔗 MCP Tool '{}' (ID: {}) started on server '{}'", 
-                event.invocation.tool, 
-                event.call_id, 
-                event.invocation.server)]
-        );
+        let cell = new_active_mcp_tool_call(event.invocation.clone());
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
         self.update_status_header(format!("MCP: {} on {}", event.invocation.tool, event.invocation.server));
     }
 
     pub(crate) fn on_mcp_tool_call_end(&mut self, event: McpToolCallEndEvent) {
-        let status = if event.is_success() { "✅ Success" } else { "❌ Failed" };
-        let duration_ms = event.duration.as_millis();
-        let cell = HistoryCell::new_system_status(
-            if event.is_success() { SystemLabel::Info } else { SystemLabel::Error },
-            [format!("MCP Tool '{}' (ID: {}) finished in {}ms. Status: {}", 
-                event.invocation.tool, 
-                event.call_id, 
-                duration_ms, 
-                status)]
+        let success = event.is_success();
+        let cell = new_completed_mcp_tool_call(
+            80, // num_cols - reasonable default for terminal width
+            event.invocation.clone(),
+            event.duration,
+            success,
+            event.result.clone(),
         );
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        let status = if success { "Success" } else { "Failed" };
         self.update_status_header(format!("MCP: {} - {}", event.invocation.tool, status));
     }
 }

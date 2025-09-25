@@ -1,11 +1,15 @@
 use ratatui::style::Stylize;
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Style, Modifier};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::text::Text;
 use std::any::Any;
+use std::time::Duration;
 
 use crate::widgets::banner::banner_lines;
+use slide_core::protocol::McpInvocation;
+use mcp_types;
+use serde_json;
 
 /// Unified role heading helpers for transcript/history.
 pub(crate) fn user_heading_line() -> Line<'static> {
@@ -133,6 +137,9 @@ pub enum HistoryCell {
         label: SystemLabel,
         lines: Vec<String>,
     },
+    Plain {
+        lines: Vec<Line<'static>>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -174,6 +181,10 @@ impl HistoryCell {
         }
     }
 
+    pub fn new_plain(lines: Vec<Line<'static>>) -> Self {
+        Self::Plain { lines }
+    }
+
     pub fn append_assistant_delta(&mut self, delta: &str) {
         if let Self::AssistantMessage { content } = self {
             content.push_str(delta);
@@ -202,6 +213,7 @@ impl HistoryCell {
                 build_role_block(RoleLabel::Assistant, content)
             }
             HistoryCell::SystemStatus { label, lines } => build_status_block(*label, lines),
+            HistoryCell::Plain { lines } => lines.clone(),
         }
     }
 
@@ -240,6 +252,9 @@ impl HistoryCell {
                 out.push(heading.content.to_string());
                 out.extend(lines.iter().cloned());
                 out
+            }
+            HistoryCell::Plain { lines } => {
+                lines.iter().map(|line| line_to_plain(line.clone())).collect()
             }
         }
     }
@@ -538,4 +553,88 @@ fn should_filter_http_server_error(line: &str) -> bool {
     }
     
     false
+}
+
+/// Formats an MCP invocation as a colored line: server.tool(args)
+fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
+    let args_str = invocation
+        .arguments
+        .as_ref()
+        .map(|v| {
+            // Use compact form to keep things short but readable.
+            serde_json::to_string(v).unwrap_or_else(|_| v.to_string())
+        })
+        .unwrap_or_default();
+
+    let invocation_spans = vec![
+        invocation.server.clone().cyan(),
+        ".".into(),
+        invocation.tool.cyan(),
+        "(".into(),
+        args_str.dim(),
+        ")".into(),
+    ];
+    invocation_spans.into()
+}
+
+/// Formats a duration as a human-readable string (e.g., "1.2s")
+fn format_duration(duration: Duration) -> String {
+    let total_secs = duration.as_secs_f64();
+    if total_secs < 1.0 {
+        format!("{:.0}ms", duration.as_millis())
+    } else {
+        format!("{:.1}s", total_secs)
+    }
+}
+
+/// Creates a new active MCP tool call display cell
+pub(crate) fn new_active_mcp_tool_call(invocation: McpInvocation) -> HistoryCell {
+    let title_line = Line::from(vec!["tool".magenta(), " running...".dim()]);
+    let lines: Vec<Line> = vec![title_line, format_mcp_invocation(invocation)];
+
+    HistoryCell::new_plain(lines)
+}
+
+/// Creates a new completed MCP tool call display cell
+pub(crate) fn new_completed_mcp_tool_call(
+    _num_cols: usize,
+    invocation: McpInvocation,
+    duration: Duration,
+    success: bool,
+    result: Result<mcp_types::CallToolResult, String>,
+) -> HistoryCell {
+    let duration_str = format_duration(duration);
+    let status_str = if success { "success" } else { "failed" };
+    let title_line = Line::from(vec![
+        "tool".magenta(),
+        " ".into(),
+        if success {
+            status_str.green()
+        } else {
+            status_str.red()
+        },
+        format!(", duration: {duration_str}").dim(),
+    ]);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(title_line);
+    lines.push(format_mcp_invocation(invocation));
+
+    match result {
+        Ok(tool_result) => {
+            // For now, just show a simple success message
+            // TODO: Parse and display the actual content structure
+            let result_text = format!("Result: {}", serde_json::to_string_pretty(&tool_result).unwrap_or_else(|_| "Success".to_string()));
+            lines.push(Line::from(""));
+            lines.push(Line::styled(
+                result_text,
+                Style::default().add_modifier(Modifier::DIM),
+            ));
+        }
+        Err(e) => {
+            lines.push(vec!["Error: ".red().bold(), e.into()].into());
+        }
+    };
+
+    HistoryCell::new_plain(lines)
 }

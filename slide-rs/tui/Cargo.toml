@@ -28,6 +28,8 @@ slide-file-search = { path = "../file-search" }
 arboard = "3"
 image = { version = "0.24", default-features = false, features = ["png", "jpeg"] }
 tempfile = "3"
+mcp-types = "0.1.0"
+serde_json = "1.0"
 
 [dev-dependencies]
 insta = "1.39"
