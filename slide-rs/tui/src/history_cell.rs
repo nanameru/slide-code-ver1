@@ -9,7 +9,7 @@ use std::time::Duration;
 use crate::widgets::banner::banner_lines;
 use crate::text_formatting::format_and_truncate_tool_result;
 use slide_core::protocol::McpInvocation;
-use mcp_types::CallToolResult;
+use mcp_types::{CallToolResult, CallToolResultContentItem, TextContent, EmbeddedResource};
 use serde_json;
 
 const TOOL_CALL_MAX_LINES: usize = 5;
@@ -628,19 +628,43 @@ pub(crate) fn new_completed_mcp_tool_call(
             if !content.is_empty() {
                 lines.push(Line::from(""));
 
-                // For now, display the content as JSON
-                // TODO: Parse ContentBlock types when mcp_types structure is confirmed
-                let content_text = serde_json::to_string_pretty(&content)
-                    .unwrap_or_else(|_| "Content display error".to_string());
-                let formatted_text = format_and_truncate_tool_result(
-                    &content_text,
-                    TOOL_CALL_MAX_LINES,
-                    80, // Default terminal width
-                );
-                lines.push(Line::styled(
-                    formatted_text,
-                    Style::default().add_modifier(Modifier::DIM),
-                ));
+                // Parse each CallToolResultContentItem type individually
+                for tool_call_result in content {
+                    let line_text = match tool_call_result {
+                        CallToolResultContentItem::TextContent(text) => {
+                            format_and_truncate_tool_result(
+                                &text.text,
+                                TOOL_CALL_MAX_LINES,
+                                80, // Default terminal width
+                            )
+                        }
+                        CallToolResultContentItem::ImageContent(_) => {
+                            "<image content>".to_string()
+                        }
+                        CallToolResultContentItem::EmbeddedResource(resource) => {
+                            // For EmbeddedResource, show the type and annotations if available
+                            let resource_info = if let Some(annotations) = &resource.annotations {
+                                if !annotations.audience.is_empty() {
+                                    let audience_strs: Vec<String> = annotations.audience
+                                        .iter()
+                                        .map(|role| format!("{:?}", role))
+                                        .collect();
+                                    format!("embedded resource ({})", audience_strs.join(", "))
+                                } else {
+                                    "embedded resource".to_string()
+                                }
+                            } else {
+                                "embedded resource".to_string()
+                            };
+                            resource_info
+                        }
+                    };
+
+                    lines.push(Line::styled(
+                        line_text,
+                        Style::default().add_modifier(Modifier::DIM),
+                    ));
+                }
             }
         }
         Err(e) => {
