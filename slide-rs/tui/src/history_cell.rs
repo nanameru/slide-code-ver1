@@ -7,9 +7,12 @@ use std::any::Any;
 use std::time::Duration;
 
 use crate::widgets::banner::banner_lines;
+use crate::text_formatting::format_and_truncate_tool_result;
 use slide_core::protocol::McpInvocation;
-use mcp_types;
+use mcp_types::CallToolResult;
 use serde_json;
+
+const TOOL_CALL_MAX_LINES: usize = 5;
 
 /// Unified role heading helpers for transcript/history.
 pub(crate) fn user_heading_line() -> Line<'static> {
@@ -621,15 +624,24 @@ pub(crate) fn new_completed_mcp_tool_call(
     lines.push(format_mcp_invocation(invocation));
 
     match result {
-        Ok(tool_result) => {
-            // For now, just show a simple success message
-            // TODO: Parse and display the actual content structure
-            let result_text = format!("Result: {}", serde_json::to_string_pretty(&tool_result).unwrap_or_else(|_| "Success".to_string()));
-            lines.push(Line::from(""));
-            lines.push(Line::styled(
-                result_text,
-                Style::default().add_modifier(Modifier::DIM),
-            ));
+        Ok(CallToolResult { content, .. }) => {
+            if !content.is_empty() {
+                lines.push(Line::from(""));
+
+                // For now, display the content as JSON
+                // TODO: Parse ContentBlock types when mcp_types structure is confirmed
+                let content_text = serde_json::to_string_pretty(&content)
+                    .unwrap_or_else(|_| "Content display error".to_string());
+                let formatted_text = format_and_truncate_tool_result(
+                    &content_text,
+                    TOOL_CALL_MAX_LINES,
+                    80, // Default terminal width
+                );
+                lines.push(Line::styled(
+                    formatted_text,
+                    Style::default().add_modifier(Modifier::DIM),
+                ));
+            }
         }
         Err(e) => {
             lines.push(vec!["Error: ".red().bold(), e.into()].into());

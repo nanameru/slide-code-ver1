@@ -20,6 +20,7 @@ pub mod preview;
 pub mod render;
 pub mod status_indicator_widget;
 pub mod streaming;
+pub mod text_formatting;
 pub mod tui;
 pub mod wrapping;
 pub mod user_approval_widget;
