@@ -1678,31 +1678,76 @@ async fn handle_function_call(
             .await)
         }
         None => {
-            // This is a regular tool call - handle it via ToolExecutor
-            let start = std::time::Instant::now();
-            
-            // Send tool execution begin event
-            let begin_event = Event {
-                id: sub_id.clone(),
-                msg: EventMsg::ToolExecutionBegin(ToolExecutionBeginEvent {
-                    call_id: call_id.clone(),
-                    tool_name: name.clone(),
-                    tool_input: arguments.clone(),
-                }),
-            };
-            sess.send_event(begin_event).await;
-            
-            // Create tool executor
-            let mut tool_executor = ToolExecutor::new(
-                AskForApproval::Never,
-                SandboxPolicy::Disabled,
-                turn_context.cwd.clone(),
-                turn_context.shell_environment_policy.clone(),
-            );
-            
-            // Execute the function call
-            let result = tool_executor.execute_function_call(&name, &arguments).await;
-            let duration_ms = start.elapsed().as_millis() as u64;
+            // Check for specialized tool implementations
+            match name.as_str() {
+                "container.exec" | "shell" => {
+                    let params = match crate::container_exec::parse_container_exec_arguments(
+                        arguments, turn_context, &call_id
+                    ) {
+                        Ok(params) => params,
+                        Err(output) => {
+                            return Ok(*output);
+                        }
+                    };
+                    Ok(crate::container_exec::handle_container_exec_with_params(
+                        params,
+                        sess,
+                        turn_context,
+                        _turn_diff_tracker,
+                        sub_id,
+                        call_id,
+                    )
+                    .await)
+                }
+                "unified_exec" => {
+                    let args = match serde_json::from_str::<crate::unified_exec::UnifiedExecArgs>(&arguments) {
+                        Ok(args) => args,
+                        Err(err) => {
+                            return Ok(ResponseInputItem::FunctionCallOutput {
+                                call_id,
+                                output: FunctionCallOutputPayload {
+                                    content: format!("failed to parse function arguments: {err}"),
+                                    success: Some(false),
+                                },
+                            });
+                        }
+                    };
+
+                    Ok(crate::unified_exec::handle_unified_exec_tool_call(
+                        sess,
+                        call_id,
+                        args.session_id,
+                        args.input,
+                        args.timeout_ms,
+                    )
+                    .await)
+                }
+                _ => {
+                    // This is a regular tool call - handle it via ToolExecutor
+                    let start = std::time::Instant::now();
+                    
+                    // Send tool execution begin event
+                    let begin_event = Event {
+                        id: sub_id.clone(),
+                        msg: EventMsg::ToolExecutionBegin(ToolExecutionBeginEvent {
+                            call_id: call_id.clone(),
+                            tool_name: name.clone(),
+                            tool_input: arguments.clone(),
+                        }),
+                    };
+                    sess.send_event(begin_event).await;
+                    
+                    // Create tool executor
+                    let mut tool_executor = ToolExecutor::new(
+                        AskForApproval::Never,
+                        SandboxPolicy::Disabled,
+                        turn_context.cwd.clone(),
+                        turn_context.shell_environment_policy.clone(),
+                    );
+                    
+                    // Execute the function call
+                    let result = tool_executor.execute_function_call(&name, &arguments).await;
+                    let duration_ms = start.elapsed().as_millis() as u64;
             
             // Send tool execution end event
             let end_event = Event {

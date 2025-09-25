@@ -22,5 +22,7 @@ pub mod protocol; // re-export protocol crate types under crate::protocol
 pub mod model_family;
 pub mod plan_tool;
 pub mod exec_command;
+pub mod container_exec;
+pub mod unified_exec;
 pub mod error;
 pub use codex2 as codex;
