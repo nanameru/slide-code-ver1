@@ -235,3 +235,67 @@ fn is_api_message(item: &ResponseItem) -> bool {
     }
 }
 
+// MEE-33: 既存のConversationHistoryを拡張
+impl ConversationHistory {
+    pub fn extend(&mut self, items: Vec<ResponseItem>) {
+        self.items.extend(items);
+    }
+    
+    pub fn push(&mut self, item: ResponseItem) {
+        self.items.push(item);
+    }
+}
+
+// MEE-33: 既存のResponseInputItemを拡張
+impl ResponseInputItem {
+    pub fn from_text(text: String) -> Self {
+        Self::Message {
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText { text }],
+        }
+    }
+}
+
+impl From<ResponseInputItem> for ResponseItem {
+    fn from(item: ResponseInputItem) -> Self {
+        match item {
+            ResponseInputItem::Message { role, content } => {
+                ResponseItem::Message { 
+                    id: Some(uuid::Uuid::new_v4().to_string()),
+                    role, 
+                    content 
+                }
+            }
+            ResponseInputItem::FunctionCallOutput { call_id, output } => {
+                ResponseItem::FunctionCallOutput { call_id, output }
+            }
+            ResponseInputItem::CustomToolCallOutput { call_id, output } => {
+                ResponseItem::CustomToolCallOutput { call_id, output }
+            }
+            ResponseInputItem::McpToolCallOutput { call_id, result } => {
+                // 簡略化: McpToolCallOutputをCustomToolCallOutputに変換
+                let output = match result {
+                    Ok(call_result) => serde_json::to_string(&call_result).unwrap_or_default(),
+                    Err(e) => format!("Error: {}", e),
+                };
+                ResponseItem::CustomToolCallOutput { call_id, output }
+            }
+        }
+    }
+}
+
+impl From<Vec<protocol::protocol::InputItem>> for ResponseInputItem {
+    fn from(input: Vec<protocol::protocol::InputItem>) -> Self {
+        // 簡略化: 最初のテキストアイテムのみ使用
+        let text = input
+            .into_iter()
+            .find_map(|item| match item {
+                protocol::protocol::InputItem::Text { text } => Some(text),
+                _ => None,
+            })
+            .unwrap_or_default();
+        
+        Self::from_text(text)
+    }
+}
+

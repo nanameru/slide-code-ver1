@@ -56,7 +56,7 @@ impl Prompt {
     }
 
     pub fn get_full_instructions(&self) -> String {
-        const BASE_INSTRUCTIONS: &str = "You are Claude, an AI assistant created by Anthropic.";
+        const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
         
         self.base_instructions_override
             .as_deref()
