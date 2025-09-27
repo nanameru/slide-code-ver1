@@ -176,7 +176,7 @@ async fn try_run_turn(
     })
 }
 
-// MEE-24: レスポンスアイテム処理関数
+// MEE-26: handle_response_item完全実装（codex-1レベル7種類対応）
 async fn handle_response_item(
     mcp_manager: &McpConnectionManager,
     tool_executor: &mut ToolExecutor,
@@ -184,9 +184,89 @@ async fn handle_response_item(
     sub_id: &str,
     item: ResponseItem,
 ) -> Option<ResponseInputItem> {
+    use tracing::{debug, info, error};
+    
+    debug!(?item, "Output item");
+    
     match item {
-        ResponseItem::Message { .. } => {
-            // メッセージイベントをUIに送信
+        // 1. FunctionCall処理 (MCP + 通常ツール)
+        ResponseItem::FunctionCall { name, arguments, call_id, .. } => {
+            info!("FunctionCall: {name}({arguments})");
+            Some(
+                handle_function_call(
+                    mcp_manager,
+                    tool_executor,
+                    tx_event,
+                    sub_id.to_string(),
+                    name,
+                    arguments,
+                    call_id,
+                ).await
+            )
+        }
+        
+        // 2. LocalShellCall処理 (シェル実行)
+        ResponseItem::LocalShellCall { id, call_id, status: _, action } => {
+            let crate::conversation_history::LocalShellAction::Exec(action) = action;
+            info!("LocalShellCall: {action:?}");
+            
+            let effective_call_id = match (call_id, id) {
+                (Some(call_id), _) => call_id,
+                (None, Some(id)) => id,
+                (None, None) => {
+                    error!("LocalShellCall without call_id or id");
+                    return Some(ResponseInputItem::FunctionCallOutput {
+                        call_id: "".to_string(),
+                        output: crate::conversation_history::FunctionCallOutputPayload {
+                            content: "LocalShellCall without call_id or id".to_string(),
+                            success: None,
+                        },
+                    });
+                }
+            };
+            
+            Some(
+                handle_local_shell_call(
+                    tool_executor,
+                    tx_event,
+                    sub_id.to_string(),
+                    action,
+                    effective_call_id,
+                ).await
+            )
+        }
+        
+        // 3. CustomToolCall処理 (カスタムツール)
+        ResponseItem::CustomToolCall { id: _, call_id, name, input, status: _ } => {
+            Some(
+                handle_custom_tool_call(
+                    tool_executor,
+                    tx_event,
+                    sub_id.to_string(),
+                    name,
+                    input,
+                    call_id,
+                ).await
+            )
+        }
+        
+        // 4. FunctionCallOutput処理 (予期しない出力)
+        ResponseItem::FunctionCallOutput { .. } => {
+            debug!("unexpected FunctionCallOutput from stream");
+            None
+        }
+        
+        // 5. CustomToolCallOutput処理 (予期しない出力)
+        ResponseItem::CustomToolCallOutput { .. } => {
+            debug!("unexpected CustomToolCallOutput from stream");
+            None
+        }
+        
+        // 6. UI系処理 (Message・Reasoning・WebSearchCall)
+        ResponseItem::Message { .. }
+        | ResponseItem::Reasoning { .. }
+        | ResponseItem::WebSearchCall { .. } => {
+            // map_response_item_to_event_messages呼び出し
             let events = map_response_item_to_event_messages(&item, false);
             for event_msg in events {
                 let event = Event::AgentMessage {
@@ -196,52 +276,271 @@ async fn handle_response_item(
             }
             None
         }
-        ResponseItem::FunctionCall { name, arguments, call_id, .. } => {
-            // 関数呼び出し処理
-            if let Some((server, tool_name)) = mcp_manager.parse_tool_name(&name) {
-                // MCP関数呼び出し
-                let result = handle_mcp_tool_call(
-                    mcp_manager,
-                    sub_id,
-                    call_id.clone(),
-                    server,
-                    tool_name,
-                    arguments,
-                    None,
-                ).await;
-                Some(result)
-            } else {
-                // 通常のツール実行
-                match tool_executor.execute_function_call(&name, &arguments).await {
-                    Ok(output) => Some(ResponseInputItem::FunctionCallOutput {
+        
+        // 7. Other処理
+        ResponseItem::Other => None,
+    }
+}
+
+// MEE-26: handle_function_call実装（codex-1互換）
+async fn handle_function_call(
+    mcp_manager: &McpConnectionManager,
+    tool_executor: &mut ToolExecutor,
+    tx_event: &mpsc::Sender<Event>,
+    sub_id: String,
+    name: String,
+    arguments: String,
+    call_id: String,
+) -> ResponseInputItem {
+    use tracing::info;
+    
+    match name.as_str() {
+        // 内蔵ツール: container.exec / shell
+        "container.exec" | "shell" => {
+            match handle_container_exec_tool_call(
+                tool_executor,
+                tx_event,
+                sub_id,
+                arguments,
+                call_id.clone(),
+            ).await {
+                Ok(output) => ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: crate::conversation_history::FunctionCallOutputPayload {
+                        content: output,
+                        success: Some(true),
+                    },
+                },
+                Err(e) => ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: crate::conversation_history::FunctionCallOutputPayload {
+                        content: format!("Error: {}", e),
+                        success: Some(false),
+                    },
+                },
+            }
+        }
+        
+        // 内蔵ツール: unified_exec
+        "unified_exec" => {
+            #[derive(serde::Deserialize)]
+            struct UnifiedExecArgs {
+                input: Vec<String>,
+                #[serde(default)]
+                session_id: Option<String>,
+                #[serde(default)]
+                timeout_ms: Option<u64>,
+            }
+            
+            let args = match serde_json::from_str::<UnifiedExecArgs>(&arguments) {
+                Ok(args) => args,
+                Err(err) => {
+                    return ResponseInputItem::FunctionCallOutput {
                         call_id,
                         output: crate::conversation_history::FunctionCallOutputPayload {
-                            content: output,
-                            success: Some(true),
-                        },
-                    }),
-                    Err(e) => Some(ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: crate::conversation_history::FunctionCallOutputPayload {
-                            content: format!("Error: {}", e),
+                            content: format!("failed to parse function arguments: {err}"),
                             success: Some(false),
                         },
-                    }),
+                    };
+                }
+            };
+            
+            match handle_unified_exec_tool_call(
+                tool_executor,
+                call_id.clone(),
+                args.session_id,
+                args.input,
+                args.timeout_ms,
+            ).await {
+                Ok(output) => ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: crate::conversation_history::FunctionCallOutputPayload {
+                        content: output,
+                        success: Some(true),
+                    },
+                },
+                Err(e) => ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: crate::conversation_history::FunctionCallOutputPayload {
+                        content: format!("Error: {}", e),
+                        success: Some(false),
+                    },
+                },
+            }
+        }
+        
+        // MCPツール (動的判定)
+        _ => {
+            match mcp_manager.parse_tool_name(&name) {
+                Some((server, tool_name)) => {
+                    // MCP関数呼び出し
+                    handle_mcp_tool_call(
+                        mcp_manager,
+                        &sub_id,
+                        call_id,
+                        server,
+                        tool_name,
+                        arguments,
+                        None,
+                    ).await
+                }
+                None => {
+                    // 未知の関数: 構造化された失敗応答
+                    ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: crate::conversation_history::FunctionCallOutputPayload {
+                            content: format!("unsupported call: {name}"),
+                            success: None,
+                        },
+                    }
                 }
             }
         }
-        ResponseItem::Reasoning { .. } | ResponseItem::WebSearchCall { .. } => {
-            // 推論やWeb検索のイベントをUIに送信
-            let events = map_response_item_to_event_messages(&item, false);
-            for event_msg in events {
-                let event = Event::AgentMessage {
-                    message: format!("{:?}", event_msg), // 簡略化
-                };
-                let _ = tx_event.send(event).await;
+    }
+}
+
+// MEE-26: handle_local_shell_call実装（codex-1互換）
+async fn handle_local_shell_call(
+    tool_executor: &mut ToolExecutor,
+    tx_event: &mpsc::Sender<Event>,
+    sub_id: String,
+    action: crate::conversation_history::LocalShellExecAction,
+    call_id: String,
+) -> ResponseInputItem {
+    use tracing::info;
+    
+    info!("LocalShellCall: {action:?}");
+    
+    // LocalShellExecActionからcontainer.exec引数を構築
+    let arguments = serde_json::json!({
+        "cmd": action.command,
+        "cwd": action.working_directory,
+        "timeout_ms": action.timeout_ms,
+        "env": action.env.unwrap_or_default(),
+    }).to_string();
+    
+    match handle_container_exec_tool_call(
+        tool_executor,
+        tx_event,
+        sub_id,
+        arguments,
+        call_id.clone(),
+    ).await {
+        Ok(output) => ResponseInputItem::FunctionCallOutput {
+            call_id,
+            output: crate::conversation_history::FunctionCallOutputPayload {
+                content: output,
+                success: Some(true),
+            },
+        },
+        Err(e) => ResponseInputItem::FunctionCallOutput {
+            call_id,
+            output: crate::conversation_history::FunctionCallOutputPayload {
+                content: format!("Error: {}", e),
+                success: Some(false),
+            },
+        },
+    }
+}
+
+// MEE-26: handle_custom_tool_call実装（codex-1互換）
+async fn handle_custom_tool_call(
+    tool_executor: &mut ToolExecutor,
+    tx_event: &mpsc::Sender<Event>,
+    sub_id: String,
+    name: String,
+    input: String,
+    call_id: String,
+) -> ResponseInputItem {
+    use tracing::{info, debug};
+    
+    info!("CustomToolCall: {name} {input}");
+    
+    match name.as_str() {
+        "apply_patch" => {
+            // apply_patchツールの実行
+            let arguments = serde_json::json!({
+                "patch": input,
+            }).to_string();
+            
+            let resp = match handle_container_exec_tool_call(
+                tool_executor,
+                tx_event,
+                sub_id,
+                arguments,
+                call_id.clone(),
+            ).await {
+                Ok(output) => ResponseInputItem::FunctionCallOutput {
+                    call_id: call_id.clone(),
+                    output: crate::conversation_history::FunctionCallOutputPayload {
+                        content: output,
+                        success: Some(true),
+                    },
+                },
+                Err(e) => ResponseInputItem::FunctionCallOutput {
+                    call_id: call_id.clone(),
+                    output: crate::conversation_history::FunctionCallOutputPayload {
+                        content: format!("Error: {}", e),
+                        success: Some(false),
+                    },
+                },
+            };
+            
+            // FunctionCallOutput → CustomToolCallOutput変換
+            match resp {
+                ResponseInputItem::FunctionCallOutput { call_id, output } => {
+                    ResponseInputItem::CustomToolCallOutput {
+                        call_id,
+                        output: output.content,
+                    }
+                }
+                // その他の場合はそのまま通す
+                other => other,
             }
-            None
         }
-        _ => None,
+        _ => {
+            debug!("unexpected CustomToolCall from stream");
+            ResponseInputItem::CustomToolCallOutput {
+                call_id,
+                output: format!("unsupported custom tool call: {name}"),
+            }
+        }
+    }
+}
+
+// MEE-26: container.exec/shell/unified_execツール呼び出し統合
+async fn handle_container_exec_tool_call(
+    tool_executor: &mut ToolExecutor,
+    tx_event: &mpsc::Sender<Event>,
+    sub_id: String,
+    arguments: String,
+    call_id: String,
+) -> Result<String, String> {
+    // 既存のcontainer_exec機能を利用
+    match tool_executor.execute_function_call("container.exec", &arguments).await {
+        Ok(output) => Ok(output),
+        Err(e) => Err(format!("Container exec error: {}", e)),
+    }
+}
+
+// MEE-26: unified_execツール呼び出し統合
+async fn handle_unified_exec_tool_call(
+    tool_executor: &mut ToolExecutor,
+    call_id: String,
+    session_id: Option<String>,
+    input: Vec<String>,
+    timeout_ms: Option<u64>,
+) -> Result<String, String> {
+    // 既存のunified_exec機能を利用
+    let arguments = serde_json::json!({
+        "input": input,
+        "session_id": session_id,
+        "timeout_ms": timeout_ms,
+    }).to_string();
+    
+    match tool_executor.execute_function_call("unified_exec", &arguments).await {
+        Ok(output) => Ok(output),
+        Err(e) => Err(format!("Unified exec error: {}", e)),
     }
 }
 
