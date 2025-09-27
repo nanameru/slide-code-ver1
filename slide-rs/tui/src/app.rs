@@ -928,6 +928,11 @@ fn handle_core_event(tui: &mut Tui, app: &mut App, ev: CoreEvent)
                 .show_approval_modal(req, app.app_event_tx.clone());
             append_log("[approve] exec requested");
         }
+        CoreEvent::StreamError { message } => {
+            // MEE-28: StreamErrorイベントの処理
+            append_log(&format!("[stream error] {}", message));
+            // 必要に応じてユーザーに通知やリトライ状況を表示
+        }
     }
 }
 
