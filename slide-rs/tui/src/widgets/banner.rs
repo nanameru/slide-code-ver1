@@ -35,25 +35,38 @@ const FRAME_DURATION: Duration = Duration::from_millis(100); // 100ms per frame
 /// Banner animation state
 #[derive(Clone, Debug)]
 pub struct BannerAnimation {
-    start_time: Instant,
+    start_time: Option<Instant>,
     is_active: bool,
 }
 
 impl BannerAnimation {
     pub fn new() -> Self {
         Self {
-            start_time: Instant::now(),
+            start_time: None, // 遅延開始：最初はNone
             is_active: true,
         }
     }
 
+    /// アニメーションを開始する（初回描画時に呼び出される）
+    pub fn start_if_not_started(&mut self) {
+        if self.start_time.is_none() {
+            self.start_time = Some(Instant::now());
+        }
+    }
+
     pub fn is_active(&self) -> bool {
-        self.is_active && self.start_time.elapsed() < ANIMATION_DURATION
+        if let Some(start_time) = self.start_time {
+            self.is_active && start_time.elapsed() < ANIMATION_DURATION
+        } else {
+            true // まだ開始していない場合はアクティブとみなす
+        }
     }
 
     pub fn update(&mut self) {
-        if self.start_time.elapsed() >= ANIMATION_DURATION {
-            self.is_active = false;
+        if let Some(start_time) = self.start_time {
+            if start_time.elapsed() >= ANIMATION_DURATION {
+                self.is_active = false;
+            }
         }
     }
 
@@ -61,9 +74,14 @@ impl BannerAnimation {
         if !self.is_active() {
             return 1.0;
         }
-        let elapsed = self.start_time.elapsed().as_millis() as f32;
-        let total = ANIMATION_DURATION.as_millis() as f32;
-        (elapsed / total).clamp(0.0, 1.0)
+        
+        if let Some(start_time) = self.start_time {
+            let elapsed = start_time.elapsed().as_millis() as f32;
+            let total = ANIMATION_DURATION.as_millis() as f32;
+            (elapsed / total).clamp(0.0, 1.0)
+        } else {
+            0.0 // まだ開始していない場合は0%
+        }
     }
 }
 
@@ -81,8 +99,13 @@ pub fn banner_lines() -> Vec<Line<'static>> {
 }
 
 /// Lines used to render the banner with optional animation state.
-pub fn banner_lines_with_animation(animation: Option<&BannerAnimation>) -> Vec<Line<'static>> {
-    let animation_progress = animation.map(|a| a.animation_progress()).unwrap_or(1.0);
+pub fn banner_lines_with_animation(mut animation: Option<&mut BannerAnimation>) -> Vec<Line<'static>> {
+    // 描画時にアニメーションを開始
+    if let Some(ref mut anim) = animation {
+        anim.start_if_not_started();
+    }
+    
+    let animation_progress = animation.as_ref().map(|a| a.animation_progress()).unwrap_or(1.0);
     
     let mut lines: Vec<Line> = STARTUP_BANNER_LINES
         .iter()

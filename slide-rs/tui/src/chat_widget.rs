@@ -562,6 +562,8 @@ impl ChatWidget {
         if let Some(first_cell) = self.history.first_mut() {
             match first_cell {
                 HistoryCell::AnimatedBanner { animation } => {
+                    // アニメーションを開始（まだ開始していない場合）
+                    animation.start_if_not_started();
                     animation.update();
                     
                     // アニメーションが完了したら静的バナーに変換
@@ -571,6 +573,15 @@ impl ChatWidget {
                 }
                 _ => {} // 他の種類のセルは何もしない
             }
+        }
+    }
+
+    /// アニメーション対応でバナーの行を取得
+    pub fn get_banner_lines(&mut self) -> Vec<ratatui::text::Line<'static>> {
+        if let Some(first_cell) = self.history.first_mut() {
+            first_cell.lines_mut()
+        } else {
+            vec![]
         }
     }
 }

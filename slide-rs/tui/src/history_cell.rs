@@ -221,6 +221,23 @@ impl HistoryCell {
         match self {
             HistoryCell::Banner => banner_lines(),
             HistoryCell::AnimatedBanner { animation } => {
+                // 一時的に静的バナーを返す（mutable参照が必要なため）
+                banner_lines()
+            }
+            HistoryCell::UserPrompt { prompt } => build_role_block(RoleLabel::User, prompt),
+            HistoryCell::AssistantMessage { content } => {
+                build_role_block(RoleLabel::Assistant, content)
+            }
+            HistoryCell::SystemStatus { label, lines } => build_status_block(*label, lines),
+            HistoryCell::Plain { lines } => lines.clone(),
+        }
+    }
+
+    /// アニメーション対応のlines取得（mutable参照版）
+    pub fn lines_mut(&mut self) -> Vec<Line<'static>> {
+        match self {
+            HistoryCell::Banner => banner_lines(),
+            HistoryCell::AnimatedBanner { animation } => {
                 banner_lines_with_animation(Some(animation))
             }
             HistoryCell::UserPrompt { prompt } => build_role_block(RoleLabel::User, prompt),
@@ -235,8 +252,9 @@ impl HistoryCell {
     pub fn plain_text_lines(&self) -> Vec<String> {
         match self {
             HistoryCell::Banner => banner_lines().into_iter().map(line_to_plain).collect(),
-            HistoryCell::AnimatedBanner { animation } => {
-                banner_lines_with_animation(Some(animation)).into_iter().map(line_to_plain).collect()
+            HistoryCell::AnimatedBanner { animation: _ } => {
+                // plain_text_linesでは静的バナーを返す（mutable参照が困難なため）
+                banner_lines().into_iter().map(line_to_plain).collect()
             }
             HistoryCell::UserPrompt { prompt } => {
                 let lines = split_preserving_empty(prompt);
