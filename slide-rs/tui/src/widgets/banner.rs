@@ -1,5 +1,6 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use std::time::{Duration, Instant};
 
 /// Marker prefix embedded in chat history strings so the chat widget can
 /// recognise the banner entry and render it with full styling.
@@ -27,6 +28,45 @@ const RAINBOW_STOPS: &[Color] = &[
     Color::Rgb(160, 255, 90), // lime
 ];
 
+/// Animation configuration
+const ANIMATION_DURATION: Duration = Duration::from_millis(2000); // 2秒間のアニメーション
+const FRAME_DURATION: Duration = Duration::from_millis(100); // 100ms per frame
+
+/// Banner animation state
+#[derive(Clone, Debug)]
+pub struct BannerAnimation {
+    start_time: Instant,
+    is_active: bool,
+}
+
+impl BannerAnimation {
+    pub fn new() -> Self {
+        Self {
+            start_time: Instant::now(),
+            is_active: true,
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.is_active && self.start_time.elapsed() < ANIMATION_DURATION
+    }
+
+    pub fn update(&mut self) {
+        if self.start_time.elapsed() >= ANIMATION_DURATION {
+            self.is_active = false;
+        }
+    }
+
+    pub fn animation_progress(&self) -> f32 {
+        if !self.is_active() {
+            return 1.0;
+        }
+        let elapsed = self.start_time.elapsed().as_millis() as f32;
+        let total = ANIMATION_DURATION.as_millis() as f32;
+        (elapsed / total).clamp(0.0, 1.0)
+    }
+}
+
 /// Build the banner message that can be pushed into the chat history list.
 /// The message acts as a sentinel token that the chat widget expands into
 /// the richly styled banner at render time.
@@ -37,23 +77,65 @@ pub fn banner_message() -> String {
 /// Lines used to render the banner both in terminal scrollback and inside the
 /// chat widget.
 pub fn banner_lines() -> Vec<Line<'static>> {
+    banner_lines_with_animation(None)
+}
+
+/// Lines used to render the banner with optional animation state.
+pub fn banner_lines_with_animation(animation: Option<&BannerAnimation>) -> Vec<Line<'static>> {
+    let animation_progress = animation.map(|a| a.animation_progress()).unwrap_or(1.0);
+    
     let mut lines: Vec<Line> = STARTUP_BANNER_LINES
         .iter()
-        .map(|line| {
+        .enumerate()
+        .map(|(line_idx, line)| {
             let line_len = line.chars().count();
+            
+            // アニメーション効果: 上から下へ順次表示
+            let line_reveal_progress = if animation.is_some() {
+                let lines_count = STARTUP_BANNER_LINES.len();
+                let line_start = line_idx as f32 / lines_count as f32;
+                let line_end = (line_idx + 1) as f32 / lines_count as f32;
+                
+                if animation_progress < line_start {
+                    0.0 // まだ表示されない
+                } else if animation_progress > line_end {
+                    1.0 // 完全に表示
+                } else {
+                    // 部分的に表示（この行の表示進行度）
+                    (animation_progress - line_start) / (line_end - line_start)
+                }
+            } else {
+                1.0
+            };
+            
+            let visible_chars = (line_len as f32 * line_reveal_progress) as usize;
+            
             let spans: Vec<Span> = line
                 .chars()
                 .enumerate()
                 .map(|(col, ch)| {
+                    if col >= visible_chars {
+                        return Span::raw(" "); // まだ表示されない文字は空白
+                    }
+                    
                     if ch == ' ' {
                         return Span::raw(" ");
                     }
+                    
                     let ratio = if line_len > 1 {
                         col as f32 / (line_len as f32 - 1.0)
                     } else {
                         0.0
                     };
-                    let fg = rainbow_color(ratio);
+                    
+                    // アニメーション中は色を時間で変化させる
+                    let color_offset = if animation.is_some() {
+                        animation_progress * 0.5 // 色相を少しずつシフト
+                    } else {
+                        0.0
+                    };
+                    
+                    let fg = rainbow_color((ratio + color_offset) % 1.0);
                     let style = if ch == '░' {
                         Style::default().fg(fg).add_modifier(Modifier::DIM)
                     } else {

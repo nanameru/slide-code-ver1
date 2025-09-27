@@ -181,6 +181,9 @@ impl App {
     }
 
     fn on_tick(&mut self) {
+        // Update banner animation
+        self.chat_widget.update_banner_animation();
+        
         // Emit commit animation ticks every ~100ms while running
         if self.status == RunStatus::Running {
             if self.thinking_last_change.elapsed() > Duration::from_millis(100) {

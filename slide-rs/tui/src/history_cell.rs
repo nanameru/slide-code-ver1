@@ -6,7 +6,7 @@ use ratatui::text::Text;
 use std::any::Any;
 use std::time::Duration;
 
-use crate::widgets::banner::banner_lines;
+use crate::widgets::banner::{banner_lines, banner_lines_with_animation, BannerAnimation};
 use crate::text_formatting::format_and_truncate_tool_result;
 use slide_core::protocol::McpInvocation;
 use mcp_types::{CallToolResult, CallToolResultContentItem, TextContent, EmbeddedResource};
@@ -130,6 +130,9 @@ impl HistoryCellTrait for AgentMessageCell {
 #[derive(Clone, Debug)]
 pub enum HistoryCell {
     Banner,
+    AnimatedBanner {
+        animation: BannerAnimation,
+    },
     UserPrompt {
         prompt: String,
     },
@@ -159,6 +162,12 @@ pub enum SystemLabel {
 impl HistoryCell {
     pub fn banner() -> Self {
         Self::Banner
+    }
+
+    pub fn animated_banner() -> Self {
+        Self::AnimatedBanner {
+            animation: BannerAnimation::new(),
+        }
     }
 
     pub fn new_user_prompt<S: Into<String>>(prompt: S) -> Self {
@@ -211,6 +220,9 @@ impl HistoryCell {
     pub fn lines(&self) -> Vec<Line<'static>> {
         match self {
             HistoryCell::Banner => banner_lines(),
+            HistoryCell::AnimatedBanner { animation } => {
+                banner_lines_with_animation(Some(animation))
+            }
             HistoryCell::UserPrompt { prompt } => build_role_block(RoleLabel::User, prompt),
             HistoryCell::AssistantMessage { content } => {
                 build_role_block(RoleLabel::Assistant, content)
@@ -223,6 +235,9 @@ impl HistoryCell {
     pub fn plain_text_lines(&self) -> Vec<String> {
         match self {
             HistoryCell::Banner => banner_lines().into_iter().map(line_to_plain).collect(),
+            HistoryCell::AnimatedBanner { animation } => {
+                banner_lines_with_animation(Some(animation)).into_iter().map(line_to_plain).collect()
+            }
             HistoryCell::UserPrompt { prompt } => {
                 let lines = split_preserving_empty(prompt);
                 if lines.is_empty() {

@@ -107,7 +107,7 @@ impl ChatWidget {
             running_commands: HashMap::new(),
             task_complete_pending: false,
             agent,
-            history: vec![HistoryCell::banner()],
+            history: vec![HistoryCell::animated_banner()],
             chat_scroll_top: 0,
             chat_follow_bottom: true,
             chat_viewport_height: 0,
@@ -555,6 +555,23 @@ impl ChatWidget {
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
         let status = if success { "Success" } else { "Failed" };
         self.update_status_header(format!("MCP: {} - {}", event.invocation.tool, status));
+    }
+
+    /// Update banner animation and convert to static banner when animation completes
+    pub fn update_banner_animation(&mut self) {
+        if let Some(first_cell) = self.history.first_mut() {
+            match first_cell {
+                HistoryCell::AnimatedBanner { animation } => {
+                    animation.update();
+                    
+                    // アニメーションが完了したら静的バナーに変換
+                    if !animation.is_active() {
+                        *first_cell = HistoryCell::banner();
+                    }
+                }
+                _ => {} // 他の種類のセルは何もしない
+            }
+        }
     }
 }
 
