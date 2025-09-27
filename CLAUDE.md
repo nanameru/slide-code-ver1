@@ -24,6 +24,9 @@ slide-cli (Node.js) → slide-rs/cli → slide-rs/tui → slide-rs/core
   - **apply-patch**: File patching functionality
   - **arg0**: Binary dispatch system
   - **protocol**: Communication protocol types
+  - **file-search**: File search functionality
+  - **slides-tools**: Slide-specific tool implementations
+  - **mcp-client**: Model Context Protocol client implementation
 
 ### AI Tool Execution System
 
@@ -70,6 +73,15 @@ npm run install-global
 
 # Remove global installation
 npm run uninstall-global
+```
+
+### Release Build Optimization
+The Cargo workspace uses aggressive release optimizations:
+```toml
+[profile.release]
+lto = "fat"              # Link Time Optimization
+strip = "symbols"        # Strip symbols for smaller binaries
+codegen-units = 1        # Single codegen unit for maximum optimization
 ```
 
 ## Environment Configuration
@@ -168,6 +180,7 @@ cargo test -p slide-tui
 - **Primary**: macOS, Linux
 - **Secondary**: Windows (via PowerShell in shell configuration)
 - **Distribution**: Cross-platform via Node.js launcher with platform-specific Rust binaries
+- **Node.js Requirements**: Node.js >=16 (specified in package.json)
 
 ## Current Development Status
 

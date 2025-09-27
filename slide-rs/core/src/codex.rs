@@ -997,64 +997,72 @@ async fn submission_loop(
 /// - requested function calls
 async fn run_task(
     sess: Arc<Session>,
-    turn_context: &TurnContext,
+    turn_context: Arc<TurnContext>,
     sub_id: String,
     input: Vec<InputItem>,
 ) {
     if input.is_empty() {
         return;
     }
-
     let event = Event {
         id: sub_id.clone(),
         msg: EventMsg::TaskStarted(TaskStartedEvent {
             model_context_window: turn_context.client.get_model_context_window(),
         }),
     };
-
-    if sess.tx_event.send(event).await.is_err() {
-        return;
-    }
-
-    // 連続実行開始イベントを送信
-    let continuous_start_event = Event {
-        id: sub_id.clone(),
-        msg: EventMsg::ContinuousExecutionStart(ContinuousExecutionStartEvent {
-            session_id: sub_id.clone(),
-            initial_input: format!("{:?}", input),
-        }),
-    };
-    sess.tx_event.send(continuous_start_event).await.ok();
+    sess.send_event(event).await;
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-    sess.record_conversation_items(&[initial_input_for_turn.clone().into()])
-        .await;
+    // For review threads, keep an isolated in-memory history so the
+    // model sees a fresh conversation without the parent session's history.
+    // For normal turns, continue recording to the session history as before.
+    let is_review_mode = turn_context.is_review_mode;
+    let mut review_thread_history: Vec<ResponseItem> = Vec::new();
+    if is_review_mode {
+        // Seed review threads with environment context so the model knows the working directory.
+        review_thread_history.extend(sess.build_initial_context(turn_context.as_ref()));
+        review_thread_history.push(initial_input_for_turn.into());
+    } else {
+        sess.record_input_and_rollout_usermsg(&initial_input_for_turn)
+            .await;
+    }
 
     let mut last_agent_message: Option<String> = None;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let mut turn_diff_tracker = TurnDiffTracker::new();
-    let mut step_number = 0u32;
+    let mut auto_compact_recently_attempted = false;
 
     loop {
-        step_number += 1;
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
         let pending_input = sess
             .get_pending_input()
+            .await
             .into_iter()
             .map(ResponseItem::from)
             .collect::<Vec<ResponseItem>>();
 
-        sess.record_conversation_items(&pending_input).await;
-
-        // Construct the input that we will send to the model. When using the
-        // Chat completions API (or ZDR clients), the model needs the full
-        // conversation history on each turn. The rollout file, however, should
-        // only record the new items that originated in this turn so that it
-        // represents an append-only log without duplicates.
-        let turn_input: Vec<ResponseItem> = sess.turn_input_with_history(pending_input);
+        // Construct the input that we will send to the model.
+        //
+        // - For review threads, use the isolated in-memory history so the
+        //   model sees a fresh conversation (no parent history/user_instructions).
+        //
+        // - For normal turns, use the session's full history. When using the
+        //   chat completions API (or ZDR clients), the model needs the full
+        //   conversation history on each turn. The rollout file, however, should
+        //   only record the new items that originated in this turn so that it
+        //   represents an append-only log without duplicates.
+        let turn_input: Vec<ResponseItem> = if is_review_mode {
+            if !pending_input.is_empty() {
+                review_thread_history.extend(pending_input);
+            }
+            review_thread_history.clone()
+        } else {
+            sess.record_conversation_items(&pending_input).await;
+            sess.turn_input_with_history(pending_input).await
+        };
 
         let turn_input_messages: Vec<String> = turn_input
             .iter()
@@ -1072,7 +1080,7 @@ async fn run_task(
 
         match run_turn(
             &sess,
-            turn_context,
+            turn_context.as_ref(),
             &mut turn_diff_tracker,
             sub_id.clone(),
             turn_input,
@@ -1080,48 +1088,113 @@ async fn run_task(
         .await
         {
             Ok(turn_output) => {
+                let TurnRunResult {
+                    processed_items,
+                    token_usage,
+                } = turn_output;
+                
+                // codex-1レベルのトークン制限管理
+                let limit = turn_context
+                    .client
+                    .get_auto_compact_token_limit()
+                    .unwrap_or(i64::MAX);
+                let total_usage_tokens = token_usage
+                    .as_ref()
+                    .map(|usage| usage.tokens_in_context_window());
+                let token_limit_reached = total_usage_tokens
+                    .map(|tokens| (tokens as i64) >= limit)
+                    .unwrap_or(false);
+                
                 let mut items_to_record_in_conversation_history = Vec::<ResponseItem>::new();
                 let mut responses = Vec::<ResponseInputItem>::new();
 
-                let mut has_tool_calls = false;
-                for processed_response_item in turn_output {
+                // codex-1レベルの詳細なレスポンス処理
+                for processed_response_item in processed_items {
                     let ProcessedResponseItem { item, response } = processed_response_item;
                     match (&item, &response) {
                         (ResponseItem::Message { role, .. }, None) if role == "assistant" => {
                             // If the model returned a message, we need to record it.
                             items_to_record_in_conversation_history.push(item);
                         }
-                        (ResponseItem::Message { content, .. }, Some(_)) => {
-                            // Function call detected in message content
-                            has_tool_calls = true;
-                            
-                            // Extract function call details for step event
-                            let (tool_name, tool_input) = content.iter()
-                                .find_map(|c| match c {
-                                    ContentItem::FunctionCall { name, arguments } => Some((name.clone(), arguments.clone())),
-                                    _ => None,
-                                })
-                                .unwrap_or_default();
-                            
-                            // ステップイベントを送信
-                            let step_event = Event {
-                                id: sub_id.clone(),
-                                msg: EventMsg::ContinuousExecutionStep(ContinuousExecutionStepEvent {
-                                    step_number,
-                                    tool_name,
-                                    tool_input,
-                                }),
-                            };
-                            sess.tx_event.send(step_event).await.ok();
-                            
+                        (
+                            ResponseItem::LocalShellCall { .. },
+                            Some(ResponseInputItem::FunctionCallOutput { call_id, output }),
+                        ) => {
                             items_to_record_in_conversation_history.push(item);
+                            items_to_record_in_conversation_history.push(
+                                ResponseItem::FunctionCallOutput {
+                                    call_id: call_id.clone(),
+                                    output: output.clone(),
+                                },
+                            );
+                        }
+                        (
+                            ResponseItem::FunctionCall { .. },
+                            Some(ResponseInputItem::FunctionCallOutput { call_id, output }),
+                        ) => {
+                            items_to_record_in_conversation_history.push(item);
+                            items_to_record_in_conversation_history.push(
+                                ResponseItem::FunctionCallOutput {
+                                    call_id: call_id.clone(),
+                                    output: output.clone(),
+                                },
+                            );
+                        }
+                        (
+                            ResponseItem::CustomToolCall { .. },
+                            Some(ResponseInputItem::CustomToolCallOutput { call_id, output }),
+                        ) => {
+                            items_to_record_in_conversation_history.push(item);
+                            items_to_record_in_conversation_history.push(
+                                ResponseItem::CustomToolCallOutput {
+                                    call_id: call_id.clone(),
+                                    output: output.clone(),
+                                },
+                            );
+                        }
+                        (
+                            ResponseItem::FunctionCall { .. },
+                            Some(ResponseInputItem::McpToolCallOutput { call_id, result }),
+                        ) => {
+                            items_to_record_in_conversation_history.push(item);
+                            let output = match result {
+                                Ok(call_tool_result) => {
+                                    convert_call_tool_result_to_function_call_output_payload(
+                                        call_tool_result,
+                                    )
+                                }
+                                Err(err) => FunctionCallOutputPayload {
+                                    content: err.clone(),
+                                    success: Some(false),
+                                },
+                            };
+                            items_to_record_in_conversation_history.push(
+                                ResponseItem::FunctionCallOutput {
+                                    call_id: call_id.clone(),
+                                    output,
+                                },
+                            );
+                        }
+                        (
+                            ResponseItem::Reasoning {
+                                id,
+                                summary,
+                                content,
+                                encrypted_content,
+                            },
+                            None,
+                        ) => {
+                            items_to_record_in_conversation_history.push(ResponseItem::Reasoning {
+                                id: id.clone(),
+                                summary: summary.clone(),
+                                content: content.clone(),
+                                encrypted_content: encrypted_content.clone(),
+                            });
                         }
                         _ => {
-                            // その他のアイテムも記録
-                            items_to_record_in_conversation_history.push(item);
+                            warn!("Unexpected response item: {item:?} with response: {response:?}");
                         }
                     };
-
                     if let Some(response) = response {
                         responses.push(response);
                     }
@@ -1129,37 +1202,54 @@ async fn run_task(
 
                 // Only attempt to take the lock if there is something to record.
                 if !items_to_record_in_conversation_history.is_empty() {
-                    sess.record_conversation_items(&items_to_record_in_conversation_history)
-                        .await;
+                    if is_review_mode {
+                        review_thread_history
+                            .extend(items_to_record_in_conversation_history.clone());
+                    } else {
+                        sess.record_conversation_items(&items_to_record_in_conversation_history)
+                            .await;
+                    }
                 }
 
+                // codex-1レベルのトークン制限チェックとauto-compact
+                if token_limit_reached {
+                    if auto_compact_recently_attempted {
+                        let limit_str = limit.to_string();
+                        let current_tokens = total_usage_tokens
+                            .map(|tokens| tokens.to_string())
+                            .unwrap_or_else(|| "unknown".to_string());
+                        let event = Event {
+                            id: sub_id.clone(),
+                            msg: EventMsg::Error(ErrorEvent {
+                                message: format!(
+                                    "Conversation is still above the token limit after automatic summarization (limit {limit_str}, current {current_tokens}). Please start a new session or trim your input."
+                                ),
+                            }),
+                        };
+                        sess.send_event(event).await;
+                        break;
+                    }
+                    auto_compact_recently_attempted = true;
+                    // 注意: compact::run_inline_auto_compact_task の実装が必要
+                    // compact::run_inline_auto_compact_task(sess.clone(), turn_context.clone()).await;
+                    warn!("Token limit reached but auto-compact not implemented yet");
+                    continue;
+                }
+
+                auto_compact_recently_attempted = false;
+
                 if responses.is_empty() {
-                    debug!("Turn completed - no more tool calls");
                     last_agent_message = get_last_assistant_message_from_turn(
                         &items_to_record_in_conversation_history,
                     );
-                    
-                    // 連続実行終了イベントを送信
-                    let continuous_end_event = Event {
-                        id: sub_id.clone(),
-                        msg: EventMsg::ContinuousExecutionEnd(ContinuousExecutionEndEvent {
-                            total_steps: step_number,
-                            final_result: last_agent_message.clone().unwrap_or_default(),
-                        }),
-                    };
-                    sess.tx_event.send(continuous_end_event).await.ok();
-                    
                     sess.maybe_notify(UserNotification::AgentTurnComplete {
                         turn_id: sub_id.clone(),
                         input_messages: turn_input_messages,
                         last_assistant_message: last_agent_message.clone(),
                     });
                     break;
-                } else {
-                    debug!("Continuing execution - {} tool responses to process", responses.len());
-                    // 次のターンの入力として responses を設定
-                    // これにより連続実行が継続される
                 }
+                continue;
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
@@ -1176,12 +1266,28 @@ async fn run_task(
         }
     }
 
-    sess.remove_task(&sub_id);
+    // If this was a review thread and we have a final assistant message,
+    // try to parse it as a ReviewOutput.
+    //
+    // If parsing fails, construct a minimal ReviewOutputEvent using the plain
+    // text as the overall explanation. Else, just exit review mode with None.
+    //
+    // Emits an ExitedReviewMode event with the parsed review output.
+    if turn_context.is_review_mode {
+        exit_review_mode(
+            sess.clone(),
+            sub_id.clone(),
+            last_agent_message.as_deref().map(parse_review_output_event),
+        )
+        .await;
+    }
+
+    sess.remove_task(&sub_id).await;
     let event = Event {
         id: sub_id,
         msg: EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }),
     };
-    sess.tx_event.send(event).await.ok();
+    sess.send_event(event).await;
 }
 
 async fn run_compact_task(
@@ -1277,7 +1383,7 @@ async fn run_turn(
     turn_diff_tracker: &mut TurnDiffTracker,
     sub_id: String,
     input: Vec<ResponseItem>,
-) -> CodexResult<Vec<ProcessedResponseItem>> {
+) -> CodexResult<TurnRunResult> {
     let tools = get_openai_tools(
         &turn_context.tools_config,
         Some(sess.mcp_connection_manager.list_all_tools()),
@@ -1346,7 +1452,7 @@ async fn try_run_turn(
     turn_diff_tracker: &mut TurnDiffTracker,
     sub_id: &str,
     prompt: &Prompt,
-) -> CodexResult<Vec<ProcessedResponseItem>> {
+) -> CodexResult<TurnRunResult> {
     // Minimal streaming implementation: stream deltas from the client and forward as events.
     let rendered = prompt.render();
     let mut rx = turn_context
@@ -1451,12 +1557,12 @@ async fn try_run_turn(
                 // 差分情報の送信（turn_diff_trackerから取得）
                 // 注意: turn_diff_trackerの実装が必要な場合は後で追加
                 
-                // 処理されたアイテムがある場合は返す
-                if !output.is_empty() {
-                    return Ok(output);
-                }
-                
-                break;
+                // TurnRunResult を返す（codex-1レベル）
+                let result = TurnRunResult {
+                    processed_items: output,
+                    token_usage: token_usage.clone(),
+                };
+                return Ok(result);
             }
             ClientResponseEvent::OutputTextDelta(delta) => {
                 // OutputTextDelta は TextDelta と同じ処理
@@ -1541,17 +1647,26 @@ async fn drain_to_completed(
             ClientResponseEvent::Completed => {
                 let event = Event { id: sub_id.to_string(), msg: EventMsg::AgentMessage(AgentMessageEvent { message: assembled.clone() }) };
                 sess.send_event(event).await;
-                return Ok(());
+                
+                // 基本的な完了処理（後方互換性のため）
+                let result = TurnRunResult {
+                    processed_items: output,
+                    token_usage: None,
+                };
+                return Ok(result);
             }
             ClientResponseEvent::Error(message) => {
-                let event = Event { id: sub_id.to_string(), msg: EventMsg::Error(ErrorEvent { message }) };
-                sess.send_event(event).await;
-                return Ok(());
+                return Err(CodexErr::Stream(message, None));
             }
         }
     }
 
-    Ok(())
+    // 通常はここに到達しないが、安全のため
+    let result = TurnRunResult {
+        processed_items: output,
+        token_usage: None,
+    };
+    Ok(result)
 }
 
 /// Handle a response item from the model and potentially execute tools

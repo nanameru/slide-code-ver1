@@ -154,6 +154,20 @@ pub struct FunctionCallOutputPayload {
     pub content: String,
 }
 
+// codex-1レベルのProcessedResponseItem構造体
+#[derive(Debug, Clone)]
+pub struct ProcessedResponseItem {
+    pub item: ResponseItem,
+    pub response: Option<ResponseInputItem>,
+}
+
+// TurnRunResult構造体（ターン実行結果）
+#[derive(Debug, Clone)]
+pub struct TurnRunResult {
+    pub processed_items: Vec<ProcessedResponseItem>,
+    pub token_usage: Option<protocol::protocol::TokenUsage>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ConversationHistory {
     items: Vec<ResponseItem>,

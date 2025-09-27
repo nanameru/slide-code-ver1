@@ -6,6 +6,7 @@ pub mod client;
 pub mod codex2;
 pub mod config_types;
 pub mod conversation_history;
+pub mod event_mapping;
 pub mod exec_env;
 pub mod mcp_connection_manager;
 pub mod mcp_tool_call;
