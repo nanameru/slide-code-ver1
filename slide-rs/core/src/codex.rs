@@ -1230,9 +1230,7 @@ async fn run_task(
                         break;
                     }
                     auto_compact_recently_attempted = true;
-                    // 注意: compact::run_inline_auto_compact_task の実装が必要
-                    // compact::run_inline_auto_compact_task(sess.clone(), turn_context.clone()).await;
-                    warn!("Token limit reached but auto-compact not implemented yet");
+                    crate::compact::run_inline_auto_compact_task(sess.clone(), turn_context.clone()).await;
                     continue;
                 }
 
@@ -1453,6 +1451,201 @@ async fn try_run_turn(
     sub_id: &str,
     prompt: &Prompt,
 ) -> CodexResult<TurnRunResult> {
+    use std::borrow::Cow;
+    
+    // call_ids that are part of this response.
+    let completed_call_ids = prompt
+        .input
+        .iter()
+        .filter_map(|ri| match ri {
+            ResponseItem::FunctionCallOutput { call_id, .. } => Some(call_id),
+            ResponseItem::LocalShellCall {
+                call_id: Some(call_id),
+                ..
+            } => Some(call_id),
+            ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    // call_ids that were pending but are not part of this response.
+    // This usually happens because the user interrupted the model before we responded to one of its tool calls
+    // and then the user sent a follow-up message.
+    let missing_calls = {
+        prompt
+            .input
+            .iter()
+            .filter_map(|ri| match ri {
+                ResponseItem::FunctionCall { call_id, .. } => Some(call_id),
+                ResponseItem::LocalShellCall {
+                    call_id: Some(call_id),
+                    ..
+                } => Some(call_id),
+                ResponseItem::CustomToolCall { call_id, .. } => Some(call_id),
+                _ => None,
+            })
+            .filter_map(|call_id| {
+                if completed_call_ids.contains(&call_id) {
+                    None
+                } else {
+                    Some(call_id.clone())
+                }
+            })
+            .map(|call_id| ResponseItem::CustomToolCallOutput {
+                call_id,
+                output: "aborted".to_string(),
+            })
+            .collect::<Vec<_>>()
+    };
+    
+    let prompt: Cow<Prompt> = if missing_calls.is_empty() {
+        Cow::Borrowed(prompt)
+    } else {
+        // Add the synthetic aborted missing calls to the beginning of the input to ensure all call ids have responses.
+        let input = [missing_calls, prompt.input.clone()].concat();
+        Cow::Owned(Prompt {
+            input,
+            ..prompt.clone()
+        })
+    };
+
+    let rollout_item = RolloutItem::TurnContext(TurnContextItem {
+        cwd: turn_context.cwd.clone(),
+        approval_policy: turn_context.approval_policy,
+        sandbox_policy: turn_context.sandbox_policy.clone(),
+        model: turn_context.client.get_model(),
+        effort: turn_context.client.get_reasoning_effort(),
+        summary: turn_context.client.get_reasoning_summary(),
+    });
+    sess.persist_rollout_items(&[rollout_item]).await;
+    let mut stream = turn_context.client.clone().stream(&prompt).await?;
+
+    let mut output = Vec::new();
+
+    loop {
+        // Poll the next item from the model stream. We must inspect *both* Ok and Err
+        // cases so that transient stream failures (e.g., dropped SSE connection before
+        // `response.completed`) bubble up and trigger the caller's retry logic.
+        let event = stream.next().await;
+        let Some(event) = event else {
+            // Channel closed without yielding a final Completed event or explicit error.
+            // Treat as a disconnected stream so the caller can retry.
+            return Err(CodexErr::Stream(
+                "stream closed before response.completed".into(),
+                None,
+            ));
+        };
+
+        match event {
+            Ok(response_event) => match response_event {
+                ResponseEvent::Created => {}
+                ResponseEvent::OutputItemDone(item) => {
+                    let response = handle_response_item(
+                        sess,
+                        turn_context,
+                        turn_diff_tracker,
+                        sub_id,
+                        item.clone(),
+                    )
+                    .await?;
+                    output.push(ProcessedResponseItem { item, response });
+                }
+                ResponseEvent::WebSearchCallBegin { call_id } => {
+                    let _ = sess
+                        .tx_event
+                        .send(Event {
+                            id: sub_id.to_string(),
+                            msg: EventMsg::WebSearchBegin(WebSearchBeginEvent { call_id }),
+                        })
+                        .await;
+                }
+                ResponseEvent::RateLimits(snapshot) => {
+                    // Update internal state with latest rate limits, but defer sending until
+                    // token usage is available to avoid duplicate TokenCount events.
+                    sess.update_rate_limits(snapshot).await;
+                }
+                ResponseEvent::Completed {
+                    response_id: _,
+                    token_usage,
+                } => {
+                    sess.update_token_usage_info(turn_context, token_usage.as_ref())
+                        .await;
+                    let token_event = sess.get_token_count_event().await;
+                    let _ = sess
+                        .send_event(Event {
+                            id: sub_id.to_string(),
+                            msg: EventMsg::TokenCount(token_event),
+                        })
+                        .await;
+
+                    let unified_diff = turn_diff_tracker.get_unified_diff();
+                    if let Ok(Some(unified_diff)) = unified_diff {
+                        let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
+                        let event = Event {
+                            id: sub_id.to_string(),
+                            msg,
+                        };
+                        sess.send_event(event).await;
+                    }
+
+                    let result = TurnRunResult {
+                        processed_items: output,
+                        token_usage: token_usage.clone(),
+                    };
+
+                    return Ok(result);
+                }
+                ResponseEvent::OutputTextDelta(delta) => {
+                    // In review child threads, suppress assistant text deltas; the
+                    // UI will show a selection popup from the final ReviewOutput.
+                    if !turn_context.is_review_mode {
+                        let event = Event {
+                            id: sub_id.to_string(),
+                            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
+                        };
+                        sess.send_event(event).await;
+                    } else {
+                        trace!("suppressing OutputTextDelta in review mode");
+                    }
+                }
+                ResponseEvent::ReasoningSummaryDelta(delta) => {
+                    let event = Event {
+                        id: sub_id.to_string(),
+                        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }),
+                    };
+                    sess.send_event(event).await;
+                }
+                ResponseEvent::ReasoningContentDelta(delta) => {
+                    let event = Event {
+                        id: sub_id.to_string(),
+                        msg: EventMsg::AgentReasoningRawContentDelta(
+                            AgentReasoningRawContentDeltaEvent { delta },
+                        ),
+                    };
+                    sess.send_event(event).await;
+                }
+                ResponseEvent::ReasoningSummaryPartAdded => {
+                    // No specific action needed for this event
+                }
+                ResponseEvent::CompletedWithDetails => {
+                    // Handle detailed completion if needed
+                }
+            },
+            Err(e) => {
+                return Err(e);
+            }
+        }
+    }
+}
+
+// 既存のSimple implementation用の関数（後方互換性維持）
+async fn try_run_turn_simple(
+    sess: &Session,
+    turn_context: &TurnContext,
+    _turn_diff_tracker: &mut TurnDiffTracker,
+    sub_id: &str,
+    prompt: &Prompt,
+) -> CodexResult<TurnRunResult> {
     // Minimal streaming implementation: stream deltas from the client and forward as events.
     let rendered = prompt.render();
     let mut rx = turn_context
@@ -1517,12 +1710,15 @@ async fn try_run_turn(
                     processed_items.push(ProcessedResponseItem { item, response: None });
                 }
                 
-                return Ok(processed_items);
+                return Ok(TurnRunResult {
+                    processed_items,
+                    token_usage: None,
+                });
             }
             ClientResponseEvent::Error(message) => {
                 let event = Event { id: sub_id.to_string(), msg: EventMsg::Error(ErrorEvent { message }) };
                 sess.send_event(event).await;
-                break;
+                return Err(CodexErr::InternalAgentDied);
             }
             
             // 新しいResponseEventの処理
@@ -1616,11 +1812,10 @@ async fn try_run_turn(
     }
 
     // OutputItemDoneで処理されたアイテムがある場合はそれを返す
-    if !output.is_empty() {
-        return Ok(output);
-    }
-
-    Ok(Vec::new())
+    Ok(TurnRunResult {
+        processed_items: output,
+        token_usage: None,
+    })
 }
 
 async fn drain_to_completed(

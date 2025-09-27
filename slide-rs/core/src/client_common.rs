@@ -68,7 +68,12 @@ impl Prompt {
         let instructions = self.get_full_instructions();
         let messages: Vec<String> = self.input
             .iter()
-            .map(|item| format!("{}: {:?}", item.role, item.content))
+            .map(|item| match item {
+                crate::conversation_history::ResponseItem::Message { role, content, .. } => {
+                    format!("{}: {:?}", role, content)
+                }
+                other => format!("Other: {:?}", other),
+            })
             .collect();
         
         format!("{}\n\nConversation:\n{}", instructions, messages.join("\n"))

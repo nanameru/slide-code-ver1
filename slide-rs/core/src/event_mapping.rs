@@ -1,12 +1,12 @@
-use crate::conversation_history::{ResponseItem, ContentItem};
-use protocol::protocol::{EventMsg, AgentMessageEvent};
+use crate::conversation_history::{ResponseItem, ContentItem, ReasoningItemContent, ReasoningItemReasoningSummary, WebSearchAction};
+use protocol::protocol::{EventMsg, AgentMessageEvent, AgentReasoningEvent, AgentReasoningRawContentEvent, UserMessageEvent, InputMessageKind, WebSearchEndEvent};
 
 /// Convert a `ResponseItem` into zero or more `EventMsg` values that the UI can render.
 ///
 /// When `show_raw_agent_reasoning` is false, raw reasoning content events are omitted.
 pub(crate) fn map_response_item_to_event_messages(
     item: &ResponseItem,
-    _show_raw_agent_reasoning: bool,
+    show_raw_agent_reasoning: bool,
 ) -> Vec<EventMsg> {
     match item {
         ResponseItem::Message { role, content, .. } => {
@@ -16,40 +16,147 @@ pub(crate) fn map_response_item_to_event_messages(
             }
 
             let mut events: Vec<EventMsg> = Vec::new();
-            let mut message = String::new();
+            let mut message_parts: Vec<String> = Vec::new();
+            let mut images: Vec<String> = Vec::new();
+            let mut kind: Option<InputMessageKind> = None;
 
-            for content_item in content {
+            for content_item in content.iter() {
                 match content_item {
-                    ContentItem::OutputText { text } => {
-                        message = text.clone();
-                    }
                     ContentItem::InputText { text } => {
-                        message = text.clone();
+                        if kind.is_none() {
+                            let trimmed = text.trim_start();
+                            kind = if trimmed.starts_with("<environment_context>") {
+                                Some(InputMessageKind::EnvironmentContext)
+                            } else if trimmed.starts_with("<user_instructions>") {
+                                Some(InputMessageKind::UserInstructions)
+                            } else {
+                                Some(InputMessageKind::Plain)
+                            };
+                        }
+                        message_parts.push(text.clone());
+                    }
+                    ContentItem::InputImage { image_url } => {
+                        images.push(image_url.clone());
+                    }
+                    ContentItem::OutputText { text } => {
+                        events.push(EventMsg::AgentMessage(AgentMessageEvent {
+                            message: text.clone(),
+                        }));
                     }
                     ContentItem::FunctionCall { .. } => {
                         // Function calls are handled separately
                         continue;
                     }
-                    ContentItem::InputImage { .. } => {
-                        // Images are not handled in this simplified version
-                        continue;
-                    }
                     ContentItem::FunctionResult { .. } => {
-                        // Function results are not handled in this simplified version
+                        // Function results are handled separately
                         continue;
                     }
                 }
             }
 
-            if !message.is_empty() {
-                events.push(EventMsg::AgentMessage(AgentMessageEvent {
+            if !message_parts.is_empty() || !images.is_empty() {
+                let message = if message_parts.is_empty() {
+                    String::new()
+                } else {
+                    message_parts.join("")
+                };
+                let images = if images.is_empty() {
+                    None
+                } else {
+                    Some(images)
+                };
+
+                events.push(EventMsg::UserMessage(UserMessageEvent {
                     message,
+                    kind,
+                    images,
                 }));
             }
 
             events
         }
 
-        _ => Vec::new(),
+        ResponseItem::Reasoning {
+            summary, content, ..
+        } => {
+            let mut events = Vec::new();
+            for ReasoningItemReasoningSummary::SummaryText { text } in summary {
+                events.push(EventMsg::AgentReasoning(AgentReasoningEvent {
+                    text: text.clone(),
+                }));
+            }
+            if let Some(items) = content.as_ref().filter(|_| show_raw_agent_reasoning) {
+                for c in items {
+                    let text = match c {
+                        ReasoningItemContent::ReasoningText { text }
+                        | ReasoningItemContent::Text { text } => text,
+                    };
+                    events.push(EventMsg::AgentReasoningRawContent(
+                        AgentReasoningRawContentEvent { text: text.clone() },
+                    ));
+                }
+            }
+            events
+        }
+
+        ResponseItem::WebSearchCall { id, action, .. } => match action {
+            WebSearchAction::Search { query } => {
+                let call_id = id.clone().unwrap_or_else(|| "".to_string());
+                vec![EventMsg::WebSearchEnd(WebSearchEndEvent {
+                    call_id,
+                    query: query.clone(),
+                })]
+            }
+            WebSearchAction::Other => Vec::new(),
+        },
+
+        // Variants that require side effects are handled by higher layers and do not emit events here.
+        ResponseItem::FunctionCall { .. }
+        | ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::LocalShellCall { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::Other => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::map_response_item_to_event_messages;
+    use crate::conversation_history::{ResponseItem, ContentItem};
+    use protocol::protocol::{EventMsg, InputMessageKind};
+
+    #[test]
+    fn maps_user_message_with_text_and_two_images() {
+        let img1 = "https://example.com/one.png".to_string();
+        let img2 = "https://example.com/two.jpg".to_string();
+
+        let item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: "Hello world".to_string(),
+                },
+                ContentItem::InputImage {
+                    image_url: img1.clone(),
+                },
+                ContentItem::InputImage {
+                    image_url: img2.clone(),
+                },
+            ],
+        };
+
+        let events = map_response_item_to_event_messages(&item, false);
+        assert_eq!(events.len(), 1, "expected a single user message event");
+
+        match &events[0] {
+            EventMsg::UserMessage(user) => {
+                assert_eq!(user.message, "Hello world");
+                assert!(matches!(user.kind, Some(InputMessageKind::Plain)));
+                assert_eq!(user.images, Some(vec![img1, img2]));
+            }
+            other => panic!("expected UserMessage, got {other:?}"),
+        }
     }
 }

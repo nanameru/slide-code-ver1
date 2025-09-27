@@ -3,10 +3,13 @@
 
 pub mod approval_manager;
 pub mod client;
+pub mod client_common;
 pub mod codex2;
 pub mod config_types;
 pub mod conversation_history;
 pub mod event_mapping;
+pub mod compact;
+pub mod util;
 pub mod exec_env;
 pub mod mcp_connection_manager;
 pub mod mcp_tool_call;

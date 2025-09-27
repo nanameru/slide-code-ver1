@@ -262,6 +262,7 @@ pub enum EventMsg {
     TokenCount(TokenUsage),
     AgentMessage(AgentMessageEvent),
     AgentMessageDelta(AgentMessageDeltaEvent),
+    UserMessage(UserMessageEvent),
     AgentReasoning(AgentReasoningEvent),
     AgentReasoningDelta(AgentReasoningDeltaEvent),
     AgentReasoningRawContent(AgentReasoningRawContentEvent),
@@ -390,6 +391,20 @@ pub struct AgentMessageEvent {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AgentMessageDeltaEvent {
     pub delta: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UserMessageEvent {
+    pub message: String,
+    pub kind: Option<InputMessageKind>,
+    pub images: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub enum InputMessageKind {
+    Plain,
+    EnvironmentContext,
+    UserInstructions,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AgentReasoningEvent {
