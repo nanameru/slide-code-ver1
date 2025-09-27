@@ -151,28 +151,38 @@ async fn run_turn(
         match try_run_turn(mcp_manager, tool_executor, tx_event, &sub_id, &prompt).await {
             Ok(output) => return Ok(output),
             
-            // 致命的エラー（リトライしない）
-            Err(e) if e.to_string().contains("interrupted") => {
-                return Err(CodexErr::Interrupted);
-            }
-            Err(e) if e.to_string().contains("usage limit") => {
-                return Err(CodexErr::UsageLimitReached(e.to_string()));
-            }
-            Err(e) if e.to_string().contains("usage not included") => {
-                return Err(CodexErr::UsageNotIncluded);
-            }
-            Err(e) if e.to_string().contains("environment variable") => {
-                return Err(CodexErr::EnvVar(e.to_string()));
-            }
-            
-            // リトライ可能エラー
+            // 致命的エラー（リトライしない）- codex-1互換の型安全判定
             Err(e) => {
+                // 文字列ベースのエラー判定（anyhow::Error互換）
+                let error_str = e.to_string();
+                if error_str.contains("interrupted") || error_str.contains("Ctrl-C") {
+                    return Err(CodexErr::Interrupted);
+                }
+                if error_str.contains("usage limit") {
+                    use crate::error::UsageLimitReachedError;
+                    return Err(CodexErr::UsageLimitReached(UsageLimitReachedError {
+                        plan_type: None,
+                        resets_in_seconds: None,
+                    }));
+                }
+                if error_str.contains("usage not included") || error_str.contains("upgrade to Plus") {
+                    return Err(CodexErr::UsageNotIncluded);
+                }
+                if error_str.contains("environment variable") || error_str.contains("Missing environment variable") {
+                    use crate::error::EnvVarError;
+                    return Err(CodexErr::EnvVar(EnvVarError {
+                        var: "UNKNOWN".to_string(),
+                        instructions: Some(error_str.clone()),
+                    }));
+                }
+                
+                // リトライ可能エラー処理
                 if retries < max_retries {
                     retries += 1;
                     
-                    // 指数バックオフ遅延計算
-                    let delay = if e.to_string().contains("stream") {
-                        // ストリームエラーの場合は専用遅延（簡略化）
+                    // 指数バックオフ遅延計算（codex-1互換）
+                    let delay = if error_str.contains("stream") {
+                        // ストリームエラーの場合も標準バックオフを使用（簡略化）
                         backoff(retries)
                     } else {
                         backoff(retries)
@@ -182,13 +192,14 @@ async fn run_turn(
                         "stream disconnected - retrying turn ({retries}/{max_retries} in {delay:?})...",
                     );
 
-                    // ユーザーへのリトライ通知
+                    // ユーザーへのリトライ通知（codex-1互換StreamErrorEvent使用）
                     let retry_message = format!(
                         "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
                     );
-                    let _ = tx_event.send(Event::AgentMessage {
+                    let stream_error_event = Event::StreamError {
                         message: retry_message,
-                    }).await;
+                    };
+                    let _ = tx_event.send(stream_error_event).await;
 
                     tokio::time::sleep(delay).await;
                 } else {
@@ -633,6 +644,9 @@ pub enum Event {
         delta: String,
     },
     AgentMessage {
+        message: String,
+    },
+    StreamError {
         message: String,
     },
     /// Explicit tool lifecycle events (codex-1 parity)
