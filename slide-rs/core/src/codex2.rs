@@ -8,6 +8,8 @@ use tokio::process::Command;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use std::process::Stdio;
 use tokio::sync::Mutex;
+use std::time::Duration;
+use tracing::warn;
 
 use crate::client::{ModelClient, ResponseEvent, OpenAiAdapter, StubClient};
 use crate::openai_tools::{render_tools_instructions, ToolsConfig, ToolsConfigParams};
@@ -127,6 +129,77 @@ fn process_missing_calls_from_prompt(prompt: &Prompt) -> Vec<ResponseItem> {
         .collect::<Vec<_>>()
 }
 
+// MEE-28: run_turn関数（codex-1互換の指数バックオフリトライ機構）
+async fn run_turn(
+    mcp_manager: &McpConnectionManager,
+    tool_executor: &mut ToolExecutor,
+    tx_event: &mpsc::Sender<Event>,
+    sub_id: String,
+    input: Vec<ResponseItem>,
+) -> crate::error::CodexResult<TurnRunResult> {
+    use crate::error::{CodexErr, CodexResult};
+    use crate::util::backoff;
+    
+    // ツール準備（簡略化: 実際のcodex-1ではget_openai_toolsを使用）
+    let prompt = Prompt::new(input);
+
+    // リトライループ
+    let mut retries = 0;
+    let max_retries = 5; // 簡略化: 実際のcodex-1ではprovider設定から取得
+    
+    loop {
+        match try_run_turn(mcp_manager, tool_executor, tx_event, &sub_id, &prompt).await {
+            Ok(output) => return Ok(output),
+            
+            // 致命的エラー（リトライしない）
+            Err(e) if e.to_string().contains("interrupted") => {
+                return Err(CodexErr::Interrupted);
+            }
+            Err(e) if e.to_string().contains("usage limit") => {
+                return Err(CodexErr::UsageLimitReached(e.to_string()));
+            }
+            Err(e) if e.to_string().contains("usage not included") => {
+                return Err(CodexErr::UsageNotIncluded);
+            }
+            Err(e) if e.to_string().contains("environment variable") => {
+                return Err(CodexErr::EnvVar(e.to_string()));
+            }
+            
+            // リトライ可能エラー
+            Err(e) => {
+                if retries < max_retries {
+                    retries += 1;
+                    
+                    // 指数バックオフ遅延計算
+                    let delay = if e.to_string().contains("stream") {
+                        // ストリームエラーの場合は専用遅延（簡略化）
+                        backoff(retries)
+                    } else {
+                        backoff(retries)
+                    };
+                    
+                    warn!(
+                        "stream disconnected - retrying turn ({retries}/{max_retries} in {delay:?})...",
+                    );
+
+                    // ユーザーへのリトライ通知
+                    let retry_message = format!(
+                        "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
+                    );
+                    let _ = tx_event.send(Event::AgentMessage {
+                        message: retry_message,
+                    }).await;
+
+                    tokio::time::sleep(delay).await;
+                } else {
+                    // 最大リトライ回数に達した場合
+                    return Err(CodexErr::Stream(e.to_string(), None));
+                }
+            }
+        }
+    }
+}
+
 // MEE-25: try_run_turn関数（codex-1互換の核心ロジック）
 async fn try_run_turn(
     mcp_manager: &McpConnectionManager,
@@ -134,7 +207,7 @@ async fn try_run_turn(
     tx_event: &mpsc::Sender<Event>,
     sub_id: &str,
     prompt: &Prompt,
-) -> Result<TurnRunResult> {
+) -> crate::error::CodexResult<TurnRunResult> {
     // MEE-25: missing_calls処理
     let missing_calls = process_missing_calls_from_prompt(prompt);
     

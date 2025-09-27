@@ -32,3 +32,4 @@ protocol = { path = "../protocol" }
 slide-mcp-client = { path = "../mcp-client" }
 regex = "1.0"
 portable-pty = "0.8"
+rand = "0.8"
