@@ -24,7 +24,7 @@ pub fn builtin_approval_presets() -> Vec<ApprovalPreset> {
                 writable_roots: Vec::new(),
                 network_access: false,
                 exclude_tmpdir_env_var: false,
-                exclude_system_tmp: false,
+                exclude_slash_tmp: false,
             },
         },
         ApprovalPreset {

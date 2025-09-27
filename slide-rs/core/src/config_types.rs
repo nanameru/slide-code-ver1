@@ -15,7 +15,7 @@ pub struct CoreConfig {
 impl Default for CoreConfig {
     fn default() -> Self {
         Self {
-            sandbox_policy: SandboxPolicy::default(),
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
             approval_mode: ApprovalMode::default(),
             include_view_image_tool: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),

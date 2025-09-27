@@ -15,18 +15,20 @@ use protocol::models::{ResponseInputItem, FunctionCallOutputPayload};
 pub struct ToolExecutor {
     cwd: PathBuf,
     shell_environment_policy: ShellEnvironmentPolicy,
+    sandbox_policy: SandboxPolicy,
 }
 
 impl ToolExecutor {
     pub fn new(
         _approval_policy: AskForApproval,
-        _sandbox_policy: SandboxPolicy,
+        sandbox_policy: SandboxPolicy,
         cwd: PathBuf,
         shell_environment_policy: ShellEnvironmentPolicy,
     ) -> Self {
         Self {
             cwd,
             shell_environment_policy,
+            sandbox_policy,
         }
     }
 
@@ -414,6 +416,15 @@ impl ToolExecutor {
                     self.cwd.join(path)
                 };
 
+                // Check if the path is writable according to sandbox policy
+                if !self.is_path_writable(&full_path) {
+                    return Ok(format!(
+                        "Permission Denied\n❌ Cannot write to {} - outside of allowed writable directories.\nAllowed directories: {:?}",
+                        full_path.display(),
+                        self.sandbox_policy.get_writable_roots_with_cwd(&self.cwd).iter().map(|r| &r.root).collect::<Vec<_>>()
+                    ));
+                }
+
                 // ディレクトリが存在しない場合は作成
                 if let Some(parent) = full_path.parent() {
                     if let Err(e) = tokio::fs::create_dir_all(parent).await {
@@ -612,6 +623,12 @@ impl ToolExecutor {
     /// 設定の更新
     pub fn update_working_directory(&mut self, new_cwd: PathBuf) {
         self.cwd = new_cwd;
+    }
+
+    /// Check if a path is writable according to the sandbox policy
+    fn is_path_writable(&self, path: &std::path::Path) -> bool {
+        let writable_roots = self.sandbox_policy.get_writable_roots_with_cwd(&self.cwd);
+        writable_roots.iter().any(|root| root.is_path_writable(path))
     }
 
     pub fn update_shell_environment_policy(&mut self, policy: ShellEnvironmentPolicy) {

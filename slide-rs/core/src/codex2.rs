@@ -779,7 +779,7 @@ impl Codex {
             let mut current_model: Option<String> = std::env::var("SLIDE_MODEL").ok();
             let mut current_effort: Option<ReasoningEffort> = None;
             let mut current_approval: crate::approval_manager::AskForApproval = crate::approval_manager::AskForApproval::default();
-            let mut current_sandbox: crate::seatbelt::SandboxPolicy = crate::seatbelt::SandboxPolicy::default();
+            let mut current_sandbox: crate::seatbelt::SandboxPolicy = crate::seatbelt::SandboxPolicy::new_workspace_write_policy();
 
             // Build initial model client (OpenAI or Stub)
             let mut current_model_client: Arc<dyn ModelClient + Send + Sync> = if api_key.is_empty() {
@@ -876,7 +876,7 @@ impl Codex {
                             use_streamable_shell_tool: true,
                             include_slides_tools: true,
                             approval_policy: crate::approval_manager::AskForApproval::default(),
-                            sandbox_policy: crate::seatbelt::SandboxPolicy::default(),
+                            sandbox_policy: crate::seatbelt::SandboxPolicy::new_workspace_write_policy(),
                         });
                         let tool_instructions =
                             render_tools_instructions(&tools_cfg, approval_hint.as_deref());
@@ -921,24 +921,10 @@ impl Codex {
                         );
                         // ツール実行エンジンを作成（ToolsConfigParamsから設定を取得）
                         let approval_policy = crate::approval_manager::AskForApproval::default();
-                        let sandbox_policy = crate::seatbelt::SandboxPolicy::default();
+                        let sandbox_policy = crate::seatbelt::SandboxPolicy::new_workspace_write_policy();
                         let mut tool_executor = ToolExecutor::new(
                             approval_policy,
                             sandbox_policy,
-                            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-                            crate::config_types::ShellEnvironmentPolicy::default(),
-                        );
-
-                        let mut tool_executor = ToolExecutor::new(
-                            crate::approval_manager::AskForApproval::default(),
-                            crate::seatbelt::SandboxPolicy::default(),
-                            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-                            crate::config_types::ShellEnvironmentPolicy::default(),
-                        );
-
-                        let mut tool_executor = ToolExecutor::new(
-                            crate::approval_manager::AskForApproval::default(),
-                            crate::seatbelt::SandboxPolicy::default(),
                             std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
                             crate::config_types::ShellEnvironmentPolicy::default(),
                         );
@@ -1288,7 +1274,7 @@ impl Codex {
                             use_streamable_shell_tool: true,
                             include_slides_tools: true,
                             approval_policy: crate::approval_manager::AskForApproval::default(),
-                            sandbox_policy: crate::seatbelt::SandboxPolicy::default(),
+                            sandbox_policy: crate::seatbelt::SandboxPolicy::new_workspace_write_policy(),
                         });
                         let tool_instructions =
                             render_tools_instructions(&tools_cfg, approval_hint.as_deref());
@@ -1323,7 +1309,7 @@ impl Codex {
 
                         let mut tool_executor = ToolExecutor::new(
                             crate::approval_manager::AskForApproval::default(),
-                            crate::seatbelt::SandboxPolicy::default(),
+                            crate::seatbelt::SandboxPolicy::new_workspace_write_policy(),
                             std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
                             crate::config_types::ShellEnvironmentPolicy::default(),
                         );
