@@ -69,13 +69,111 @@ fn extract_mcp_function_call(text: &str) -> Option<McpFunctionCall> {
     None
 }
 
-// MEE-24: missing_calls処理関数
-fn process_missing_calls(
-    conversation_history: &[(String, String)],
-) -> Vec<ResponseItem> {
-    // 簡略化: 実際の実装では会話履歴から未完了のツール呼び出しを検出
-    // 現在は空のベクターを返す
-    Vec::new()
+// MEE-25: Prompt構造体（codex-1互換）
+#[derive(Debug, Clone)]
+struct Prompt {
+    input: Vec<ResponseItem>,
+}
+
+impl Prompt {
+    fn new(input: Vec<ResponseItem>) -> Self {
+        Self { input }
+    }
+}
+
+// MEE-25: missing_calls完全実装
+fn process_missing_calls_from_prompt(prompt: &Prompt) -> Vec<ResponseItem> {
+    // call_ids that are part of this response (completed calls)
+    let completed_call_ids = prompt
+        .input
+        .iter()
+        .filter_map(|ri| match ri {
+            ResponseItem::FunctionCallOutput { call_id, .. } => Some(call_id),
+            ResponseItem::LocalShellCall {
+                call_id: Some(call_id),
+                ..
+            } => Some(call_id),
+            ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    // call_ids that were pending but are not part of this response (missing calls)
+    // This usually happens because the user interrupted the model before we responded to one of its tool calls
+    // and then the user sent a follow-up message.
+    prompt
+        .input
+        .iter()
+        .filter_map(|ri| match ri {
+            ResponseItem::FunctionCall { call_id, .. } => Some(call_id),
+            ResponseItem::LocalShellCall {
+                call_id: Some(call_id),
+                ..
+            } => Some(call_id),
+            ResponseItem::CustomToolCall { call_id, .. } => Some(call_id),
+            _ => None,
+        })
+        .filter_map(|call_id| {
+            if completed_call_ids.contains(&call_id) {
+                None
+            } else {
+                Some(call_id.clone())
+            }
+        })
+        .map(|call_id| ResponseItem::CustomToolCallOutput {
+            call_id,
+            output: "aborted".to_string(),
+        })
+        .collect::<Vec<_>>()
+}
+
+// MEE-25: try_run_turn関数（codex-1互換の核心ロジック）
+async fn try_run_turn(
+    mcp_manager: &McpConnectionManager,
+    tool_executor: &mut ToolExecutor,
+    tx_event: &mpsc::Sender<Event>,
+    sub_id: &str,
+    prompt: &Prompt,
+) -> Result<TurnRunResult> {
+    // MEE-25: missing_calls処理
+    let missing_calls = process_missing_calls_from_prompt(prompt);
+    
+    // missing_callsがある場合は、合成プロンプトを作成
+    let effective_prompt = if missing_calls.is_empty() {
+        prompt.clone()
+    } else {
+        // Add the synthetic aborted missing calls to the beginning of the input to ensure all call ids have responses.
+        let input = [missing_calls, prompt.input.clone()].concat();
+        Prompt::new(input)
+    };
+
+    let mut processed_items = Vec::new();
+
+    // 各ResponseItemを処理
+    for item in &effective_prompt.input {
+        if let Some(response) = handle_response_item(
+            mcp_manager,
+            tool_executor,
+            tx_event,
+            sub_id,
+            item.clone(),
+        ).await {
+            processed_items.push(ProcessedResponseItem {
+                item: item.clone(),
+                response: Some(response),
+            });
+        } else {
+            processed_items.push(ProcessedResponseItem {
+                item: item.clone(),
+                response: None,
+            });
+        }
+    }
+
+    Ok(TurnRunResult {
+        processed_items,
+        token_usage: None, // 簡略化: 実際の実装ではトークン使用量を追跡
+    })
 }
 
 // MEE-24: レスポンスアイテム処理関数
@@ -720,16 +818,29 @@ impl Codex {
                                             // Created イベントは特別な処理は不要
                                         }
                                         ResponseEvent::OutputItemDone(item) => {
-                                            // MEE-24: OutputItemDone処理
-                                            if let Some(_response) = handle_response_item(
+                                            // MEE-25: OutputItemDone処理でmissing_calls対応
+                                            let prompt = Prompt::new(vec![item]);
+                                            match try_run_turn(
                                                 &mcp_manager,
                                                 &mut tool_executor,
                                                 &tx_event,
                                                 "user_input",
-                                                item,
+                                                &prompt,
                                             ).await {
-                                                // レスポンスがある場合は会話履歴に追加
-                                                // 簡略化: 実際の実装では適切な会話管理が必要
+                                                Ok(turn_result) => {
+                                                    // 処理結果を会話履歴に追加
+                                                    for processed_item in turn_result.processed_items {
+                                                        if let Some(_response) = processed_item.response {
+                                                            // レスポンスがある場合の処理
+                                                            // 簡略化: 実際の実装では適切な会話管理が必要
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    let _ = tx_event.send(Event::Error {
+                                                        message: format!("try_run_turn failed: {}", e),
+                                                    }).await;
+                                                }
                                             }
                                         }
                                         ResponseEvent::CompletedWithDetails { response_id: _, token_usage: _ } => {
@@ -907,16 +1018,29 @@ impl Codex {
                                             // Created イベントは特別な処理は不要
                                         }
                                         ResponseEvent::OutputItemDone(item) => {
-                                            // MEE-24: OutputItemDone処理
-                                            if let Some(_response) = handle_response_item(
+                                            // MEE-25: OutputItemDone処理でmissing_calls対応
+                                            let prompt = Prompt::new(vec![item]);
+                                            match try_run_turn(
                                                 &mcp_manager,
                                                 &mut tool_executor,
                                                 &tx_event,
                                                 "user_input",
-                                                item,
+                                                &prompt,
                                             ).await {
-                                                // レスポンスがある場合は会話履歴に追加
-                                                // 簡略化: 実際の実装では適切な会話管理が必要
+                                                Ok(turn_result) => {
+                                                    // 処理結果を会話履歴に追加
+                                                    for processed_item in turn_result.processed_items {
+                                                        if let Some(_response) = processed_item.response {
+                                                            // レスポンスがある場合の処理
+                                                            // 簡略化: 実際の実装では適切な会話管理が必要
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    let _ = tx_event.send(Event::Error {
+                                                        message: format!("try_run_turn failed: {}", e),
+                                                    }).await;
+                                                }
                                             }
                                         }
                                         ResponseEvent::CompletedWithDetails { response_id: _, token_usage: _ } => {
