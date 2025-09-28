@@ -1620,6 +1620,18 @@ impl Session {
     pub async fn send_event(&self, event: Event) {
         let _ = self.tx_event.send(event).await;
     }
+    
+    /// MEE-30: 履歴の内容を取得（auto-compact用）
+    pub async fn get_history_contents(&self) -> Vec<ResponseItem> {
+        let state = self.state.lock().await;
+        state.history.contents()
+    }
+    
+    /// MEE-30: 履歴を置き換え（auto-compact用）
+    pub async fn replace_history(&self, new_history: Vec<ResponseItem>) {
+        let mut state = self.state.lock().await;
+        state.history.replace(new_history);
+    }
 }
 
 /// MEE-28: codex-1のrun_task関数を完全実装
@@ -1696,18 +1708,31 @@ async fn run_task(
         // 簡略版: 継続判定ロジック (codex-1:1883-1894)
         let responses: Vec<crate::conversation_history::ResponseInputItem> = Vec::new(); // 仮の空レスポンス
         
-        // トークン制限監視 (codex-1:1859-1879)
-        let token_limit_reached = false; // 簡略版: トークン制限は未実装
+        // MEE-30: トークン制限監視とauto-compact実装 (codex-1:1859-1879)
+        let auto_compact_token_limit = 100_000; // 10万トークンで自動発動
+        let current_tokens = estimate_token_count(&turn_input); // 簡易トークン推定
+        let token_limit_reached = current_tokens >= auto_compact_token_limit;
+        
+        tracing::info!(
+            "Token monitoring: current={}, limit={}, reached={}",
+            current_tokens, auto_compact_token_limit, token_limit_reached
+        );
         
         if token_limit_reached {
             if auto_compact_recently_attempted {
                 sess.send_event(Event::Error {
-                    message: "Conversation is still above the token limit after automatic summarization. Please start a new session.".to_string()
+                    message: format!(
+                        "Conversation is still above the token limit after automatic summarization (limit {}, current {}). Please start a new session.",
+                        auto_compact_token_limit, current_tokens
+                    )
                 }).await;
                 break;
             }
             auto_compact_recently_attempted = true;
-            // TODO: MEE-30で auto-compact 実装
+            
+            // MEE-30: auto-compact実行
+            tracing::info!("Token limit reached - triggering auto-compact");
+            crate::compact::run_inline_auto_compact_task(sess.clone(), turn_context.clone()).await;
             continue;
         }
         
@@ -1732,4 +1757,24 @@ async fn run_task(
     // タスク完了処理 (codex-1:1927-1932)
     sess.send_event(Event::TaskComplete).await;
     Ok(())
+}
+
+/// MEE-30: 簡易トークン数推定
+/// 参考: 1トークン ≈ 4文字（英語）、1トークン ≈ 2文字（日本語）の概算
+fn estimate_token_count(turn_input: &[ResponseItem]) -> i64 {
+    let total_chars: usize = turn_input
+        .iter()
+        .map(|item| match item {
+            ResponseItem::Message { content, .. } => {
+                content.iter().map(|c| match c {
+                    crate::conversation_history::ContentItem::InputText { text } | crate::conversation_history::ContentItem::OutputText { text } => text.len(),
+                    _ => 0,
+                }).sum::<usize>()
+            }
+            _ => 0,
+        })
+        .sum();
+    
+    // 保守的な推定: 1トークン ≈ 2.5文字（日英混在を想定）
+    (total_chars as f64 / 2.5) as i64
 }

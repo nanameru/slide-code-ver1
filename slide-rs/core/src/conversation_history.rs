@@ -244,6 +244,11 @@ impl ConversationHistory {
     pub fn push(&mut self, item: ResponseItem) {
         self.items.push(item);
     }
+    
+    /// MEE-30: 履歴を完全に置き換える（auto-compact用）
+    pub fn replace(&mut self, new_items: Vec<ResponseItem>) {
+        self.items = new_items;
+    }
 }
 
 // MEE-33: 既存のResponseInputItemを拡張
