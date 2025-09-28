@@ -89,7 +89,55 @@ impl OpenAiAdapter {
 #[async_trait]
 impl ModelClient for OpenAiAdapter {
     async fn stream(&self, prompt: String) -> Result<Receiver<ResponseEvent>> {
-        // Prefer meta-aware streaming to capture RateLimit headers when possible
+        // If Responses API is supported, stream via /responses with structured payload
+        if self.supports_responses_api() {
+            // Build minimal responses payload (input, optional tools/system added by caller)
+            let payload = serde_json::json!({
+                "input": [{"role":"user","content": [{"type":"input_text","text": prompt}]}]
+            });
+            let meta = self.inner.stream_responses_with_meta(payload).await?;
+            let (tx, rx) = tokio::sync::mpsc::channel(128);
+            if let Some(info) = meta.rate_limits {
+                let snapshot = RateLimitSnapshot {
+                    requests_remaining: info.requests_remaining,
+                    requests_reset_at: info.requests_reset_at,
+                    tokens_remaining: info.tokens_remaining,
+                    tokens_reset_at: info.tokens_reset_at,
+                };
+                let _ = tx.send(ResponseEvent::RateLimits(snapshot)).await;
+            }
+            let mut rx_text = meta.rx;
+            tokio::spawn(async move {
+                while let Some(delta) = rx_text.recv().await {
+                    if delta.is_empty() { let _ = tx.send(ResponseEvent::Completed).await; break; }
+                    if let Some(rest) = delta.strip_prefix("__TOOL_CALL__") {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) {
+                            let name = v["name"].as_str().unwrap_or("").to_string();
+                            let args = v["arguments"].to_string();
+                            let item = crate::conversation_history::ResponseItem::FunctionCall { id: None, name, arguments: args, call_id: uuid::Uuid::new_v4().to_string() };
+                            let _ = tx.send(ResponseEvent::OutputItemDone(item)).await;
+                            continue;
+                        }
+                    }
+                    if let Some(rest) = delta.strip_prefix("__USAGE__") {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) {
+                            let usage = protocol::protocol::TokenUsage {
+                                input_tokens: v["input_tokens"].as_u64().unwrap_or(0),
+                                cached_input_tokens: None,
+                                output_tokens: v["output_tokens"].as_u64().unwrap_or(0),
+                                reasoning_output_tokens: v["reasoning_output_tokens"].as_u64(),
+                                total_tokens: v["total_tokens"].as_u64().unwrap_or(0),
+                            };
+                            let _ = tx.send(ResponseEvent::CompletedWithDetails { response_id: uuid::Uuid::new_v4().to_string(), token_usage: Some(usage) }).await;
+                            continue;
+                        }
+                    }
+                    if tx.send(ResponseEvent::TextDelta(delta)).await.is_err() { break; }
+                }
+            });
+            return Ok(rx);
+        }
+        // Prefer meta-aware streaming to capture RateLimit headers when possible (Chat Completions)
         let meta = match self.inner.stream_chat_with_meta(prompt).await {
             Ok(m) => m,
             Err(_e) => {
@@ -98,27 +146,17 @@ impl ModelClient for OpenAiAdapter {
                 let (tx, rx) = tokio::sync::mpsc::channel(64);
                 tokio::spawn(async move {
                     while let Some(delta) = rx_text.recv().await {
-                        if delta.is_empty() {
-                            let _ = tx.send(ResponseEvent::Completed).await;
-                            break;
-                        }
+                        if delta.is_empty() { let _ = tx.send(ResponseEvent::Completed).await; break; }
                         if let Some(rest) = delta.strip_prefix("__TOOL_CALL__") {
                             if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) {
                                 let name = v["name"].as_str().unwrap_or("").to_string();
                                 let args = v["arguments"].to_string();
-                                let item = crate::conversation_history::ResponseItem::FunctionCall {
-                                    id: None,
-                                    name,
-                                    arguments: args,
-                                    call_id: uuid::Uuid::new_v4().to_string(),
-                                };
+                                let item = crate::conversation_history::ResponseItem::FunctionCall { id: None, name, arguments: args, call_id: uuid::Uuid::new_v4().to_string() };
                                 let _ = tx.send(ResponseEvent::OutputItemDone(item)).await;
                                 continue;
                             }
                         }
-                        if tx.send(ResponseEvent::TextDelta(delta)).await.is_err() {
-                            break;
-                        }
+                        if tx.send(ResponseEvent::TextDelta(delta)).await.is_err() { break; }
                     }
                 });
                 return Ok(rx);
@@ -167,7 +205,7 @@ impl ModelClient for OpenAiAdapter {
     }
     fn stream_max_retries(&self) -> usize { 5 }
     fn model_context_window(&self) -> Option<u64> { Some(128_000) }
-    fn supports_responses_api(&self) -> bool { false }
+    fn supports_responses_api(&self) -> bool { true }
     fn provider_name(&self) -> &'static str { "openai" }
     fn model_name(&self) -> Option<String> { Some(self.inner.model.clone()) }
 }

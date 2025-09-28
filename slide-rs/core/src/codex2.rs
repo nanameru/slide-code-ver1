@@ -256,39 +256,74 @@ async fn try_run_turn(
             ..prompt.clone()
         })
     };
-    // Promptを文字列に整形（最低限: ツール案内 + 直近のユーザー文）
-    let tools_instructions = render_tools_instructions(&turn_context.tools_config, None);
-    let mut user_text = String::new();
-    for item in &prompt.input {
-        if let ResponseItem::Message { role, content, .. } = item {
-            if role == "user" {
-                for c in content {
-                    if let crate::conversation_history::ContentItem::InputText { text }
-                    | crate::conversation_history::ContentItem::OutputText { text } = c
-                    {
-                        if !user_text.is_empty() { user_text.push_str("\n"); }
-                        user_text.push_str(text);
+    // Compose payload according to whether Responses API is supported
+    let supports_responses = turn_context.client.supports_responses_api();
+    let mut composed = String::new();
+    let mut responses_payload: Option<serde_json::Value> = None;
+    if supports_responses {
+        // Convert prompt.input (ResponseItem) to Responses API input blocks
+        let mut input_blocks: Vec<serde_json::Value> = Vec::new();
+        for item in &prompt.input {
+            match item {
+                ResponseItem::Message { role, content, .. } => {
+                    let mut blocks: Vec<serde_json::Value> = Vec::new();
+                    for c in content {
+                        match c {
+                            crate::conversation_history::ContentItem::InputText { text }
+                            | crate::conversation_history::ContentItem::OutputText { text } => {
+                                blocks.push(serde_json::json!({"type":"input_text","text": text}));
+                            }
+                            _ => {}
+                        }
+                    }
+                    input_blocks.push(serde_json::json!({"role": role, "content": blocks}));
+                }
+                ResponseItem::FunctionCall { name, arguments, call_id, .. } => {
+                    // Surface prior tool calls as assistant tool messages (optional)
+                    input_blocks.push(serde_json::json!({
+                        "role":"assistant",
+                        "content":[{"type":"tool_use","name":name, "arguments": arguments, "call_id": call_id}]
+                    }));
+                }
+                _ => {}
+            }
+        }
+        // Tools JSON (already converted earlier for OpenAI chat); reuse as-is for Responses
+        let tools_json = prompt.tools.clone();
+        let mut system_str = String::new();
+        if let Some(cw) = turn_context.client.model_context_window() { system_str.push_str(&format!("[context-window: {} tokens] ", cw)); }
+        if let Some(instr) = &prompt.base_instructions_override { system_str.push_str(instr); }
+        responses_payload = Some(serde_json::json!({
+            "input": input_blocks,
+            "tools": tools_json,
+            "system": if system_str.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(system_str) }
+        }));
+    } else {
+        // Chat Completions fallback: reconstruct textual composed prompt
+        let tools_instructions = render_tools_instructions(&turn_context.tools_config, None);
+        let mut user_text = String::new();
+        for item in &prompt.input {
+            if let ResponseItem::Message { role, content, .. } = item {
+                if role == "user" {
+                    for c in content {
+                        if let crate::conversation_history::ContentItem::InputText { text }
+                        | crate::conversation_history::ContentItem::OutputText { text } = c
+                        {
+                            if !user_text.is_empty() { user_text.push_str("\n"); }
+                            user_text.push_str(text);
+                        }
                     }
                 }
             }
         }
-    }
-    let mut composed = String::new();
-    if let Some(cw) = turn_context.client.model_context_window() {
-        composed.push_str(&format!("[context-window: {} tokens]\n\n", cw));
-    }
-    composed.push_str(&tools_instructions);
-    if let Some(instr) = &prompt.base_instructions_override {
-        composed.push_str("\n\n");
-        composed.push_str(instr);
-    }
-    if !user_text.is_empty() {
-        composed.push_str("\n\nUser:\n");
-        composed.push_str(&user_text);
+        if let Some(cw) = turn_context.client.model_context_window() { composed.push_str(&format!("[context-window: {} tokens]\n\n", cw)); }
+        composed.push_str(&tools_instructions);
+        if let Some(instr) = &prompt.base_instructions_override { composed.push_str("\n\n"); composed.push_str(instr); }
+        if !user_text.is_empty() { composed.push_str("\n\nUser:\n"); composed.push_str(&user_text); }
     }
 
-    // ストリーム開始
-    let mut rx = turn_context.client.stream(composed).await.map_err(|e| {
+    // ストリーム開始（Responses or Chat）
+    let mut rx = turn_context.client.stream(match responses_payload { Some(v) => v.to_string(), None => composed }).await.map_err(|e| {
         CodexErr::Stream(format!("stream start failed: {}", e), None)
     })?;
 
