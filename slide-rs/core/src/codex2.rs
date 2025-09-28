@@ -201,6 +201,8 @@ async fn try_run_turn(
     prompt: &Prompt,
 ) -> crate::error::CodexResult<TurnRunResult> {
     use std::borrow::Cow;
+    use crate::client::ResponseEvent;
+    use crate::error::CodexErr;
     
     // missing_calls処理 (codex-1:2043-2096を参考)
     let completed_call_ids = prompt
@@ -254,38 +256,103 @@ async fn try_run_turn(
             ..prompt.clone()
         })
     };
-
-    // 簡略版: モックAI応答を生成
-    let mut output = Vec::new();
-    
-    // ユーザーメッセージがある場合は、AIのモック応答を生成
-    let has_user_message = prompt.input.iter().any(|item| {
-        matches!(item, ResponseItem::Message { role, .. } if role == "user")
-    });
-    
-    if has_user_message {
-        // モックAI応答を生成
-        let mock_response = ResponseItem::Message {
-            id: Some(uuid::Uuid::new_v4().to_string()),
-            role: "assistant".to_string(),
-            content: vec![crate::conversation_history::ContentItem::OutputText {
-                text: "MEE-29テスト: 実際のAI呼び出しが正常に動作しています。このメッセージは最終応答です。".to_string(),
-            }],
-        };
-        
-        output.push(ProcessedResponseItem {
-            item: mock_response,
-            response: None, // 最終応答なのでresponseはなし
-        });
-    } else {
-        // ユーザーメッセージがない場合は空の結果を返す
-        tracing::info!("No user message found in turn input");
+    // Promptを文字列に整形（最低限: ツール案内 + 直近のユーザー文）
+    let tools_instructions = render_tools_instructions(&turn_context.tools_config, None);
+    let mut user_text = String::new();
+    for item in &prompt.input {
+        if let ResponseItem::Message { role, content, .. } = item {
+            if role == "user" {
+                for c in content {
+                    if let crate::conversation_history::ContentItem::InputText { text }
+                    | crate::conversation_history::ContentItem::OutputText { text } = c
+                    {
+                        if !user_text.is_empty() { user_text.push_str("\n"); }
+                        user_text.push_str(text);
+                    }
+                }
+            }
+        }
+    }
+    let mut composed = String::new();
+    composed.push_str(&tools_instructions);
+    if let Some(instr) = &prompt.base_instructions_override {
+        composed.push_str("\n\n");
+        composed.push_str(instr);
+    }
+    if !user_text.is_empty() {
+        composed.push_str("\n\nUser:\n");
+        composed.push_str(&user_text);
     }
 
-    Ok(TurnRunResult {
-        processed_items: output,
-        token_usage: None, // 簡略版: トークン使用量追跡は未実装
-    })
+    // ストリーム開始
+    let mut rx = turn_context.client.stream(composed).await.map_err(|e| {
+        CodexErr::Stream(format!("stream start failed: {}", e), None)
+    })?;
+
+    // ツール実行エンジン
+    let mut tool_executor = ToolExecutor::new(
+        turn_context.approval_policy.clone(),
+        turn_context.sandbox_policy.clone(),
+        turn_context.cwd.clone(),
+        crate::config_types::ShellEnvironmentPolicy::default(),
+    );
+
+    let mut processed_items: Vec<ProcessedResponseItem> = Vec::new();
+
+    while let Some(ev) = rx.recv().await {
+        match ev {
+            ResponseEvent::Created => {
+                // no-op
+            }
+            ResponseEvent::TextDelta(delta)
+            | ResponseEvent::OutputTextDelta(delta)
+            | ResponseEvent::ReasoningSummaryDelta(delta)
+            | ResponseEvent::ReasoningContentDelta(delta) => {
+                sess.send_event(Event::AgentMessageDelta { delta }).await;
+            }
+            ResponseEvent::OutputItemDone(item) => {
+                let response = handle_response_item(
+                    &*sess.mcp_connection_manager,
+                    &mut tool_executor,
+                    &sess.tx_event,
+                    sub_id,
+                    item.clone(),
+                )
+                .await;
+                processed_items.push(ProcessedResponseItem { item, response });
+            }
+            ResponseEvent::CompletedWithDetails { response_id: _, token_usage } => {
+                return Ok(TurnRunResult {
+                    processed_items,
+                    token_usage,
+                });
+            }
+            ResponseEvent::Completed => {
+                return Ok(TurnRunResult {
+                    processed_items,
+                    token_usage: None,
+                });
+            }
+            ResponseEvent::WebSearchCallBegin { .. } => {
+                // optional: surface to UI later
+            }
+            ResponseEvent::RateLimits(_snapshot) => {
+                // optional: surface to UI later
+            }
+            ResponseEvent::ReasoningSummaryPartAdded => {
+                // no-op for now
+            }
+            ResponseEvent::Error(message) => {
+                sess.send_event(Event::Error { message: message.clone() }).await;
+                return Err(CodexErr::Stream(message, None));
+            }
+        }
+    }
+
+    Err(CodexErr::Stream(
+        "stream closed before response completion".to_string(),
+        None,
+    ))
 }
 
 // MEE-26: handle_response_item完全実装（codex-1レベル7種類対応）
