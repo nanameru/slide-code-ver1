@@ -40,6 +40,11 @@ pub struct RateLimitSnapshot {
 #[async_trait]
 pub trait ModelClient {
     async fn stream(&self, prompt: String) -> Result<Receiver<ResponseEvent>>;
+    fn stream_max_retries(&self) -> usize { 3 }
+    fn model_context_window(&self) -> Option<u64> { None }
+    fn supports_responses_api(&self) -> bool { false }
+    fn provider_name(&self) -> &'static str { "unknown" }
+    fn model_name(&self) -> Option<String> { None }
 }
 
 /// A very small stub client for testing the flow.
@@ -55,6 +60,11 @@ impl ModelClient for StubClient {
         let _ = tx.send(ResponseEvent::Completed).await;
         Ok(rx)
     }
+    fn stream_max_retries(&self) -> usize { 1 }
+    fn model_context_window(&self) -> Option<u64> { None }
+    fn supports_responses_api(&self) -> bool { false }
+    fn provider_name(&self) -> &'static str { "stub" }
+    fn model_name(&self) -> Option<String> { None }
 }
 
 /// Adapter to wrap OpenAiModelClient into ModelClient
@@ -79,8 +89,53 @@ impl OpenAiAdapter {
 #[async_trait]
 impl ModelClient for OpenAiAdapter {
     async fn stream(&self, prompt: String) -> Result<Receiver<ResponseEvent>> {
-        let mut rx_text = self.inner.stream_chat(prompt).await?;
+        // Prefer meta-aware streaming to capture RateLimit headers when possible
+        let meta = match self.inner.stream_chat_with_meta(prompt).await {
+            Ok(m) => m,
+            Err(_e) => {
+                // Fallback to legacy API
+                let mut rx_text = self.inner.stream_chat(String::new()).await?;
+                let (tx, rx) = tokio::sync::mpsc::channel(64);
+                tokio::spawn(async move {
+                    while let Some(delta) = rx_text.recv().await {
+                        if delta.is_empty() {
+                            let _ = tx.send(ResponseEvent::Completed).await;
+                            break;
+                        }
+                        if let Some(rest) = delta.strip_prefix("__TOOL_CALL__") {
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) {
+                                let name = v["name"].as_str().unwrap_or("").to_string();
+                                let args = v["arguments"].to_string();
+                                let item = crate::conversation_history::ResponseItem::FunctionCall {
+                                    id: None,
+                                    name,
+                                    arguments: args,
+                                    call_id: uuid::Uuid::new_v4().to_string(),
+                                };
+                                let _ = tx.send(ResponseEvent::OutputItemDone(item)).await;
+                                continue;
+                            }
+                        }
+                        if tx.send(ResponseEvent::TextDelta(delta)).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+                return Ok(rx);
+            }
+        };
         let (tx, rx) = tokio::sync::mpsc::channel(64);
+        // Emit RateLimits snapshot once if present
+        if let Some(info) = meta.rate_limits {
+            let snapshot = RateLimitSnapshot {
+                requests_remaining: info.requests_remaining,
+                requests_reset_at: info.requests_reset_at,
+                tokens_remaining: info.tokens_remaining,
+                tokens_reset_at: info.tokens_reset_at,
+            };
+            let _ = tx.send(ResponseEvent::RateLimits(snapshot)).await;
+        }
+        let mut rx_text = meta.rx;
         tokio::spawn(async move {
             while let Some(delta) = rx_text.recv().await {
                 if delta.is_empty() {
@@ -110,4 +165,9 @@ impl ModelClient for OpenAiAdapter {
         });
         Ok(rx)
     }
+    fn stream_max_retries(&self) -> usize { 5 }
+    fn model_context_window(&self) -> Option<u64> { Some(128_000) }
+    fn supports_responses_api(&self) -> bool { false }
+    fn provider_name(&self) -> &'static str { "openai" }
+    fn model_name(&self) -> Option<String> { Some(self.inner.model.clone()) }
 }

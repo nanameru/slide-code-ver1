@@ -192,4 +192,136 @@ impl OpenAiModelClient {
         });
         Ok(rx)
     }
+
+    /// Enhanced streaming that also returns initial rate limit meta and the receiver.
+    /// This is used by the higher-level adapter to emit ResponseEvent::RateLimits once.
+    pub async fn stream_chat_with_meta(&self, prompt: String) -> Result<StreamWithMeta> {
+        let client = reqwest::Client::new();
+        let body = serde_json::json!({
+            "model": self.model,
+            "messages": [{"role":"user","content": prompt}],
+            "stream": true,
+        });
+        append_log(&format!(
+            "Request Body(meta): {}",
+            serde_json::to_string_pretty(&body).unwrap_or_default()
+        ));
+
+        let mut req = client
+            .post("https://api.openai.com/v1/chat/completions")
+            .bearer_auth(&self.api_key)
+            .header("content-type", "application/json");
+        if let Ok(project) = std::env::var("OPENAI_PROJECT") {
+            if !project.is_empty() {
+                append_log(&format!("Adding Header OpenAI-Project: {}", &project));
+                req = req.header("OpenAI-Project", project);
+            }
+        }
+        if let Ok(org) = std::env::var("OPENAI_ORG") {
+            if !org.is_empty() {
+                append_log(&format!("Adding Header OpenAI-Organization: {}", &org));
+                req = req.header("OpenAI-Organization", org);
+            }
+        }
+        let resp = req.json(&body).send().await.map_err(|e| anyhow!(e))?;
+
+        let status = resp.status();
+        append_log(&format!("Response Status(meta): {}", status));
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            let log_msg = format!("openai http {}: {}", status, text);
+            append_log(&log_msg);
+            return Err(anyhow!(log_msg));
+        }
+
+        // Extract basic rate limit info from headers if present
+        let headers = resp.headers().clone();
+        let parse_u32 = |k: &str| -> Option<u32> {
+            headers.get(k).and_then(|v| v.to_str().ok()).and_then(|s| s.parse::<u32>().ok())
+        };
+        let parse_u64 = |k: &str| -> Option<u64> {
+            headers.get(k).and_then(|v| v.to_str().ok()).and_then(|s| s.parse::<u64>().ok())
+        };
+        let rate_limits = RateLimitInfo {
+            requests_remaining: parse_u32("x-ratelimit-remaining-requests"),
+            requests_reset_at: parse_u64("x-ratelimit-reset-requests"),
+            tokens_remaining: parse_u32("x-ratelimit-remaining-tokens"),
+            tokens_reset_at: parse_u64("x-ratelimit-reset-tokens"),
+        };
+
+        let stream = resp.bytes_stream();
+        let (tx, rx) = mpsc::channel::<String>(64);
+        tokio::spawn(async move {
+            use futures_util::StreamExt;
+            let mut buf = Vec::new();
+            let mut stream = Box::pin(stream);
+            while let Some(chunk) = stream.next().await {
+                match chunk {
+                    Ok(bytes) => {
+                        append_log(&format!("Received chunk(meta) ({} bytes)", bytes.len()));
+                        buf.extend_from_slice(&bytes);
+                        loop {
+                            if let Some(pos) = memchr::memmem::find(&buf, b"\n\n") {
+                                let part = buf.drain(..pos + 2).collect::<Vec<u8>>();
+                                if let Ok(text) = String::from_utf8(part) {
+                                    for line in text.lines() {
+                                        let line = line.trim_start();
+                                        if let Some(rest) = line.strip_prefix("data: ") {
+                                            if rest == "[DONE]" {
+                                                let _ = tx.send(String::new()).await;
+                                                return;
+                                            }
+                                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) {
+                                                if let Some(s) = v["choices"][0]["delta"]["content"].as_str() {
+                                                    if !s.is_empty() { if tx.send(s.to_string()).await.is_err() { return; } }
+                                                } else {
+                                                    if let Some(arr) = v["choices"][0]["delta"]["content"].as_array() {
+                                                        for item in arr {
+                                                            let t = item["text"].as_str().or_else(|| item["content"].as_str());
+                                                            if let Some(text) = t { if !text.is_empty() { if tx.send(text.to_string()).await.is_err() { return; } } }
+                                                        }
+                                                    }
+                                                    if let Some(tc) = v["choices"][0]["delta"]["tool_calls"].as_array() {
+                                                        for call in tc {
+                                                            let name = call["function"]["name"].as_str().unwrap_or("");
+                                                            let args = call["function"]["arguments"].as_str().unwrap_or("");
+                                                            let marker = format!("__TOOL_CALL__{{\"name\":\"{}\",\"arguments\":{}}}", name, args);
+                                                            if tx.send(marker).await.is_err() { return; }
+                                                        }
+                                                    }
+                                                }
+                                            } else {
+                                                append_log(&format!("SSE JSON parse error on(meta): {}", rest));
+                                            }
+                                        }
+                                    }
+                                }
+                            } else { break; }
+                        }
+                    }
+                    Err(e) => {
+                        append_log(&format!("Stream chunk error(meta): {}", e));
+                        let _ = tx.send(String::new()).await;
+                        return;
+                    }
+                }
+            }
+            append_log("Stream finished(meta)");
+            let _ = tx.send(String::new()).await;
+        });
+        Ok(StreamWithMeta { rx, rate_limits: Some(rate_limits) })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RateLimitInfo {
+    pub requests_remaining: Option<u32>,
+    pub requests_reset_at: Option<u64>,
+    pub tokens_remaining: Option<u32>,
+    pub tokens_reset_at: Option<u64>,
+}
+
+pub struct StreamWithMeta {
+    pub rx: mpsc::Receiver<String>,
+    pub rate_limits: Option<RateLimitInfo>,
 }

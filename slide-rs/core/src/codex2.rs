@@ -154,8 +154,9 @@ async fn run_turn(
         base_instructions_override: None, // 簡略版: オーバーライドなし
     };
 
-    // リトライループ (codex-1:1978-2017を参考)
+    // リトライループ (codex-1:1978-2017を参考) - provider設定に基づく
     let mut retries = 0;
+    let max_retries = turn_context.client.stream_max_retries();
     loop {
         match try_run_turn(sess, turn_context, &sub_id, &prompt).await {
             Ok(output) => return Ok(output),
@@ -165,13 +166,11 @@ async fn run_turn(
                 return Err(e);
             }
             Err(e) => {
-                // プロバイダー固有のリトライ上限を使用 (codex-1:1989を参考)
-                let max_retries = 3; // 簡略版: 固定値
                 if retries < max_retries {
                     retries += 1;
                     let delay = match e {
                         CodexErr::Stream(_, Some(delay)) => delay,
-                        _ => backoff(retries),
+                        _ => backoff(retries as u64),
                     };
                     tracing::warn!(
                         "stream disconnected - retrying turn ({}/{} in {:?})...",
@@ -184,7 +183,7 @@ async fn run_turn(
                         "stream error: {}; retrying {}/{} in {:?}…",
                         e, retries, max_retries, delay
                     );
-                    
+
                     tokio::time::sleep(delay).await;
                 } else {
                     return Err(e);
@@ -275,6 +274,9 @@ async fn try_run_turn(
         }
     }
     let mut composed = String::new();
+    if let Some(cw) = turn_context.client.model_context_window() {
+        composed.push_str(&format!("[context-window: {} tokens]\n\n", cw));
+    }
     composed.push_str(&tools_instructions);
     if let Some(instr) = &prompt.base_instructions_override {
         composed.push_str("\n\n");
@@ -317,13 +319,20 @@ async fn try_run_turn(
                 assembled_assistant_text.push_str(&delta);
                 sess.send_event(Event::AgentMessageDelta { delta }).await;
             }
+            ResponseEvent::RateLimits(snapshot) => {
+                let msg = format!(
+                    "[RateLimits] requests_remaining={:?} tokens_remaining={:?}",
+                    snapshot.requests_remaining, snapshot.tokens_remaining
+                );
+                sess.send_event(Event::AgentMessageDelta { delta: format!("\n\n{}\n", msg) }).await;
+            }
             ResponseEvent::OutputItemDone(item) => {
                 let response = handle_response_item(
                     &*sess.mcp_connection_manager,
                     &mut tool_executor,
                     &sess.tx_event,
-                    sub_id,
-                    item.clone(),
+            sub_id,
+            item.clone(),
                 )
                 .await;
                 processed_items.push(ProcessedResponseItem { item, response });
@@ -333,6 +342,13 @@ async fn try_run_turn(
                     if !patch.is_empty() {
                         sess.send_event(Event::TurnDiff { unified_diff: patch }).await;
                     }
+                }
+                if let Some(usage) = token_usage.clone() {
+                    let summary = format!(
+                        "[TokenUsage] input={} output={} total={}",
+                        usage.input_tokens, usage.output_tokens, usage.total_tokens
+                    );
+                    sess.send_event(Event::AgentMessageDelta { delta: format!("\n\n{}\n", summary) }).await;
                 }
                 if !assembled_assistant_text.is_empty() {
                     let msg = ResponseItem::Message {
@@ -535,11 +551,11 @@ async fn handle_function_call(
                     let block = format!("\n\n[Tool Execution Result]\n{}", output);
                     let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
                     ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: crate::conversation_history::FunctionCallOutputPayload {
-                            content: output,
-                            success: Some(true),
-                        },
+                    call_id,
+                    output: crate::conversation_history::FunctionCallOutputPayload {
+                        content: output,
+                        success: Some(true),
+                    },
                     }
                 }
                 Err(e) => {
@@ -547,11 +563,11 @@ async fn handle_function_call(
                     let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
                     let _ = tx_event.send(Event::Error { message: format!("Tool execution failed: {}", e) }).await;
                     ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: crate::conversation_history::FunctionCallOutputPayload {
-                            content: format!("Error: {}", e),
-                            success: Some(false),
-                        },
+                    call_id,
+                    output: crate::conversation_history::FunctionCallOutputPayload {
+                        content: format!("Error: {}", e),
+                        success: Some(false),
+                },
                     }
                 }
             }
@@ -594,11 +610,11 @@ async fn handle_function_call(
                     let block = format!("\n\n[Tool Execution Result]\n{}", output);
                     let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
                     ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: crate::conversation_history::FunctionCallOutputPayload {
-                            content: output,
-                            success: Some(true),
-                        },
+                    call_id,
+                    output: crate::conversation_history::FunctionCallOutputPayload {
+                        content: output,
+                        success: Some(true),
+                    },
                     }
                 }
                 Err(e) => {
@@ -606,11 +622,11 @@ async fn handle_function_call(
                     let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
                     let _ = tx_event.send(Event::Error { message: format!("Tool execution failed: {}", e) }).await;
                     ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: crate::conversation_history::FunctionCallOutputPayload {
-                            content: format!("Error: {}", e),
-                            success: Some(false),
-                        },
+                    call_id,
+                    output: crate::conversation_history::FunctionCallOutputPayload {
+                        content: format!("Error: {}", e),
+                        success: Some(false),
+                },
                     }
                 }
             }
@@ -699,11 +715,11 @@ async fn handle_local_shell_call(
             let block = format!("\n\n[Tool Execution Result]\n{}", output);
             let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
             ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: crate::conversation_history::FunctionCallOutputPayload {
-                    content: output,
-                    success: Some(true),
-                },
+            call_id,
+            output: crate::conversation_history::FunctionCallOutputPayload {
+                content: output,
+                success: Some(true),
+            },
             }
         }
         Err(e) => {
@@ -711,11 +727,11 @@ async fn handle_local_shell_call(
             let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
             let _ = tx_event.send(Event::Error { message: format!("Tool execution failed: {}", e) }).await;
             ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: crate::conversation_history::FunctionCallOutputPayload {
-                    content: format!("Error: {}", e),
-                    success: Some(false),
-                },
+            call_id,
+            output: crate::conversation_history::FunctionCallOutputPayload {
+                content: format!("Error: {}", e),
+                success: Some(false),
+        },
             }
         }
     }
