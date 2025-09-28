@@ -104,9 +104,10 @@ pub enum Op {
     ListMcpTools,
     ListCustomPrompts,
 
-    /// Utilities
-    Compact,
-    Shutdown,
+    /// Review mode: enter a dedicated review flow
+    Review {
+        review_request: ReviewRequest,
+    },
 }
 
 /// Determines the conditions under which the user is consulted to approve
@@ -296,6 +297,10 @@ pub enum EventMsg {
     ContinuousExecutionEnd(ContinuousExecutionEndEvent),
     ToolExecutionBegin(ToolExecutionBeginEvent),
     ToolExecutionEnd(ToolExecutionEndEvent),
+
+    // Review mode events
+    EnteredReviewMode(ReviewRequest),
+    ExitedReviewMode(ExitedReviewModeEvent),
 }
 
 // Payloads
@@ -646,6 +651,32 @@ pub struct ProcessedResponseItem {
 pub enum TurnAbortReason {
     Interrupted,
     Replaced,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct ReviewRequest {
+    pub prompt: String,
+    pub user_facing_hint: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct ReviewFinding {
+    pub title: String,
+    pub body: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub severity: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct ReviewOutputEvent {
+    pub overall_explanation: String,
+    pub findings: Vec<ReviewFinding>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct ExitedReviewModeEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_output: Option<ReviewOutputEvent>,
 }
 
 #[cfg(test)]

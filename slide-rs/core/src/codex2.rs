@@ -80,6 +80,21 @@ struct Prompt {
     base_instructions_override: Option<String>,
 }
 
+fn parse_review_output_event(text: &str) -> protocol::protocol::ReviewOutputEvent {
+    // 最小実装: テキスト全体を overall_explanation に、見出しっぽい行を findings に（将来強化可）
+    let mut findings = Vec::new();
+    for line in text.lines() {
+        let l = line.trim();
+        if l.starts_with('-') || l.starts_with('*') || l.starts_with('•') {
+            let content = l.trim_start_matches(['-', '*', '•', ' '].as_ref()).to_string();
+            if !content.is_empty() {
+                findings.push(protocol::protocol::ReviewFinding { title: content.clone(), body: String::new(), severity: None });
+            }
+        }
+    }
+    protocol::protocol::ReviewOutputEvent { overall_explanation: text.to_string(), findings }
+}
+
 // MEE-25: missing_calls完全実装
 fn process_missing_calls_from_prompt(prompt: &Prompt) -> Vec<ResponseItem> {
     // call_ids that are part of this response (completed calls)
@@ -367,6 +382,7 @@ async fn try_run_turn(
                     &mut tool_executor,
                     &sess.tx_event,
             sub_id,
+            turn_context.is_review_mode,
             item.clone(),
                 )
                 .await;
@@ -445,6 +461,7 @@ async fn handle_response_item(
     tool_executor: &mut ToolExecutor,
     tx_event: &mpsc::Sender<Event>,
     sub_id: &str,
+    is_review_mode: bool,
     item: ResponseItem,
 ) -> Option<ResponseInputItem> {
     use tracing::{debug, info, error};
@@ -454,6 +471,11 @@ async fn handle_response_item(
     match item {
         // 1. FunctionCall処理 (MCP + 通常ツール)
         ResponseItem::FunctionCall { name, arguments, call_id, .. } => {
+            if is_review_mode {
+                let summary = format!("[Review Mode] Would execute tool: {}({})", name, arguments);
+                let _ = tx_event.send(Event::AgentMessageDelta { delta: format!("\n{}\n", summary) }).await;
+                return Some(ResponseInputItem::FunctionCallOutput { call_id, output: crate::conversation_history::FunctionCallOutputPayload { content: "Skipped execution (review mode)".to_string(), success: None } });
+            }
             info!("FunctionCall: {name}({arguments})");
             Some(
                 handle_function_call(
@@ -472,6 +494,12 @@ async fn handle_response_item(
         ResponseItem::LocalShellCall { id, call_id, status: _, action } => {
             let crate::conversation_history::LocalShellAction::Exec(action) = action;
             info!("LocalShellCall: {action:?}");
+            if is_review_mode {
+                let summary = format!("[Review Mode] Would run shell: {:?}", action);
+                let _ = tx_event.send(Event::AgentMessageDelta { delta: format!("\n{}\n", summary) }).await;
+                let cid = call_id.or(id).unwrap_or_default();
+                return Some(ResponseInputItem::FunctionCallOutput { call_id: cid, output: crate::conversation_history::FunctionCallOutputPayload { content: "Skipped execution (review mode)".to_string(), success: None } });
+            }
             
             let effective_call_id = match (call_id, id) {
                 (Some(call_id), _) => call_id,
@@ -1005,6 +1033,10 @@ pub enum Op {
         id: String,
         decision: ReviewDecision,
     },
+    /// Enter dedicated review mode
+    Review {
+        review_request: protocol::protocol::ReviewRequest,
+    },
     Shutdown,
 }
 
@@ -1050,6 +1082,7 @@ pub(crate) struct TurnContext {
     pub(crate) effort: Option<ReasoningEffort>,
     pub(crate) tools_config: crate::openai_tools::ToolsConfig, // MEE-29: ツール設定追加
     pub(crate) base_instructions: Option<String>, // MEE-29: ベース指示追加
+    pub(crate) is_review_mode: bool, // MEE-31: レビューモード
 }
 
 pub struct CodexSpawnOk {
@@ -1160,6 +1193,7 @@ impl Codex {
                             }
                             continue;
                         }
+                    // Op::Review は別アームで処理
 
                         // MEE-33: セッション管理統合による動的判断ループ呼び出し
                         let sess = Arc::new(Session::new(
@@ -1183,6 +1217,7 @@ impl Codex {
                         experimental_unified_exec_tool: false,
                     }, // MEE-29: デフォルト設定
                     base_instructions: None, // MEE-29: ベース指示なし
+                    is_review_mode: false,
                 });
 
                         // MEE-28: 新しいrun_task関数を呼び出し
@@ -1751,6 +1786,41 @@ impl Codex {
                             }
                         }
                     }
+                    Op::Review { review_request } => {
+                        // レビューモード: is_review_mode=true のサブ・コンテキストで isolated に実行
+                        let sess = Arc::new(Session::new(tx_event.clone(), mcp_manager.clone()));
+                        let review_turn_context = Arc::new(TurnContext {
+                            client: current_model_client.clone(),
+                            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                            approval_policy: current_approval.clone(),
+                            sandbox_policy: current_sandbox.clone(),
+                            model: current_model.clone(),
+                            effort: current_effort,
+                            tools_config: crate::openai_tools::ToolsConfig {
+                                shell_type: crate::openai_tools::ConfigShellToolType::Default,
+                                plan_tool: false,
+                                apply_patch_tool_type: None,
+                                web_search_request: false,
+                                include_view_image_tool: false,
+                                experimental_unified_exec_tool: false,
+                            },
+                            base_instructions: None,
+                            is_review_mode: true,
+                        });
+                        let sub_id = uuid::Uuid::new_v4().to_string();
+                        // 先に EnteredReviewMode を通知（Protocol正式イベント実装前に暫定デルタ）
+                        let _ = tx_event.send(Event::AgentMessageDelta { delta: format!("\n>> Code review started: {} <<\n", review_request.user_facing_hint) }).await;
+                        // 初期入力は review_request.prompt をユーザメッセージとして渡す
+                        let input = vec![crate::conversation_history::ResponseInputItem::Message {
+                            role: "user".to_string(),
+                            content: vec![crate::conversation_history::ContentItem::InputText { text: review_request.prompt.clone() }],
+                        }];
+                        if let Err(e) = run_task(sess.clone(), review_turn_context.clone(), sub_id.clone(), input).await {
+                            let _ = tx_event.send(Event::Error { message: e.to_string() }).await;
+                        }
+                        // 終了バナー（Protocol正式イベント実装前に暫定デルタ）
+                        let _ = tx_event.send(Event::AgentMessageDelta { delta: "\n<< Code review finished >>\n".to_string() }).await;
+                    }
                     Op::Interrupt => {
                         let mut g = running_child.lock().await;
                         if let Some((rid, mut child, st)) = g.take() {
@@ -2079,7 +2149,29 @@ async fn run_task(
     
     // レビューモード終了処理 (codex-1:1918-1925)
     if is_review_mode {
-        // TODO: MEE-31でレビューモード実装
+        if let Some(text) = &last_agent_message {
+            let out = parse_review_output_event(text);
+            // 所見を簡潔なメッセージに整形して提示
+            let mut body = String::new();
+            if !out.overall_explanation.trim().is_empty() {
+                body.push_str(out.overall_explanation.trim());
+            }
+            if !out.findings.is_empty() {
+                body.push_str("\n\nFindings:\n");
+                for f in out.findings {
+                    if let Some(sev) = f.severity {
+                        body.push_str(&format!("- [{}] {}: {}\n", sev, f.title, f.body));
+                    } else {
+                        body.push_str(&format!("- {}: {}\n", f.title, f.body));
+                    }
+                }
+            }
+            if !body.is_empty() {
+                sess.send_event(Event::AgentMessage { message: body }).await;
+            }
+        }
+        // 終了バナー
+        sess.send_event(Event::AgentMessageDelta { delta: "\n<< Code review finished >>\n".to_string() }).await;
     }
     
     // タスク完了処理 (codex-1:1927-1932)
