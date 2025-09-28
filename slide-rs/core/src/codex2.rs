@@ -298,6 +298,7 @@ async fn try_run_turn(
     );
 
     let mut processed_items: Vec<ProcessedResponseItem> = Vec::new();
+    let mut assembled_assistant_text = String::new();
 
     while let Some(ev) = rx.recv().await {
         match ev {
@@ -308,6 +309,8 @@ async fn try_run_turn(
             | ResponseEvent::OutputTextDelta(delta)
             | ResponseEvent::ReasoningSummaryDelta(delta)
             | ResponseEvent::ReasoningContentDelta(delta) => {
+                // Use the delta first, then move it into the event
+                assembled_assistant_text.push_str(&delta);
                 sess.send_event(Event::AgentMessageDelta { delta }).await;
             }
             ResponseEvent::OutputItemDone(item) => {
@@ -322,12 +325,28 @@ async fn try_run_turn(
                 processed_items.push(ProcessedResponseItem { item, response });
             }
             ResponseEvent::CompletedWithDetails { response_id: _, token_usage } => {
+                if !assembled_assistant_text.is_empty() {
+                    let msg = ResponseItem::Message {
+                        id: Some(uuid::Uuid::new_v4().to_string()),
+                        role: "assistant".to_string(),
+                        content: vec![crate::conversation_history::ContentItem::OutputText { text: assembled_assistant_text.clone() }],
+                    };
+                    processed_items.push(ProcessedResponseItem { item: msg, response: None });
+                }
                 return Ok(TurnRunResult {
                     processed_items,
                     token_usage,
                 });
             }
             ResponseEvent::Completed => {
+                if !assembled_assistant_text.is_empty() {
+                    let msg = ResponseItem::Message {
+                        id: Some(uuid::Uuid::new_v4().to_string()),
+                        role: "assistant".to_string(),
+                        content: vec![crate::conversation_history::ContentItem::OutputText { text: assembled_assistant_text.clone() }],
+                    };
+                    processed_items.push(ProcessedResponseItem { item: msg, response: None });
+                }
                 return Ok(TurnRunResult {
                     processed_items,
                     token_usage: None,

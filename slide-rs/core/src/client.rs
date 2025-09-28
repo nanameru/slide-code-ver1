@@ -87,6 +87,22 @@ impl ModelClient for OpenAiAdapter {
                     let _ = tx.send(ResponseEvent::Completed).await;
                     break;
                 }
+                // Detect tool-call marker lines emitted by slide-chatgpt client
+                if let Some(rest) = delta.strip_prefix("__TOOL_CALL__") {
+                    // rest is JSON like {"name":"...","arguments":{...}}
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) {
+                        let name = v["name"].as_str().unwrap_or("").to_string();
+                        let args = v["arguments"].to_string();
+                        let item = crate::conversation_history::ResponseItem::FunctionCall {
+                            id: None,
+                            name,
+                            arguments: args,
+                            call_id: uuid::Uuid::new_v4().to_string(),
+                        };
+                        let _ = tx.send(ResponseEvent::OutputItemDone(item)).await;
+                        continue;
+                    }
+                }
                 if tx.send(ResponseEvent::TextDelta(delta)).await.is_err() {
                     break;
                 }
