@@ -152,16 +152,37 @@ async fn run_turn(
     use crate::util::backoff;
     
     // ツール準備 (codex-1:1967-1970を参考)
-    // MCPツール一覧を取得し、OpenAIツール形式に変換
+    // 画像の有無を検出し、当該ターンのみ view_image を有効化
+    let has_image_in_input = input.iter().any(|ri| match ri {
+        ResponseItem::Message { content, .. } => content.iter().any(|c| matches!(c, crate::conversation_history::ContentItem::InputImage { .. })),
+        _ => false,
+    });
+
+    let mut effective_tools_cfg = turn_context.tools_config.clone();
+    // 毎ターンの一時設定としてセット（次ターンへは漏れない）
+    effective_tools_cfg.include_view_image_tool = has_image_in_input;
+
+    // MCPツール一覧を取得し、OpenAIツール形式に変換→Responses API JSONへ
     let tools_openai = crate::openai_tools::get_openai_tools(
-        &turn_context.tools_config,
+        &effective_tools_cfg,
         Some(sess.mcp_connection_manager.list_all_tools()),
     );
-    // PromptがVec<serde_json::Value>を期待しているためJSONへ変換
-    let tools_json: Vec<serde_json::Value> = tools_openai
-        .iter()
-        .filter_map(|t| serde_json::to_value(t).ok())
-        .collect();
+    let tools_json: Vec<serde_json::Value> = crate::openai_tools::create_tools_json_for_responses_api(&tools_openai)
+        .unwrap_or_else(|_| Vec::new());
+
+    // デバッグ: 毎ターンのツール名を出力
+    {
+        let names: Vec<String> = tools_openai
+            .iter()
+            .map(|t| match t {
+                crate::openai_tools::OpenAiTool::Function(f) => f.name.clone(),
+                crate::openai_tools::OpenAiTool::LocalShell { .. } => "local_shell".to_string(),
+                crate::openai_tools::OpenAiTool::WebSearch { .. } => "web_search".to_string(),
+                crate::openai_tools::OpenAiTool::Freeform(f) => format!("custom:{}", f.name),
+            })
+            .collect();
+        tracing::debug!("tools for turn (has_image={}): {:?}", has_image_in_input, names);
+    }
     
     let prompt = Prompt {
         input,
@@ -1143,58 +1164,7 @@ impl Codex {
                         // No immediate event; next turn will use updated context annotations.
                     }
                     Op::UserInput { text } => {
-                        let _ = tx_event.send(Event::TaskStarted).await;
-                        if let Some(prompt) = text.strip_prefix("/slide ") {
-                            match slide_client
-                                .generate_slides(SlideRequest {
-                                    prompt: prompt.to_string(),
-                                    num_slides: 6,
-                                    language: "ja".to_string(),
-                                })
-                                .await
-                            {
-                                Ok(resp) => {
-                                    for line in resp.markdown.lines() {
-                                        let delta = format!("{}\n", line);
-                                        let _ =
-                                            tx_event.send(Event::AgentMessageDelta { delta }).await;
-                                    }
-                                    let save_path = PathBuf::from("slides").join("draft.md");
-                                    if let Some(parent) = save_path.parent() {
-                                        let _ = std::fs::create_dir_all(parent);
-                                    }
-                                    if let Err(e) =
-                                        std::fs::write(&save_path, resp.markdown.as_bytes())
-                                    {
-                                        let _ = tx_event
-                                            .send(Event::Error {
-                                                message: format!("failed to save slides: {e}"),
-                                            })
-                                            .await;
-                                    } else {
-                                        let _ = tx_event
-                                            .send(Event::AgentMessage {
-                                                message: format!(
-                                                    "Saved to {}",
-                                                    save_path.display()
-                                                ),
-                                            })
-                                            .await;
-                                    }
-                                    let _ = tx_event.send(Event::TaskComplete).await;
-                                }
-                                Err(e) => {
-                                    let _ = tx_event
-                                        .send(Event::Error {
-                                            message: e.to_string(),
-                                        })
-                                        .await;
-                                }
-                            }
-                            continue;
-                        }
-                    // Op::Review は別アームで処理
-
+                        // MEE-43: すべての入力を run_task に一本化（/slide 特別処理は廃止）
                         // MEE-33: セッション管理統合による動的判断ループ呼び出し
                         let sess = Arc::new(Session::new(
                             tx_event.clone(),

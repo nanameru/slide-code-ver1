@@ -291,16 +291,35 @@ impl From<ResponseInputItem> for ResponseItem {
 
 impl From<Vec<protocol::protocol::InputItem>> for ResponseInputItem {
     fn from(input: Vec<protocol::protocol::InputItem>) -> Self {
-        // 簡略化: 最初のテキストアイテムのみ使用
-        let text = input
-            .into_iter()
-            .find_map(|item| match item {
-                protocol::protocol::InputItem::Text { text } => Some(text),
-                _ => None,
-            })
-            .unwrap_or_default();
-        
-        Self::from_text(text)
+        // テキストと画像を両方サポートし、1メッセージに詰める
+        let mut contents: Vec<ContentItem> = Vec::new();
+        for item in input.into_iter() {
+            match item {
+                protocol::protocol::InputItem::Text { text } => {
+                    if !text.is_empty() {
+                        contents.push(ContentItem::InputText { text });
+                    }
+                }
+                protocol::protocol::InputItem::Image { image_url } => {
+                    if !image_url.is_empty() {
+                        contents.push(ContentItem::InputImage { image_url });
+                    }
+                }
+            }
+        }
+
+        if contents.is_empty() {
+            // 何も無ければ空テキストで構成
+            return Self::Message {
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText { text: String::new() }],
+            };
+        }
+
+        Self::Message {
+            role: "user".to_string(),
+            content: contents,
+        }
     }
 }
 

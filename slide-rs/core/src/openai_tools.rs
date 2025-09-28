@@ -281,6 +281,86 @@ fn create_view_image_tool() -> OpenAiTool {
         },
     })
 }
+
+fn create_read_file_tool() -> OpenAiTool {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "path".to_string(),
+        JsonSchema::String { description: Some("Absolute or relative path to the file to read".to_string()) },
+    );
+    OpenAiTool::Function(ResponsesApiTool {
+        name: "read_file".to_string(),
+        description: "Read a text file from the local filesystem and return its contents.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["path".to_string()]),
+            additional_properties: Some(false),
+        },
+    })
+}
+
+fn create_write_file_tool() -> OpenAiTool {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "path".to_string(),
+        JsonSchema::String { description: Some("Absolute or relative path to write to".to_string()) },
+    );
+    properties.insert(
+        "content".to_string(),
+        JsonSchema::String { description: Some("The full file content to write".to_string()) },
+    );
+    OpenAiTool::Function(ResponsesApiTool {
+        name: "write_file".to_string(),
+        description: "Write text content to a local file. Creates directories if needed.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["path".to_string(), "content".to_string()]),
+            additional_properties: Some(false),
+        },
+    })
+}
+
+fn create_list_files_tool() -> OpenAiTool {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "path".to_string(),
+        JsonSchema::String { description: Some("Directory path to list (optional; defaults to cwd)".to_string()) },
+    );
+    OpenAiTool::Function(ResponsesApiTool {
+        name: "list_files".to_string(),
+        description: "List files in a directory (non-recursive).".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec![]),
+            additional_properties: Some(false),
+        },
+    })
+}
+
+fn create_search_files_tool() -> OpenAiTool {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "query".to_string(),
+        JsonSchema::String { description: Some("Substring to search for in file names".to_string()) },
+    );
+    properties.insert(
+        "path".to_string(),
+        JsonSchema::String { description: Some("Directory to search (optional; defaults to cwd)".to_string()) },
+    );
+    OpenAiTool::Function(ResponsesApiTool {
+        name: "search_files".to_string(),
+        description: "Search files by name substring within a directory (recursive).".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["query".to_string()]),
+            additional_properties: Some(false),
+        },
+    })
+}
 /// TODO(dylan): deprecate once we get rid of json tool
 #[derive(Serialize, Deserialize)]
 pub(crate) struct ApplyPatchToolArgs {
@@ -504,6 +584,12 @@ pub(crate) fn get_openai_tools(
             }
         }
     }
+
+    // Always provide core filesystem tools
+    tools.push(create_read_file_tool());
+    tools.push(create_write_file_tool());
+    tools.push(create_list_files_tool());
+    tools.push(create_search_files_tool());
 
     if config.plan_tool {
         tools.push(PLAN_TOOL.clone());
