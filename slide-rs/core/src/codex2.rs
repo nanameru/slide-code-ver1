@@ -136,11 +136,20 @@ async fn run_turn(
     use crate::util::backoff;
     
     // ツール準備 (codex-1:1967-1970を参考)
-    let tools = vec![]; // 簡略版: 空のツールリスト
+    // MCPツール一覧を取得し、OpenAIツール形式に変換
+    let tools_openai = crate::openai_tools::get_openai_tools(
+        &turn_context.tools_config,
+        Some(sess.mcp_connection_manager.list_all_tools()),
+    );
+    // PromptがVec<serde_json::Value>を期待しているためJSONへ変換
+    let tools_json: Vec<serde_json::Value> = tools_openai
+        .iter()
+        .filter_map(|t| serde_json::to_value(t).ok())
+        .collect();
     
     let prompt = Prompt {
         input,
-        tools,
+        tools: tools_json,
         base_instructions_override: None, // 簡略版: オーバーライドなし
     };
 
