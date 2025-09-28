@@ -16,6 +16,8 @@ pub struct ToolExecutor {
     cwd: PathBuf,
     shell_environment_policy: ShellEnvironmentPolicy,
     sandbox_policy: SandboxPolicy,
+    #[allow(dead_code)]
+    turn_diff_tracker: Option<std::sync::Arc<tokio::sync::Mutex<crate::turn_diff_tracker::TurnDiffTracker>>>,
 }
 
 impl ToolExecutor {
@@ -29,7 +31,13 @@ impl ToolExecutor {
             cwd,
             shell_environment_policy,
             sandbox_policy,
+            turn_diff_tracker: None,
         }
+    }
+
+    pub fn with_turn_diff_tracker(mut self, tracker: std::sync::Arc<tokio::sync::Mutex<crate::turn_diff_tracker::TurnDiffTracker>>) -> Self {
+        self.turn_diff_tracker = Some(tracker);
+        self
     }
 
     /// AIレスポンスからツール呼び出しを検出・実行
@@ -436,7 +444,8 @@ impl ToolExecutor {
                     }
                 }
 
-                match tokio::fs::write(&full_path, content).await {
+                let before = tokio::fs::read_to_string(&full_path).await.ok();
+                match tokio::fs::write(&full_path, content.clone()).await {
                     Ok(_) => Ok(format!(
                         "Change Approved {}\n☑ Successfully wrote to {}",
                         full_path.display(),
@@ -448,11 +457,29 @@ impl ToolExecutor {
                         full_path.display(),
                         e
                     )),
-                }
+                }.map(|msg| {
+                    if let Some(tr) = &self.turn_diff_tracker {
+                        let after_now = content.clone();
+                        let trc = tr.clone();
+                        let p = full_path.clone();
+                        tokio::spawn(async move {
+                            let mut g = trc.lock().await;
+                            g.record_write_file(&p, before, &after_now);
+                        });
+                    }
+                    msg
+                })
             }
             ToolCall::ApplyPatch { input } => {
-                let result = tool_apply_patch(ApplyPatchInput { patch: input }, true);
+                let result = tool_apply_patch(ApplyPatchInput { patch: input.clone() }, true);
                 if result.applied {
+                    if let Some(tr) = &self.turn_diff_tracker {
+                        let trc = tr.clone();
+                        tokio::spawn(async move {
+                            let mut g = trc.lock().await;
+                            g.record_apply_patch_content(&input);
+                        });
+                    }
                     Ok(format!("Change Approved\n☑ {}", result.message))
                 } else {
                     Ok(format!("Proposed Change failed\n{}", result.message))

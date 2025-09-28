@@ -29,4 +29,5 @@ pub mod exec_command;
 pub mod container_exec;
 pub mod unified_exec;
 pub mod error;
+pub mod turn_diff_tracker;
 pub use codex2 as codex;

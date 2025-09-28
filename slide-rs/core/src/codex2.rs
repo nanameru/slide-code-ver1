@@ -12,6 +12,7 @@ use std::time::Duration;
 use tracing::warn;
 
 use crate::client::{ModelClient, ResponseEvent, OpenAiAdapter, StubClient};
+use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::openai_tools::{render_tools_instructions, ToolsConfig, ToolsConfigParams};
 use crate::protocol::{ReasoningEffort, ReasoningSummary};
 use protocol::protocol::InputItem;
@@ -289,13 +290,16 @@ async fn try_run_turn(
         CodexErr::Stream(format!("stream start failed: {}", e), None)
     })?;
 
-    // ツール実行エンジン
+    // ツール実行エンジン + TurnDiffTracker
+    let turn_diff_tracker = std::sync::Arc::new(tokio::sync::Mutex::new(
+        crate::turn_diff_tracker::TurnDiffTracker::new(turn_context.cwd.clone()),
+    ));
     let mut tool_executor = ToolExecutor::new(
         turn_context.approval_policy.clone(),
         turn_context.sandbox_policy.clone(),
         turn_context.cwd.clone(),
         crate::config_types::ShellEnvironmentPolicy::default(),
-    );
+    ).with_turn_diff_tracker(turn_diff_tracker.clone());
 
     let mut processed_items: Vec<ProcessedResponseItem> = Vec::new();
     let mut assembled_assistant_text = String::new();
@@ -325,6 +329,11 @@ async fn try_run_turn(
                 processed_items.push(ProcessedResponseItem { item, response });
             }
             ResponseEvent::CompletedWithDetails { response_id: _, token_usage } => {
+                if let Some(patch) = turn_diff_tracker.lock().await.emit_unified_patch() {
+                    if !patch.is_empty() {
+                        sess.send_event(Event::TurnDiff { unified_diff: patch }).await;
+                    }
+                }
                 if !assembled_assistant_text.is_empty() {
                     let msg = ResponseItem::Message {
                         id: Some(uuid::Uuid::new_v4().to_string()),
@@ -339,6 +348,11 @@ async fn try_run_turn(
                 });
             }
             ResponseEvent::Completed => {
+                if let Some(patch) = turn_diff_tracker.lock().await.emit_unified_patch() {
+                    if !patch.is_empty() {
+                        sess.send_event(Event::TurnDiff { unified_diff: patch }).await;
+                    }
+                }
                 if !assembled_assistant_text.is_empty() {
                     let msg = ResponseItem::Message {
                         id: Some(uuid::Uuid::new_v4().to_string()),
@@ -495,6 +509,21 @@ async fn handle_function_call(
     match name.as_str() {
         // 内蔵ツール: container.exec / shell
         "container.exec" | "shell" => {
+            // 事前通知（要約）
+            let summary = (|| {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&arguments) {
+                    if let Some(cmd) = v.get("cmd") {
+                        if let Some(arr) = cmd.as_array() {
+                            let joined = arr.iter().filter_map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
+                            return format!("shell {}", joined);
+                        }
+                    }
+                }
+                name.clone()
+            })();
+            let announce = format!("\n\n[Tool Execution]\n▶ {}", summary);
+            let _ = tx_event.send(Event::AgentMessageDelta { delta: announce }).await;
+
             match handle_container_exec_tool_call(
                 tool_executor,
                 tx_event,
@@ -502,20 +531,29 @@ async fn handle_function_call(
                 arguments,
                 call_id.clone(),
             ).await {
-                Ok(output) => ResponseInputItem::FunctionCallOutput {
-                    call_id,
-                    output: crate::conversation_history::FunctionCallOutputPayload {
-                        content: output,
-                        success: Some(true),
-                    },
-                },
-                Err(e) => ResponseInputItem::FunctionCallOutput {
-                    call_id,
-                    output: crate::conversation_history::FunctionCallOutputPayload {
-                        content: format!("Error: {}", e),
-                        success: Some(false),
-                    },
-                },
+                Ok(output) => {
+                    let block = format!("\n\n[Tool Execution Result]\n{}", output);
+                    let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
+                    ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: crate::conversation_history::FunctionCallOutputPayload {
+                            content: output,
+                            success: Some(true),
+                        },
+                    }
+                }
+                Err(e) => {
+                    let block = format!("\n\n[Tool Execution Result]\nFailed: {}", e);
+                    let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
+                    let _ = tx_event.send(Event::Error { message: format!("Tool execution failed: {}", e) }).await;
+                    ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: crate::conversation_history::FunctionCallOutputPayload {
+                            content: format!("Error: {}", e),
+                            success: Some(false),
+                        },
+                    }
+                }
             }
         }
         
@@ -533,6 +571,7 @@ async fn handle_function_call(
             let args = match serde_json::from_str::<UnifiedExecArgs>(&arguments) {
                 Ok(args) => args,
                 Err(err) => {
+                    let _ = tx_event.send(Event::AgentMessageDelta { delta: format!("\n\n[Tool Execution]\n▶ unified_exec parse") }).await;
                     return ResponseInputItem::FunctionCallOutput {
                         call_id,
                         output: crate::conversation_history::FunctionCallOutputPayload {
@@ -542,6 +581,7 @@ async fn handle_function_call(
                     };
                 }
             };
+            let _ = tx_event.send(Event::AgentMessageDelta { delta: format!("\n\n[Tool Execution]\n▶ unified_exec ({} items)", args.input.len()) }).await;
             
             match handle_unified_exec_tool_call(
                 tool_executor,
@@ -550,20 +590,29 @@ async fn handle_function_call(
                 args.input,
                 args.timeout_ms,
             ).await {
-                Ok(output) => ResponseInputItem::FunctionCallOutput {
-                    call_id,
-                    output: crate::conversation_history::FunctionCallOutputPayload {
-                        content: output,
-                        success: Some(true),
-                    },
-                },
-                Err(e) => ResponseInputItem::FunctionCallOutput {
-                    call_id,
-                    output: crate::conversation_history::FunctionCallOutputPayload {
-                        content: format!("Error: {}", e),
-                        success: Some(false),
-                    },
-                },
+                Ok(output) => {
+                    let block = format!("\n\n[Tool Execution Result]\n{}", output);
+                    let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
+                    ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: crate::conversation_history::FunctionCallOutputPayload {
+                            content: output,
+                            success: Some(true),
+                        },
+                    }
+                }
+                Err(e) => {
+                    let block = format!("\n\n[Tool Execution Result]\nFailed: {}", e);
+                    let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
+                    let _ = tx_event.send(Event::Error { message: format!("Tool execution failed: {}", e) }).await;
+                    ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: crate::conversation_history::FunctionCallOutputPayload {
+                            content: format!("Error: {}", e),
+                            success: Some(false),
+                        },
+                    }
+                }
             }
         }
         
@@ -571,16 +620,31 @@ async fn handle_function_call(
         _ => {
             match mcp_manager.parse_tool_name(&name) {
                 Some((server, tool_name)) => {
+                    // 事前通知
+                    let preview = if arguments.len() > 200 { format!("{}...", &arguments[..200]) } else { arguments.clone() };
+                    let announce = format!("\n\n[Tool Execution]\n▶ mcp {}/{} {}", server, tool_name, preview);
+                    let _ = tx_event.send(Event::AgentMessageDelta { delta: announce }).await;
+
                     // MCP関数呼び出し
-                    handle_mcp_tool_call(
+                    let resp = handle_mcp_tool_call(
                         mcp_manager,
                         &sub_id,
-                        call_id,
-                        server,
-                        tool_name,
-                        arguments,
+                        call_id.clone(),
+                        server.clone(),
+                        tool_name.clone(),
+                        arguments.clone(),
                         None,
-                    ).await
+                    ).await;
+
+                    // 結果通知
+                    if let ResponseInputItem::McpToolCallOutput { call_id: _, result } = &resp {
+                        let block = match result {
+                            Ok(ok) => format!("\n\n[Tool Execution Result]\n{}", serde_json::to_string_pretty(&ok).unwrap_or_else(|_| "<ok>".to_string())),
+                            Err(e) => format!("\n\n[Tool Execution Result]\nFailed: {}", e),
+                        };
+                        let _ = tx_event.send(Event::AgentMessageDelta { delta: block }).await;
+                    }
+                    resp
                 }
                 None => {
                     // 未知の関数: 構造化された失敗応答
@@ -616,6 +680,13 @@ async fn handle_local_shell_call(
         "timeout_ms": action.timeout_ms,
         "env": action.env.unwrap_or_default(),
     }).to_string();
+
+    // 事前通知
+    let summary = if let Some(cmd0) = action.command.get(0) {
+        format!("shell {}{}", cmd0, if action.command.len()>1 { format!(" {}", action.command[1..].join(" ")) } else { String::new() })
+    } else { "shell".to_string() };
+    let announce = format!("\n\n[Tool Execution]\n▶ {}", summary);
+    let _ = tx_event.send(Event::AgentMessageDelta { delta: announce }).await;
     
     match handle_container_exec_tool_call(
         tool_executor,
@@ -624,20 +695,29 @@ async fn handle_local_shell_call(
         arguments,
         call_id.clone(),
     ).await {
-        Ok(output) => ResponseInputItem::FunctionCallOutput {
-            call_id,
-            output: crate::conversation_history::FunctionCallOutputPayload {
-                content: output,
-                success: Some(true),
-            },
-        },
-        Err(e) => ResponseInputItem::FunctionCallOutput {
-            call_id,
-            output: crate::conversation_history::FunctionCallOutputPayload {
-                content: format!("Error: {}", e),
-                success: Some(false),
-            },
-        },
+        Ok(output) => {
+            let block = format!("\n\n[Tool Execution Result]\n{}", output);
+            let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: crate::conversation_history::FunctionCallOutputPayload {
+                    content: output,
+                    success: Some(true),
+                },
+            }
+        }
+        Err(e) => {
+            let block = format!("\n\n[Tool Execution Result]\nFailed: {}", e);
+            let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
+            let _ = tx_event.send(Event::Error { message: format!("Tool execution failed: {}", e) }).await;
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: crate::conversation_history::FunctionCallOutputPayload {
+                    content: format!("Error: {}", e),
+                    success: Some(false),
+                },
+            }
+        }
     }
 }
 
