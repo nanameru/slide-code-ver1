@@ -1680,6 +1680,10 @@ async fn run_task(
     let mut last_agent_message: Option<String> = None;
     let mut auto_compact_recently_attempted = false;
     
+    // MEE-34: 無限ループ防止用のターンカウンター
+    let mut turn_count = 0;
+    const MAX_TURNS: usize = 10;
+    
     // メインタスクループ (codex-1:1687-1933)
     loop {
         // 保留中入力の取得 (codex-1:1691-1696)
@@ -1701,12 +1705,69 @@ async fn run_task(
             sess.turn_input_with_history(pending_input).await
         };
         
-        // ターン実行 (codex-1:1731-1739)
-        // TODO: MEE-29で run_turn 関数を実装
-        // 現在は簡略版で継続判定のみ実装
+        // MEE-34: ターン実行 (codex-1:1731-1739を参考)
+        let turn_result = match run_turn_simplified(
+            sess.clone(),
+            turn_context.clone(),
+            turn_input.clone(), // MEE-34: cloneして所有権問題を解決
+        ).await {
+            Ok(result) => result,
+            Err(e) => {
+                // エラーハンドリング (codex-1:1896以降を参考)
+                tracing::error!("Turn execution failed: {}", e);
+                sess.send_event(Event::Error {
+                    message: format!("Turn execution error: {}", e),
+                }).await;
+                break;
+            }
+        };
         
-        // 簡略版: 継続判定ロジック (codex-1:1883-1894)
-        let responses: Vec<crate::conversation_history::ResponseInputItem> = Vec::new(); // 仮の空レスポンス
+        // MEE-34: レスポンス処理ロジック (codex-1:1757-1846を参考)
+        let TurnRunResult { processed_items, token_usage: _ } = turn_result;
+        let mut items_to_record_in_conversation_history = Vec::<ResponseItem>::new();
+        let mut responses = Vec::<ResponseInputItem>::new();
+        
+        for processed_response_item in processed_items {
+            let ProcessedResponseItem { item, response } = processed_response_item;
+            
+            // アイテムを履歴に記録
+            match &item {
+                ResponseItem::Message { role, .. } if role == "assistant" => {
+                    items_to_record_in_conversation_history.push(item);
+                }
+                ResponseItem::FunctionCall { .. } => {
+                    items_to_record_in_conversation_history.push(item);
+                    if let Some(resp) = &response {
+                        // FunctionCallOutputを履歴に追加
+                        if let ResponseInputItem::FunctionCallOutput { call_id, output } = resp {
+                            items_to_record_in_conversation_history.push(
+                                ResponseItem::FunctionCallOutput {
+                                    call_id: call_id.clone(),
+                                    output: output.clone(),
+                                }
+                            );
+                        }
+                    }
+                }
+                _ => {
+                    items_to_record_in_conversation_history.push(item);
+                }
+            }
+            
+            // レスポンスがあれば次ターン用に収集
+            if let Some(response) = response {
+                responses.push(response);
+            }
+        }
+        
+        // 履歴に記録 (codex-1:1849-1857を参考)
+        if !items_to_record_in_conversation_history.is_empty() {
+            if is_review_mode {
+                review_thread_history.extend(items_to_record_in_conversation_history.clone());
+            } else {
+                sess.record_conversation_items(&items_to_record_in_conversation_history).await;
+            }
+        }
         
         // MEE-30: トークン制限監視とauto-compact実装 (codex-1:1859-1879)
         let auto_compact_token_limit = 100_000; // 10万トークンで自動発動
@@ -1738,12 +1799,44 @@ async fn run_task(
         
         auto_compact_recently_attempted = false;
         
-        // 継続判定 (codex-1:1883-1894)
+        // MEE-34: 継続判定ロジック (codex-1:1883-1894を完全実装)
         if responses.is_empty() {
-            // 最終応答: AIが完了を示している
-            last_agent_message = Some("Task completed successfully.".to_string()); // 仮の実装
+            // AIが最終応答を出力 → タスク完了
+            last_agent_message = get_last_assistant_message_from_turn(
+                &items_to_record_in_conversation_history,
+            );
+            
+            tracing::info!(
+                "Task completed - no more responses needed. Last message: {:?}",
+                last_agent_message
+            );
+            
+            // TODO: AgentTurnComplete通知（将来実装）
+            // sess.maybe_notify(UserNotification::AgentTurnComplete { ... });
+            
             break;
         }
+        
+        // MEE-34: 無限ループ防止機構
+        turn_count += 1;
+        if turn_count >= MAX_TURNS {
+            tracing::warn!(
+                "Maximum turns reached ({}). Stopping to prevent infinite loop.",
+                MAX_TURNS
+            );
+            sess.send_event(Event::Error {
+                message: format!(
+                    "Task stopped after {} turns to prevent infinite loop. The AI may need more specific instructions.",
+                    MAX_TURNS
+                ),
+            }).await;
+            break;
+        }
+        
+        tracing::info!(
+            "Turn {} completed with {} responses. Continuing to next turn.",
+            turn_count, responses.len()
+        );
         
         // 次ターンへ継続
         continue;
@@ -1777,4 +1870,70 @@ fn estimate_token_count(turn_input: &[ResponseItem]) -> i64 {
     
     // 保守的な推定: 1トークン ≈ 2.5文字（日英混在を想定）
     (total_chars as f64 / 2.5) as i64
+}
+
+/// MEE-34: 簡略版run_turn関数 (codex-1:1960-2018を参考)
+/// 現在はMEE-29が未実装のため、簡略版で実装
+async fn run_turn_simplified(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    turn_input: Vec<ResponseItem>,
+) -> Result<TurnRunResult> {
+    tracing::info!("Starting simplified turn execution with {} input items", turn_input.len());
+    
+    // 簡略版: 実際のAI呼び出しの代わりにモックレスポンスを生成
+    // TODO: MEE-29で実際のtry_run_turn実装時に置き換え
+    
+    let mut processed_items = Vec::new();
+    
+    // ユーザーメッセージがある場合は、AIのモックレスポンスを生成
+    let has_user_message = turn_input.iter().any(|item| {
+        matches!(item, ResponseItem::Message { role, .. } if role == "user")
+    });
+    
+    if has_user_message {
+        // モックAIレスポンスを生成
+        let mock_response = ResponseItem::Message {
+            id: Some(uuid::Uuid::new_v4().to_string()),
+            role: "assistant".to_string(),
+            content: vec![crate::conversation_history::ContentItem::OutputText {
+                text: "MEE-34テスト: 継続判定ロジックが正常に動作しています。このメッセージは最終応答です。".to_string(),
+            }],
+        };
+        
+        processed_items.push(ProcessedResponseItem {
+            item: mock_response,
+            response: None, // 最終応答なのでresponseはなし
+        });
+    } else {
+        // ユーザーメッセージがない場合は空の結果を返す
+        tracing::info!("No user message found in turn input");
+    }
+    
+    Ok(TurnRunResult {
+        processed_items,
+        token_usage: Some(protocol::protocol::TokenUsage {
+            input_tokens: 500,
+            cached_input_tokens: None,
+            output_tokens: 500,
+            reasoning_output_tokens: None,
+            total_tokens: 1000,
+        }),
+    })
+}
+
+/// MEE-34: 最後のassistantメッセージを取得 (codex-1のget_last_assistant_message_from_turnを参考)
+fn get_last_assistant_message_from_turn(items: &[ResponseItem]) -> Option<String> {
+    items
+        .iter()
+        .rev()
+        .find_map(|item| match item {
+            ResponseItem::Message { role, content, .. } if role == "assistant" => {
+                content.iter().find_map(|c| match c {
+                    crate::conversation_history::ContentItem::OutputText { text } => Some(text.clone()),
+                    _ => None,
+                })
+            }
+            _ => None,
+        })
 }
