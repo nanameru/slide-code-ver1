@@ -492,6 +492,17 @@ impl ChatWidget {
         // 簡易判定: 1トークンだけの行で、macOSトップレベルっぽい接頭辞のときは補正
         let only_one_token = !s.contains('\n') && !s.contains(' ');
         if only_one_token {
+            // '/Users' の直後のスラッシュ欠落を補正（例: '/Userskim...' → '/Users/kim...')
+            if s.starts_with("/Users") && !s.starts_with("/Users/") {
+                let after = &s["/Users".len()..];
+                if !after.starts_with('/') {
+                    return format!("/Users/{}", after);
+                }
+            }
+            if s.starts_with("Users") && !s.starts_with("Users/") {
+                let after = &s["Users".len()..];
+                return format!("/Users/{}", after);
+            }
             const TOPS: &[&str] = &[
                 "Users/", "Volumes/", "System/", "Applications/", "Library/",
                 "usr/", "bin/", "sbin/", "etc/", "var/", "opt/", "private/", "tmp/", "home/",

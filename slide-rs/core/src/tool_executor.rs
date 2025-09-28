@@ -32,6 +32,21 @@ impl ToolExecutor {
             if s.len() >= 2 { s = &s[1..s.len()-1]; }
         }
 
+        // '/Users' の直後のスラッシュ欠落を補正（例: '/Userskim...' → '/Users/kim...')
+        const USERS: &str = "/Users";
+        if s.starts_with(USERS) && !s.starts_with("/Users/") {
+            let after = &s[USERS.len()..];
+            if !after.starts_with('/') {
+                let fixed = format!("{}/{}", USERS, after);
+                return PathBuf::from(fixed);
+            }
+        }
+        if s.starts_with("Users") && !s.starts_with("Users/") {
+            let after = &s["Users".len()..];
+            let fixed = format!("/Users/{}", after);
+            return PathBuf::from(fixed);
+        }
+
         // 既に絶対パスならそのまま
         if s.starts_with('/') {
             return PathBuf::from(s);
