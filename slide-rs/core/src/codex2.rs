@@ -654,54 +654,74 @@ async fn handle_custom_tool_call(
     
     info!("CustomToolCall: {name} {input}");
     
-    match name.as_str() {
-        "apply_patch" => {
-            // apply_patchツールの実行
-            let arguments = serde_json::json!({
-                "patch": input,
-            }).to_string();
-            
-            let resp = match handle_container_exec_tool_call(
-                tool_executor,
-                tx_event,
-                sub_id,
-                arguments,
-                call_id.clone(),
-            ).await {
-                Ok(output) => ResponseInputItem::FunctionCallOutput {
-                    call_id: call_id.clone(),
-                    output: crate::conversation_history::FunctionCallOutputPayload {
-                        content: output,
-                        success: Some(true),
-                    },
-                },
-                Err(e) => ResponseInputItem::FunctionCallOutput {
-                    call_id: call_id.clone(),
-                    output: crate::conversation_history::FunctionCallOutputPayload {
-                        content: format!("Error: {}", e),
-                        success: Some(false),
-                    },
-                },
-            };
-            
-            // FunctionCallOutput → CustomToolCallOutput変換
-            match resp {
-                ResponseInputItem::FunctionCallOutput { call_id, output } => {
-                    ResponseInputItem::CustomToolCallOutput {
-                        call_id,
-                        output: output.content,
-                    }
-                }
-                // その他の場合はそのまま通す
-                other => other,
-            }
+    // 軽量な開始通知（UI向け）
+    let summary = match name.as_str() {
+        "apply_patch" => format!("apply_patch ({} bytes)", input.len()),
+        "read_file" => {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&input) {
+                if let Some(p) = v.get("path").and_then(|s| s.as_str()) {
+                    format!("read_file {}", p)
+                } else { "read_file".to_string() }
+            } else { "read_file".to_string() }
         }
+        "write_file" => {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&input) {
+                if let Some(p) = v.get("path").and_then(|s| s.as_str()) {
+                    format!("write_file {} (...)", p)
+                } else { "write_file".to_string() }
+            } else { "write_file".to_string() }
+        }
+        "list_files" => {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&input) {
+                if let Some(p) = v.get("path").and_then(|s| s.as_str()) {
+                    format!("list_files {}", p)
+                } else { "list_files".to_string() }
+            } else { "list_files".to_string() }
+        }
+        "search_files" => {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&input) {
+                if let Some(q) = v.get("query").and_then(|s| s.as_str()) {
+                    format!("search_files '{}'", q)
+                } else { "search_files".to_string() }
+            } else { "search_files".to_string() }
+        }
+        _ => name.clone(),
+    };
+    let announce = format!("\n\n[Tool Execution]\n▶ {}", summary);
+    let _ = tx_event.send(Event::AgentMessageDelta { delta: announce }).await;
+
+    // 実行
+    let exec_result: Result<String> = match name.as_str() {
+        // apply_patch は ToolExecutor の関数呼び出しに直接ルーティング
+        "apply_patch" => {
+            let arguments = serde_json::json!({ "input": input }).to_string();
+            tool_executor.execute_function_call("apply_patch", &arguments).await
+        }
+        // 組み込みツール群
+        "read_file" | "write_file" | "list_files" | "search_files" => {
+            tool_executor.execute_function_call(&name, &input).await
+        }
+        // 未対応の custom tool
         _ => {
-            debug!("unexpected CustomToolCall from stream");
-            ResponseInputItem::CustomToolCallOutput {
+            return ResponseInputItem::CustomToolCallOutput {
                 call_id,
-                output: format!("unsupported custom tool call: {name}"),
-            }
+                output: format!("unsupported custom tool call: {}", name),
+            };
+        }
+    };
+
+    // 結果通知と応答生成
+    match exec_result {
+        Ok(output) => {
+            let block = format!("\n\n[Tool Execution Result]\n{}", output);
+            let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
+            ResponseInputItem::CustomToolCallOutput { call_id, output }
+        }
+        Err(e) => {
+            let block = format!("\n\n[Tool Execution Result]\nFailed: {}", e);
+            let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
+            let _ = tx_event.send(Event::Error { message: format!("Tool execution failed: {}", e) }).await;
+            ResponseInputItem::CustomToolCallOutput { call_id, output: format!("Error: {}", e) }
         }
     }
 }
