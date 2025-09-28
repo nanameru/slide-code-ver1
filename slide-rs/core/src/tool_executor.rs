@@ -21,6 +21,38 @@ pub struct ToolExecutor {
 }
 
 impl ToolExecutor {
+    /// 入力文字列のパスを簡易正規化する（ドラッグ&ドロップで先頭スラッシュが落ちたケース等を補正）
+    fn normalize_path_str(&self, raw: &str) -> PathBuf {
+        let mut s = raw.trim();
+        // 先頭と末尾のクォートを除去（'path' / "path" / `path`）
+        if (s.starts_with('"') && s.ends_with('"'))
+            || (s.starts_with('\'') && s.ends_with('\''))
+            || (s.starts_with('`') && s.ends_with('`'))
+        {
+            if s.len() >= 2 { s = &s[1..s.len()-1]; }
+        }
+
+        // 既に絶対パスならそのまま
+        if s.starts_with('/') {
+            return PathBuf::from(s);
+        }
+
+        // よくあるトップレベルディレクトリ名で始まる場合は先頭にスラッシュを補う
+        // 例: Users/..., Volumes/..., System/..., Applications/... など
+        const TOPS: &[&str] = &[
+            "Users/", "Volumes/", "System/", "Applications/", "Library/",
+            "usr/", "bin/", "sbin/", "etc/", "var/", "opt/", "private/", "tmp/", "home/",
+        ];
+        for prefix in TOPS {
+            if s.starts_with(prefix) {
+                let fixed = format!("/{}", s);
+                return PathBuf::from(fixed);
+            }
+        }
+
+        // 相対パスは CWD 基準
+        self.cwd.join(s)
+    }
     pub fn new(
         _approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
@@ -284,7 +316,7 @@ impl ToolExecutor {
                     .as_str()
                     .ok_or_else(|| anyhow::anyhow!("Missing file path"))?;
                 Ok(ToolCall::ReadFile {
-                    path: PathBuf::from(path),
+                    path: self.normalize_path_str(path),
                 })
             }
             "write_file" => {
@@ -295,7 +327,7 @@ impl ToolExecutor {
                     .as_str()
                     .ok_or_else(|| anyhow::anyhow!("Missing file content"))?;
                 Ok(ToolCall::WriteFile {
-                    path: PathBuf::from(path),
+                    path: self.normalize_path_str(path),
                     content: content.to_string(),
                 })
             }
@@ -308,14 +340,14 @@ impl ToolExecutor {
                 })
             }
             "list_files" => {
-                let path = value["path"].as_str().map(PathBuf::from);
+                let path = value["path"].as_str().map(|s| self.normalize_path_str(s));
                 Ok(ToolCall::ListFiles { path })
             }
             "search_files" => {
                 let query = value["query"]
                     .as_str()
                     .ok_or_else(|| anyhow::anyhow!("Missing search query"))?;
-                let path = value["path"].as_str().map(PathBuf::from);
+                let path = value["path"].as_str().map(|s| self.normalize_path_str(s));
                 Ok(ToolCall::SearchFiles {
                     query: query.to_string(),
                     path,

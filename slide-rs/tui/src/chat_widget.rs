@@ -477,11 +477,32 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {
-        // Simplified paste handling - insert as user message
-        if !text.trim().is_empty() {
-            self.submit_message_with_images(text);
+        // Paste衛生化: 代表的なドラッグ&ドロップ由来のパス崩れ（先頭スラッシュ欠落）を補正
+        let mut t = text;
+        let trimmed = t.trim();
+        if !trimmed.is_empty() {
+            let fixed = Self::sanitize_dropped_path_text(trimmed);
+            self.submit_message_with_images(fixed);
             self.request_redraw();
         }
+    }
+
+    /// パスらしき単語に対して先頭スラッシュを補うなどの軽量サニタイズを行う
+    fn sanitize_dropped_path_text(s: &str) -> String {
+        // 簡易判定: 1トークンだけの行で、macOSトップレベルっぽい接頭辞のときは補正
+        let only_one_token = !s.contains('\n') && !s.contains(' ');
+        if only_one_token {
+            const TOPS: &[&str] = &[
+                "Users/", "Volumes/", "System/", "Applications/", "Library/",
+                "usr/", "bin/", "sbin/", "etc/", "var/", "opt/", "private/", "tmp/", "home/",
+            ];
+            for p in TOPS {
+                if s.starts_with(p) {
+                    return format!("/{}", s);
+                }
+            }
+        }
+        s.to_string()
     }
 
     // 連続実行関連のイベント処理メソッド

@@ -470,7 +470,7 @@ mod tests {
                 writable_roots: vec![],
                 network_access: false,
                 exclude_tmpdir_env_var: false,
-                exclude_system_tmp: false,
+                exclude_slash_tmp: false,
             },
         );
 
