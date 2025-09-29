@@ -4,6 +4,20 @@ pub use protocol::protocol::{SandboxPolicy, WritableRoot};
 // Base policy borrowed from codex-1 approach
 const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl");
 
+/// 日本語メモ（文系向け）
+/// このファイルは、macOSの「サンドボックスのルール用紙（SBPL）」を作る係です。
+/// - 読むのは基本OK（file-read*）
+/// - 書ける場所は「プロジェクトの島（WritableRoot）」だけ（しかも島の中でもダメなポケットは除外）
+/// - ネットは設定でON/OFFできます
+/// こうして作ったルール用紙を `sandbox-exec` に渡すことで、AIが実行するコマンドの行動範囲を安全に絞れます。
+/// codex-1 と同じ作法で紙を作るので、挙動が揃い安全性が上がります。
+///
+/// できるようになったこと（要点）:
+/// - プロジェクト配下だけにファイル書き込みを限定（誤爆防止）
+/// - その中でも「.git など触ってほしくない所」は書き込み禁止
+/// - ネットワークを必要に応じてON/OFF
+/// - パス表記のゆれを正規化して、意図しない穴を避ける
+///
 /// Build a macOS Seatbelt SBPL string aligned with codex-1's policy model.
 /// - Always allow read (file-read*)
 /// - Allow write only under declared writable roots, with read-only subpaths excluded
