@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use crate::path_utils;
 use std::time::Instant;
 use tokio::process::Command;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -1106,6 +1107,12 @@ pub(crate) struct TurnContext {
     pub(crate) is_review_mode: bool, // MEE-31: レビューモード
 }
 
+impl TurnContext {
+    pub(crate) fn resolve_path(&self, raw: &str) -> std::path::PathBuf {
+        path_utils::resolve_path_with_cwd(&self.cwd, raw)
+    }
+}
+
 pub struct CodexSpawnOk {
     pub codex: Codex,
 }
@@ -1202,8 +1209,8 @@ impl Codex {
                             let _ = tx_event.send(Event::Error { 
                                 message: e.to_string() 
                             }).await;
-                        }
-                        continue;
+                            }
+                            continue;
                         
                         // 以下は既存の処理（/slideコマンド以外）
                         // Prefix prompt with tool instructions so the model can propose edits/execs.

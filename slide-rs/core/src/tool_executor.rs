@@ -21,52 +21,9 @@ pub struct ToolExecutor {
 }
 
 impl ToolExecutor {
-    /// 入力文字列のパスを簡易正規化する（ドラッグ&ドロップで先頭スラッシュが落ちたケース等を補正）
+    /// パス解決は path_utils に委譲して一本化
     fn normalize_path_str(&self, raw: &str) -> PathBuf {
-        let mut s = raw.trim();
-        // 先頭と末尾のクォートを除去（'path' / "path" / `path`）
-        if (s.starts_with('"') && s.ends_with('"'))
-            || (s.starts_with('\'') && s.ends_with('\''))
-            || (s.starts_with('`') && s.ends_with('`'))
-        {
-            if s.len() >= 2 { s = &s[1..s.len()-1]; }
-        }
-
-        // '/Users' の直後のスラッシュ欠落を補正（例: '/Userskim...' → '/Users/kim...')
-        const USERS: &str = "/Users";
-        if s.starts_with(USERS) && !s.starts_with("/Users/") {
-            let after = &s[USERS.len()..];
-            if !after.starts_with('/') {
-                let fixed = format!("{}/{}", USERS, after);
-                return PathBuf::from(fixed);
-            }
-        }
-        if s.starts_with("Users") && !s.starts_with("Users/") {
-            let after = &s["Users".len()..];
-            let fixed = format!("/Users/{}", after);
-            return PathBuf::from(fixed);
-        }
-
-        // 既に絶対パスならそのまま
-        if s.starts_with('/') {
-            return PathBuf::from(s);
-        }
-
-        // よくあるトップレベルディレクトリ名で始まる場合は先頭にスラッシュを補う
-        // 例: Users/..., Volumes/..., System/..., Applications/... など
-        const TOPS: &[&str] = &[
-            "Users/", "Volumes/", "System/", "Applications/", "Library/",
-            "usr/", "bin/", "sbin/", "etc/", "var/", "opt/", "private/", "tmp/", "home/",
-        ];
-        for prefix in TOPS {
-            if s.starts_with(prefix) {
-                let fixed = format!("/{}", s);
-                return PathBuf::from(fixed);
-            }
-        }
-
-        // 相対パスは CWD 基準
-        self.cwd.join(s)
+        crate::path_utils::resolve_path_with_cwd(&self.cwd, raw)
     }
     pub fn new(
         _approval_policy: AskForApproval,
