@@ -366,19 +366,13 @@ impl SandboxedExecutor {
         timeout_ms: Option<u64>,
         sandbox_policy: &SandboxPolicy,
     ) -> Result<BasicExecResult, ExecError> {
+        // Build SBPL and pass via -p (policy string) like codex-1
         let policy = build_seatbelt_policy(sandbox_policy.clone(), working_dir);
-
-        // Create a temporary policy file
-        let policy_file =
-            std::env::temp_dir().join(format!("slide_policy_{}.sbpl", std::process::id()));
-        std::fs::write(&policy_file, policy).map_err(|e| ExecError::SandboxError {
-            message: e.to_string(),
-        })?;
 
         let mut sandbox_cmd = Command::new("sandbox-exec");
         sandbox_cmd
-            .arg("-f")
-            .arg(&policy_file)
+            .arg("-p")
+            .arg(policy)
             .args(&command)
             .current_dir(working_dir)
             .env_clear()
@@ -391,14 +385,9 @@ impl SandboxedExecutor {
             .unwrap_or(Duration::from_secs(30));
 
         let result = tokio::time::timeout(timeout, async {
-            tokio::task::spawn_blocking(move || {
-                let output = sandbox_cmd.output()?;
-                // Clean up policy file
-                let _ = std::fs::remove_file(&policy_file);
-                Ok::<_, std::io::Error>(output)
-            })
-            .await
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
+            tokio::task::spawn_blocking(move || sandbox_cmd.output())
+                .await
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
         })
         .await
         .map_err(|_| ExecError::Timeout {
