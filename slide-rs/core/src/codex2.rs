@@ -89,11 +89,25 @@ fn parse_review_output_event(text: &str) -> protocol::protocol::ReviewOutputEven
         if l.starts_with('-') || l.starts_with('*') || l.starts_with('•') {
             let content = l.trim_start_matches(['-', '*', '•', ' '].as_ref()).to_string();
             if !content.is_empty() {
-                findings.push(protocol::protocol::ReviewFinding { title: content.clone(), body: String::new(), severity: None });
+                findings.push(protocol::protocol::ReviewFinding { 
+                    title: content.clone(), 
+                    body: String::new(), 
+                    confidence_score: 0.5, 
+                    priority: 2, // P2 (normal)
+                    code_location: protocol::protocol::ReviewCodeLocation {
+                        absolute_file_path: std::path::PathBuf::from(""),
+                        line_range: protocol::protocol::ReviewLineRange { start: 0, end: 0 },
+                    },
+                });
             }
         }
     }
-    protocol::protocol::ReviewOutputEvent { overall_explanation: text.to_string(), findings }
+    protocol::protocol::ReviewOutputEvent { 
+        overall_explanation: text.to_string(), 
+        findings,
+        overall_correctness: "patch is correct".to_string(), // デフォルト値
+        overall_confidence_score: 0.5, // デフォルト値
+    }
 }
 
 // MEE-25: missing_calls完全実装
@@ -2172,11 +2186,15 @@ async fn run_task(
             if !out.findings.is_empty() {
                 body.push_str("\n\nFindings:\n");
                 for f in out.findings {
-                    if let Some(sev) = f.severity {
-                        body.push_str(&format!("- [{}] {}: {}\n", sev, f.title, f.body));
-                    } else {
-                        body.push_str(&format!("- {}: {}\n", f.title, f.body));
-                    }
+                    // Use priority instead of severity (0=P0 critical, 1=P1 urgent, 2=P2 normal, 3=P3 low)
+                    let priority_str = match f.priority {
+                        0 => "P0",
+                        1 => "P1",
+                        2 => "P2",
+                        3 => "P3",
+                        _ => "P?",
+                    };
+                    body.push_str(&format!("- [{}] {}: {}\n", priority_str, f.title, f.body));
                 }
             }
             if !body.is_empty() {
@@ -2228,3 +2246,4 @@ fn get_last_assistant_message_from_turn(items: &[ResponseItem]) -> Option<String
             _ => None,
         })
 }
+
