@@ -423,24 +423,24 @@ impl OpenAiModelClient {
                                                                                         if let Some(tool_name) = tool_json.get("tool").and_then(|t| t.as_str()) {
                                                                                             tracing::info!("[responses-api] Found tool call in message: {}", tool_name);
                                                                                             
-                                                                                            // Convert tool call JSON to proper arguments format
-                                                                                            let arguments = if tool_name == "shell" {
-                                                                                                // Convert {"tool":"shell","command":[...]} to {"cmd":[...],...}
-                                                                                                let cmd = tool_json.get("command").cloned().unwrap_or(serde_json::json!([]));
-                                                                                                let cwd = tool_json.get("workdir").cloned();
-                                                                                                let timeout_ms = tool_json.get("timeout_ms").cloned();
-                                                                                                let mut args = serde_json::json!({"cmd": cmd});
-                                                                                                if let Some(cwd) = cwd {
-                                                                                                    args["cwd"] = cwd;
-                                                                                                }
-                                                                                                if let Some(timeout) = timeout_ms {
-                                                                                                    args["timeout_ms"] = timeout;
-                                                                                                }
-                                                                                                serde_json::to_string(&args).unwrap_or_else(|_| "{}".to_string())
-                                                                                            } else {
-                                                                                                // For other tools, use the original JSON
-                                                                                                text.to_string()
-                                                                                            };
+                                                                            // Convert tool call JSON to proper arguments format
+                                                                            let arguments = if tool_name == "shell" {
+                                                                                // Convert {"tool":"shell","command":[...]} to {"command":[...],...}
+                                                                                let cmd = tool_json.get("command").cloned().unwrap_or(serde_json::json!([]));
+                                                                                let workdir = tool_json.get("workdir").cloned();
+                                                                                let timeout_ms = tool_json.get("timeout_ms").cloned();
+                                                                                let mut args = serde_json::json!({"command": cmd});
+                                                                                if let Some(workdir) = workdir {
+                                                                                    args["workdir"] = workdir;
+                                                                                }
+                                                                                if let Some(timeout) = timeout_ms {
+                                                                                    args["timeout_ms"] = timeout;
+                                                                                }
+                                                                                serde_json::to_string(&args).unwrap_or_else(|_| "{}".to_string())
+                                                                            } else {
+                                                                                // For other tools, use the original JSON
+                                                                                text.to_string()
+                                                                            };
                                                                                             
                                                                                             // Convert to FunctionCall format
                                                                                             let function_call_item = serde_json::json!({

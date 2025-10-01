@@ -1030,10 +1030,10 @@ async fn handle_container_exec_tool_call(
     arguments: String,
     call_id: String,
 ) -> Result<String, String> {
-    // 既存のcontainer_exec機能を利用
-    match tool_executor.execute_function_call("container.exec", &arguments).await {
+    // shell ツールを実行
+    match tool_executor.execute_function_call("shell", &arguments).await {
         Ok(output) => Ok(output),
-        Err(e) => Err(format!("Container exec error: {}", e)),
+        Err(e) => Err(format!("Shell execution error: {}", e)),
     }
 }
 
