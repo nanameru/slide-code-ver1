@@ -987,9 +987,10 @@ pub enum Event {
         exit_code: i32,
     },
     ApplyPatchApprovalRequest {
-        id: String,
-        changes: HashMap<PathBuf, String>,
+        call_id: String,
+        changes: HashMap<PathBuf, protocol::FileChange>,
         reason: Option<String>,
+        grant_root: bool,
     },
     PatchApplyBegin {},
     PatchApplyEnd {
@@ -1004,10 +1005,16 @@ pub enum Event {
     },
     ShutdownComplete,
     ExecApprovalRequest {
-        id: String,
+        call_id: String,
         command: Vec<String>,
         cwd: PathBuf,
         reason: Option<String>,
+    },
+    EnteredReviewMode {
+        review_request: protocol::protocol::ReviewRequest,
+    },
+    ExitedReviewMode {
+        review_output: protocol::protocol::ReviewOutputEvent,
     },
 }
 

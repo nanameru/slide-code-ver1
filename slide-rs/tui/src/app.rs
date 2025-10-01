@@ -835,8 +835,7 @@ fn handle_core_event(tui: &mut Tui, app: &mut App, ev: CoreEvent)
             append_log("[exec] end");
         }
         CoreEvent::ApplyPatchApprovalRequest {
-            id,
-            call_id: _,
+            call_id,
             changes,
             reason,
             grant_root: _,
@@ -855,7 +854,7 @@ fn handle_core_event(tui: &mut Tui, app: &mut App, ev: CoreEvent)
                 .collect();
             items.sort();
             let req = ApprovalRequest::Patch {
-                id,
+                id: call_id,
                 changes: items,
                 reason,
             };
@@ -924,14 +923,13 @@ fn handle_core_event(tui: &mut Tui, app: &mut App, ev: CoreEvent)
         }
         CoreEvent::ShutdownComplete => {}
         CoreEvent::ExecApprovalRequest {
-            id,
-            call_id: _,
+            call_id,
             command,
             cwd: _,
             reason,
         } => {
             let req = ApprovalRequest::Exec {
-                id,
+                id: call_id,
                 command,
                 reason,
             };
@@ -955,50 +953,43 @@ fn handle_core_event(tui: &mut Tui, app: &mut App, ev: CoreEvent)
         CoreEvent::ExitedReviewMode { review_output } => {
             // MEE-49: レビューモード終了
             // 参考: codex-1/codex-rs/tui/src/chatwidget.rs:1172-1180
-            if let Some(output) = review_output.review_output {
-                let findings_count = output.findings.len();
-                let banner = format!("<< Code review finished: {} findings >>", findings_count);
-                let cell = HistoryCell::new_system_status(SystemLabel::Info, [&banner]);
+            let findings_count = review_output.findings.len();
+            let banner = format!("<< Code review finished: {} findings >>", findings_count);
+            let cell = HistoryCell::new_system_status(SystemLabel::Info, [&banner]);
+            app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+            
+            // 所見を表示
+            if !review_output.overall_explanation.is_empty() {
+                let cell = HistoryCell::new_system_status(
+                    SystemLabel::Info, 
+                    [&format!("Overall: {}", review_output.overall_explanation)]
+                );
                 app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
-                
-                // 所見を表示
-                if !output.overall_explanation.is_empty() {
-                    let cell = HistoryCell::new_system_status(
-                        SystemLabel::Info, 
-                        [&format!("Overall: {}", output.overall_explanation)]
-                    );
-                    app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
-                }
-                
-                // 各Findingを表示
-                for finding in output.findings {
-                    let priority_label = match finding.priority {
-                        0 => "P0",
-                        1 => "P1",
-                        2 => "P2",
-                        3 => "P3",
-                        _ => "P?",
-                    };
-                    let finding_text = format!(
-                        "[{}] {}\n{}\nFile: {} (lines {}-{})",
-                        priority_label,
-                        finding.title,
-                        finding.body,
-                        finding.code_location.absolute_file_path.display(),
-                        finding.code_location.line_range.start,
-                        finding.code_location.line_range.end
-                    );
-                    let cell = HistoryCell::new_system_status(SystemLabel::Info, [&finding_text]);
-                    app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
-                }
-                
-                append_log(&format!("[review] finished: {} findings", findings_count));
-            } else {
-                let banner = "<< Code review finished: no output >>";
-                let cell = HistoryCell::new_system_status(SystemLabel::Info, [banner]);
-                app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
-                append_log("[review] finished: no output");
             }
+            
+            // 各Findingを表示
+            for finding in review_output.findings {
+                let priority_label = match finding.priority {
+                    0 => "P0",
+                    1 => "P1",
+                    2 => "P2",
+                    3 => "P3",
+                    _ => "P?",
+                };
+                let finding_text = format!(
+                    "[{}] {}\n{}\nFile: {} (lines {}-{})",
+                    priority_label,
+                    finding.title,
+                    finding.body,
+                    finding.code_location.absolute_file_path.display(),
+                    finding.code_location.line_range.start,
+                    finding.code_location.line_range.end
+                );
+                let cell = HistoryCell::new_system_status(SystemLabel::Info, [&finding_text]);
+                app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+            }
+            
+            append_log(&format!("[review] finished: {} findings", findings_count));
         }
     }
 }
