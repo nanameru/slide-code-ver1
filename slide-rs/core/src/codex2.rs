@@ -3,16 +3,17 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 use crate::path_utils;
 use std::time::Instant;
 use tokio::process::Command;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use std::process::Stdio;
 use tokio::sync::Mutex;
+use std::time::Duration;
 use tracing::warn;
 
 use crate::client::{ModelClient, ResponseEvent, OpenAiAdapter, StubClient};
+use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::openai_tools::{render_tools_instructions, ToolsConfig, ToolsConfigParams};
 use crate::protocol::{ReasoningEffort, ReasoningSummary};
 use protocol::protocol::InputItem;
@@ -21,16 +22,9 @@ use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::conversation_history::{ResponseItem, ResponseInputItem};
 use crate::event_mapping::map_response_item_to_event_messages;
-use slide_chatgpt::client::ChatGptClient;
+use slide_chatgpt::client::{ChatGptClient, SlideRequest};
 use regex;
 use uuid;
-
-// MEE-49: Review prompt
-// 参考: codex-1/codex-rs/core/src/client_common.rs:21
-const REVIEW_PROMPT: &str = include_str!("../review_prompt.md");
-
-// Base instructions for the agent (from prompt.md)
-const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
 
 // MEE-24: 処理済みレスポンスアイテム
 #[derive(Debug, Clone)]
@@ -87,42 +81,19 @@ struct Prompt {
     base_instructions_override: Option<String>,
 }
 
-/// MEE-49: レビュー出力のJSON形式パース
-/// 参考: codex-1/codex-rs/core/src/codex.rs (parse_review_output関数)
-fn parse_review_output(text: &str) -> Option<protocol::protocol::ReviewOutputEvent> {
-    // JSON部分を抽出（マークダウンフェンスやプロンプトの後の部分を探す）
-    let json_text = if let Some(start) = text.find('{') {
-        if let Some(end) = text.rfind('}') {
-            &text[start..=end]
-        } else {
-            text
-        }
-    } else {
-        text
-    };
-    
-    // JSONパース
-    match serde_json::from_str::<protocol::protocol::ReviewOutputEvent>(json_text) {
-        Ok(output) => Some(output),
-        Err(e) => {
-            // パース失敗時はログに記録して None を返す
-            tracing::warn!("Failed to parse review output as JSON: {}. Text: {}", e, &json_text[..json_text.len().min(200)]);
-            None
+fn parse_review_output_event(text: &str) -> protocol::protocol::ReviewOutputEvent {
+    // 最小実装: テキスト全体を overall_explanation に、見出しっぽい行を findings に（将来強化可）
+    let mut findings = Vec::new();
+    for line in text.lines() {
+        let l = line.trim();
+        if l.starts_with('-') || l.starts_with('*') || l.starts_with('•') {
+            let content = l.trim_start_matches(['-', '*', '•', ' '].as_ref()).to_string();
+            if !content.is_empty() {
+                findings.push(protocol::protocol::ReviewFinding { title: content.clone(), body: String::new(), severity: None });
+            }
         }
     }
-}
-
-/// 後方互換性のためのエイリアス（既存コードで使用されている）
-fn parse_review_output_event(text: &str) -> protocol::protocol::ReviewOutputEvent {
-    parse_review_output(text).unwrap_or_else(|| {
-        // フォールバック: テキスト全体を explanation として返す
-        protocol::protocol::ReviewOutputEvent {
-            findings: Vec::new(),
-            overall_correctness: "unknown".to_string(),
-            overall_explanation: text.to_string(),
-            overall_confidence_score: 0.5,
-        }
-    })
+    protocol::protocol::ReviewOutputEvent { overall_explanation: text.to_string(), findings }
 }
 
 // MEE-25: missing_calls完全実装
@@ -178,7 +149,7 @@ async fn run_turn(
     sub_id: String,
     input: Vec<ResponseItem>,
 ) -> crate::error::CodexResult<TurnRunResult> {
-    use crate::error::CodexErr;
+    use crate::error::{CodexErr, CodexResult};
     use crate::util::backoff;
     
     // ツール準備 (codex-1:1967-1970を参考)
@@ -211,18 +182,14 @@ async fn run_turn(
                 crate::openai_tools::OpenAiTool::Freeform(f) => format!("custom:{}", f.name),
             })
             .collect();
-        tracing::info!("tools for turn (has_image={}): {:?}", has_image_in_input, names);
+        tracing::debug!("tools for turn (has_image={}): {:?}", has_image_in_input, names);
     }
     
     let prompt = Prompt {
         input,
-        tools: tools_json.clone(),
-        base_instructions_override: Some(BASE_INSTRUCTIONS.to_string()),
+        tools: tools_json,
+        base_instructions_override: None, // 簡略版: オーバーライドなし
     };
-    
-    tracing::info!("run_turn called with {} tools, {} input items, base_instructions_len={}", 
-        prompt.tools.len(), prompt.input.len(), 
-        prompt.base_instructions_override.as_ref().map(|s| s.len()).unwrap_or(0));
 
     // リトライループ (codex-1:1978-2017を参考) - provider設定に基づく
     let mut retries = 0;
@@ -491,6 +458,9 @@ async fn try_run_turn(
             ResponseEvent::WebSearchCallBegin { .. } => {
                 // optional: surface to UI later
             }
+            ResponseEvent::RateLimits(_snapshot) => {
+                // optional: surface to UI later
+            }
             ResponseEvent::ReasoningSummaryPartAdded => {
                 // no-op for now
             }
@@ -747,91 +717,6 @@ async fn handle_function_call(
             }
         }
         
-        // 内蔵ツール: apply_patch
-        "apply_patch" => {
-            #[derive(serde::Deserialize)]
-            struct ApplyPatchArgs {
-                input: String,
-            }
-            
-            let args = match serde_json::from_str::<ApplyPatchArgs>(&arguments) {
-                Ok(args) => args,
-                Err(err) => {
-                    let _ = tx_event.send(Event::AgentMessageDelta { delta: format!("\n\n[Tool Execution]\n▶ apply_patch parse error") }).await;
-                    return ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: crate::conversation_history::FunctionCallOutputPayload {
-                            content: format!("failed to parse function arguments: {err}"),
-                            success: Some(false),
-                        },
-                    };
-                }
-            };
-            
-            let announce = format!("\n\n[Tool Execution]\n▶ apply_patch ({} bytes)", args.input.len());
-            let _ = tx_event.send(Event::AgentMessageDelta { delta: announce }).await;
-            
-            // Use tool_executor's apply_patch handling
-            match tool_executor.execute_function_call("apply_patch", &arguments).await {
-                Ok(output) => {
-                    let block = format!("\n\n[Tool Execution Result]\n☑ {}", output);
-                    let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
-                    ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: crate::conversation_history::FunctionCallOutputPayload {
-                            content: output,
-                            success: Some(true),
-                        },
-                    }
-                }
-                Err(e) => {
-                    let block = format!("\n\n[Tool Execution Result]\n✗ Failed: {}", e);
-                    let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
-                    ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: crate::conversation_history::FunctionCallOutputPayload {
-                            content: format!("Error: {}", e),
-                            success: Some(false),
-                        },
-                    }
-                }
-            }
-        }
-        
-        // 内蔵ツール: view_image  
-        "view_image" => {
-            #[derive(serde::Deserialize)]
-            struct ViewImageArgs {
-                path: String,
-            }
-            
-            let args = match serde_json::from_str::<ViewImageArgs>(&arguments) {
-                Ok(args) => args,
-                Err(err) => {
-                    return ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: crate::conversation_history::FunctionCallOutputPayload {
-                            content: format!("failed to parse function arguments: {err}"),
-                            success: Some(false),
-                        },
-                    };
-                }
-            };
-            
-            let announce = format!("\n\n[Tool Execution]\n▶ view_image {}", args.path);
-            let _ = tx_event.send(Event::AgentMessageDelta { delta: announce }).await;
-            
-            // Note: view_image typically injects image into context, which should be handled at session level
-            // For now, just acknowledge
-            ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: crate::conversation_history::FunctionCallOutputPayload {
-                    content: format!("Image {} added to context", args.path),
-                    success: Some(true),
-                },
-            }
-        }
-        
         // MCPツール (動的判定)
         _ => {
             match mcp_manager.parse_tool_name(&name) {
@@ -1030,10 +915,10 @@ async fn handle_container_exec_tool_call(
     arguments: String,
     call_id: String,
 ) -> Result<String, String> {
-    // shell ツールを実行
-    match tool_executor.execute_function_call("shell", &arguments).await {
+    // 既存のcontainer_exec機能を利用
+    match tool_executor.execute_function_call("container.exec", &arguments).await {
         Ok(output) => Ok(output),
-        Err(e) => Err(format!("Shell execution error: {}", e)),
+        Err(e) => Err(format!("Container exec error: {}", e)),
     }
 }
 
@@ -1104,13 +989,10 @@ pub enum Event {
     ExecCommandEnd {
         exit_code: i32,
     },
-    /// MEE-48: パッチ適用の承認リクエスト
     ApplyPatchApprovalRequest {
         id: String,
-        call_id: String,
-        changes: HashMap<PathBuf, protocol::protocol::FileChange>,
+        changes: HashMap<PathBuf, String>,
         reason: Option<String>,
-        grant_root: Option<PathBuf>,
     },
     PatchApplyBegin {},
     PatchApplyEnd {
@@ -1124,23 +1006,11 @@ pub enum Event {
         message: String,
     },
     ShutdownComplete,
-    /// MEE-48: コマンド実行の承認リクエスト
     ExecApprovalRequest {
         id: String,
-        call_id: String,
         command: Vec<String>,
         cwd: PathBuf,
         reason: Option<String>,
-    },
-    /// MEE-49: レビューモード開始
-    /// 参考: codex-1/codex-rs/protocol/src/protocol.rs:514-515
-    EnteredReviewMode {
-        review_request: protocol::protocol::ReviewRequest,
-    },
-    /// MEE-49: レビューモード終了（所見付き）
-    /// 参考: codex-1/codex-rs/protocol/src/protocol.rs:517-518
-    ExitedReviewMode {
-        review_output: protocol::protocol::ExitedReviewModeEvent,
     },
 }
 
@@ -1212,7 +1082,6 @@ struct SessionState {
     history: crate::conversation_history::ConversationHistory,
     current_task: Option<String>, // 簡略版: codex-1では AgentTask
     previous_env_context: Option<crate::environment_context::EnvironmentContext>, // MEE-47: 環境変更検出用
-    pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>, // MEE-48: 承認リクエストの管理
 }
 
 /// MEE-33: codex-1互換のセッション構造体
@@ -1282,13 +1151,6 @@ impl Codex {
             
             // Initialize MCP Connection Manager
             let mcp_manager = Arc::new(McpConnectionManager::default());
-            
-            // MEE-48: 全操作で再利用するSessionを1回作成（承認ワークフロー用）
-            let sess = Arc::new(Session::new(
-                tx_event.clone(),
-                mcp_manager.clone(),
-            ));
-            
             // Handle to the currently running shell process (for interrupt)
             let running_child: Arc<tokio::sync::Mutex<Option<(u64, tokio::process::Child, Instant)>>> =
                 Arc::new(tokio::sync::Mutex::new(None));
@@ -1312,7 +1174,10 @@ impl Codex {
                     Op::UserInput { text } => {
                         // MEE-43: すべての入力を run_task に一本化（/slide 特別処理は廃止）
                         // MEE-33: セッション管理統合による動的判断ループ呼び出し
-                        // MEE-48: ループ外で作成したsessを再利用
+                        let sess = Arc::new(Session::new(
+                            tx_event.clone(),
+                            mcp_manager.clone(),
+                        ));
 
                 let turn_context = Arc::new(TurnContext {
                     client: current_model_client.clone(),
@@ -1323,12 +1188,12 @@ impl Codex {
                     effort: current_effort,
                     tools_config: crate::openai_tools::ToolsConfig {
                         shell_type: crate::openai_tools::ConfigShellToolType::Default,
-                        plan_tool: true,
-                        apply_patch_tool_type: Some(crate::tool_apply_patch::ApplyPatchToolType::Freeform),
+                        plan_tool: false,
+                        apply_patch_tool_type: None,
                         web_search_request: false,
                         include_view_image_tool: false,
                         experimental_unified_exec_tool: false,
-                    }, // MEE-29: 基本ツール有効化
+                    }, // MEE-29: デフォルト設定
                     base_instructions: None, // MEE-29: ベース指示なし
                     is_review_mode: false,
                 });
@@ -1337,7 +1202,7 @@ impl Codex {
                         let sub_id = uuid::Uuid::new_v4().to_string();
                         let input = vec![crate::conversation_history::ResponseInputItem::from_text(text.clone())];
                         if let Err(e) = run_task(
-                            Arc::clone(&sess),
+                            sess,
                             turn_context,
                             sub_id,
                             input,
@@ -1900,23 +1765,15 @@ impl Codex {
                         }
                     }
                     Op::Review { review_request } => {
-                        // MEE-49: レビューモードの正式化
-                        // 参考: codex-1/codex-rs/core/src/codex.rs:1569-1630
-                        
-                        // レビュー専用のSessionを作成
-                        let review_sess = Arc::new(Session::new(tx_event.clone(), mcp_manager.clone()));
-                        
-                        // レビュープロンプトをbase_instructionsに設定
-                        let base_instructions = REVIEW_PROMPT.to_string();
-                        let review_prompt = review_request.prompt.clone();
-                        
+                        // レビューモード: is_review_mode=true のサブ・コンテキストで isolated に実行
+                        let sess = Arc::new(Session::new(tx_event.clone(), mcp_manager.clone()));
                         let review_turn_context = Arc::new(TurnContext {
                             client: current_model_client.clone(),
                             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
                             approval_policy: current_approval.clone(),
                             sandbox_policy: current_sandbox.clone(),
                             model: current_model.clone(),
-                            effort: Some(ReasoningEffort::Low), // レビューは低い推論で十分
+                            effort: current_effort,
                             tools_config: crate::openai_tools::ToolsConfig {
                                 shell_type: crate::openai_tools::ConfigShellToolType::Default,
                                 plan_tool: false,
@@ -1925,67 +1782,22 @@ impl Codex {
                                 include_view_image_tool: false,
                                 experimental_unified_exec_tool: false,
                             },
-                            base_instructions: Some(base_instructions.clone()),
-                            is_review_mode: true, // 重要: レビューモードフラグ
+                            base_instructions: None,
+                            is_review_mode: true,
                         });
-                        
                         let sub_id = uuid::Uuid::new_v4().to_string();
-                        
-                        // 1. EnteredReviewModeイベントを送信
-                        let _ = tx_event.send(Event::EnteredReviewMode { 
-                            review_request: review_request.clone() 
-                        }).await;
-                        
-                        // 2. レビュープロンプトとユーザーリクエストを組み合わせて入力
+                        // 先に EnteredReviewMode を通知（Protocol正式イベント実装前に暫定デルタ）
+                        let _ = tx_event.send(Event::AgentMessageDelta { delta: format!("\n>> Code review started: {} <<\n", review_request.user_facing_hint) }).await;
+                        // 初期入力は review_request.prompt をユーザメッセージとして渡す
                         let input = vec![crate::conversation_history::ResponseInputItem::Message {
                             role: "user".to_string(),
-                            content: vec![crate::conversation_history::ContentItem::InputText { 
-                                text: format!("{}\n\n---\n\nNow, here's your task: {}", base_instructions, review_prompt)
-                            }],
+                            content: vec![crate::conversation_history::ContentItem::InputText { text: review_request.prompt.clone() }],
                         }];
-                        
-                        // 3. run_taskを実行（レビューモードで）
-                        let review_result = run_task(
-                            Arc::clone(&review_sess), 
-                            review_turn_context.clone(), 
-                            sub_id.clone(), 
-                            input
-                        ).await;
-                        
-                        // 4. レビュー結果を取得
-                        // run_taskはResult<()>を返すので、Sessionの履歴から最後のメッセージを取得
-                        let review_output = if review_result.is_ok() {
-                            // Sessionの履歴から最後のアシスタントメッセージを取得
-                            let history = review_sess.get_history_contents().await;
-                            history.iter()
-                                .rev()
-                                .find_map(|item| {
-                                    if let ResponseItem::Message { role, content, .. } = item {
-                                        if role == "assistant" {
-                                            content.iter().find_map(|c| {
-                                                if let crate::conversation_history::ContentItem::OutputText { text } = c {
-                                                    parse_review_output(text)
-                                                } else {
-                                                    None
-                                                }
-                                            })
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
-                                    }
-                                })
-                        } else {
-                            None
-                        };
-                        
-                        // 5. ExitedReviewModeイベントを送信
-                        let _ = tx_event.send(Event::ExitedReviewMode { 
-                            review_output: protocol::protocol::ExitedReviewModeEvent {
-                                review_output,
-                            }
-                        }).await;
+                        if let Err(e) = run_task(sess.clone(), review_turn_context.clone(), sub_id.clone(), input).await {
+                            let _ = tx_event.send(Event::Error { message: e.to_string() }).await;
+                        }
+                        // 終了バナー（Protocol正式イベント実装前に暫定デルタ）
+                        let _ = tx_event.send(Event::AgentMessageDelta { delta: "\n<< Code review finished >>\n".to_string() }).await;
                     }
                     Op::Interrupt => {
                         let mut g = running_child.lock().await;
@@ -1995,13 +1807,11 @@ impl Codex {
                             let _ = tx_event.send(Event::ToolEnd { id: rid, ok: false, exit_code: None, took_ms }).await;
                         }
                     }
-                    Op::ExecApproval { id, decision } => {
-                        // MEE-48: ユーザーの承認/却下を処理
-                        sess.notify_approval(&id, decision).await;
+                    Op::ExecApproval { .. } => {
+                        // Minimal placeholder: in full core this would resolve a pending approval
                     }
-                    Op::PatchApproval { id, decision } => {
-                        // MEE-48: ユーザーの承認/却下を処理
-                        sess.notify_approval(&id, decision).await;
+                    Op::PatchApproval { .. } => {
+                        // Minimal placeholder
                     }
                     Op::Shutdown => {
                         let _ = tx_event.send(Event::ShutdownComplete).await;
@@ -2126,96 +1936,6 @@ impl Session {
     /// イベント送信
     pub async fn send_event(&self, event: Event) {
         let _ = self.tx_event.send(event).await;
-    }
-
-    /// MEE-48: コマンド実行の承認をリクエスト
-    /// 参考: codex-1/codex-rs/core/src/codex.rs:582-612
-    pub async fn request_command_approval(
-        &self,
-        sub_id: String,
-        call_id: String,
-        command: Vec<String>,
-        cwd: PathBuf,
-        reason: Option<String>,
-    ) -> oneshot::Receiver<ReviewDecision> {
-        // チャネルを作成して pending_approvals に保存
-        let (tx_approve, rx_approve) = oneshot::channel();
-        let event_id = sub_id.clone();
-        
-        let prev_entry = {
-            let mut state = self.state.lock().await;
-            state.pending_approvals.insert(sub_id, tx_approve)
-        };
-        
-        if prev_entry.is_some() {
-            warn!("Overwriting existing pending approval for sub_id: {event_id}");
-        }
-
-        // 承認リクエストイベントを送信
-        let event = Event::ExecApprovalRequest {
-            id: event_id,
-            call_id,
-            command,
-            cwd,
-            reason,
-        };
-        self.send_event(event).await;
-        rx_approve
-    }
-
-    /// MEE-48: パッチ適用の承認をリクエスト
-    /// 参考: codex-1/codex-rs/core/src/codex.rs:614-644
-    pub async fn request_patch_approval(
-        &self,
-        sub_id: String,
-        call_id: String,
-        changes: HashMap<PathBuf, protocol::protocol::FileChange>,
-        reason: Option<String>,
-        grant_root: Option<PathBuf>,
-    ) -> oneshot::Receiver<ReviewDecision> {
-        // チャネルを作成して pending_approvals に保存
-        let (tx_approve, rx_approve) = oneshot::channel();
-        let event_id = sub_id.clone();
-        
-        let prev_entry = {
-            let mut state = self.state.lock().await;
-            state.pending_approvals.insert(sub_id, tx_approve)
-        };
-        
-        if prev_entry.is_some() {
-            warn!("Overwriting existing pending approval for sub_id: {event_id}");
-        }
-
-        // 承認リクエストイベントを送信
-        let event = Event::ApplyPatchApprovalRequest {
-            id: event_id,
-            call_id,
-            changes,
-            reason,
-            grant_root,
-        };
-        self.send_event(event).await;
-        rx_approve
-    }
-
-    /// MEE-48: ユーザーの承認/却下を処理
-    /// 参考: codex-1/codex-rs/core/src/codex.rs:646-659
-    pub async fn notify_approval(&self, sub_id: &str, decision: ReviewDecision) {
-        let entry = {
-            let mut state = self.state.lock().await;
-            state.pending_approvals.remove(sub_id)
-        };
-        
-        match entry {
-            Some(tx_approve) => {
-                if tx_approve.send(decision).is_err() {
-                    warn!("Failed to send approval decision for sub_id: {sub_id}");
-                }
-            }
-            None => {
-                warn!("No pending approval found for sub_id: {sub_id}");
-            }
-        }
     }
     
     /// MEE-30: 履歴の内容を取得（auto-compact用）
@@ -2452,15 +2172,11 @@ async fn run_task(
             if !out.findings.is_empty() {
                 body.push_str("\n\nFindings:\n");
                 for f in out.findings {
-                    // MEE-49: priorityフィールドを使用（0=P0, 1=P1, 2=P2, 3=P3）
-                    let priority_label = match f.priority {
-                        0 => "P0",
-                        1 => "P1",
-                        2 => "P2",
-                        3 => "P3",
-                        _ => "P?",
-                    };
-                    body.push_str(&format!("- [{}] {}: {}\n", priority_label, f.title, f.body));
+                    if let Some(sev) = f.severity {
+                        body.push_str(&format!("- [{}] {}: {}\n", sev, f.title, f.body));
+                    } else {
+                        body.push_str(&format!("- {}: {}\n", f.title, f.body));
+                    }
                 }
             }
             if !body.is_empty() {
