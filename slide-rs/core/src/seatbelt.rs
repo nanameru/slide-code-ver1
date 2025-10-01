@@ -1,8 +1,19 @@
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use tokio::process::Child;
+
 // Re-export from protocol to maintain consistency
 pub use protocol::protocol::{SandboxPolicy, WritableRoot};
+use crate::spawn::{spawn_child_async, StdioPolicy, SLIDE_SANDBOX_ENV_VAR};
 
 // Base policy borrowed from codex-1 approach
 const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl");
+
+/// When working with `sandbox-exec`, only consider `sandbox-exec` in `/usr/bin`
+/// to defend against an attacker trying to inject a malicious version on the
+/// PATH. If /usr/bin/sandbox-exec has been tampered with, then the attacker
+/// already has root access.
+const MACOS_PATH_TO_SEATBELT_EXECUTABLE: &str = "/usr/bin/sandbox-exec";
 
 /// 日本語メモ（文系向け）
 /// このファイルは、macOSの「サンドボックスのルール用紙（SBPL）」を作る係です。
@@ -97,4 +108,46 @@ pub fn build_seatbelt_policy(policy: SandboxPolicy, cwd: &std::path::Path) -> St
             )
         }
     }
+}
+
+/// Spawn a command under macOS Seatbelt sandbox.
+/// 
+/// This function:
+/// 1. Builds the Seatbelt policy based on SandboxPolicy
+/// 2. Invokes /usr/bin/sandbox-exec with the policy
+/// 3. Spawns the actual command under sandbox restrictions
+///
+/// Reference: codex-1/codex-rs/core/src/seatbelt.rs
+pub async fn spawn_command_under_seatbelt(
+    command: Vec<String>,
+    command_cwd: PathBuf,
+    sandbox_policy: &SandboxPolicy,
+    sandbox_policy_cwd: &Path,
+    stdio_policy: StdioPolicy,
+    mut env: HashMap<String, String>,
+) -> std::io::Result<Child> {
+    let policy_string = build_seatbelt_policy(sandbox_policy.clone(), sandbox_policy_cwd);
+    
+    // Build sandbox-exec invocation:
+    // sandbox-exec -p "<policy>" -- <command>
+    let mut seatbelt_args: Vec<String> = vec![
+        "-p".to_string(),
+        policy_string,
+        "--".to_string(),
+    ];
+    seatbelt_args.extend(command);
+    
+    let arg0 = None;
+    env.insert(SLIDE_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
+    
+    spawn_child_async(
+        PathBuf::from(MACOS_PATH_TO_SEATBELT_EXECUTABLE),
+        seatbelt_args,
+        arg0,
+        command_cwd,
+        sandbox_policy,
+        stdio_policy,
+        env,
+    )
+    .await
 }

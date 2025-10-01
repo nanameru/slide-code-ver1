@@ -22,6 +22,8 @@ pub mod parse_command;
 pub mod path_utils;
 pub mod safety;
 pub mod seatbelt;
+pub mod spawn; // MEE-50: sandbox用の共通プロセス起動
+pub mod landlock; // MEE-50: Linux Landlock+seccomp sandbox
 pub mod shell;
 pub mod tool_apply_patch;
 pub mod tool_executor;
