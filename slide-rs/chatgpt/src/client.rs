@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
-use tokio::{io::AsyncBufReadExt, sync::mpsc};
+use tokio::sync::mpsc;
 
 #[derive(Debug, Serialize)]
 pub struct SlideRequest {
@@ -385,13 +385,53 @@ impl OpenAiModelClient {
                                                         "response.created" => { 
                                                             // Silent - don't send anything to user
                                                         }
+                                                        // Responses API: output_item.done with function_call
+                                                        "response.output_item.done" => {
+                                                            if let Some(item) = v.get("item") {
+                                                                let item_type = item["type"].as_str().unwrap_or("");
+                                                                
+                                                                match item_type {
+                                                                    "function_call" => {
+                                                                        // FunctionCall: serialize as ResponseItem::FunctionCall
+                                                                        let function_call_item = serde_json::json!({
+                                                                            "type": "function_call",
+                                                                            "id": item.get("id").and_then(|v| v.as_str()),
+                                                                            "name": item["name"].as_str().unwrap_or(""),
+                                                                            "arguments": item["arguments"].as_str().unwrap_or("{}"),
+                                                                            "call_id": item["call_id"].as_str().unwrap_or("")
+                                                                        });
+                                                                        if let Ok(json_str) = serde_json::to_string(&function_call_item) {
+                                                                            let _ = tx.send(format!("__RESPONSE_ITEM__{}", json_str)).await;
+                                                                        }
+                                                                    }
+                                                                    "message" => {
+                                                                        // Regular message: serialize as ResponseItem::Message
+                                                                        if let Ok(json_str) = serde_json::to_string(&item) {
+                                                                            let _ = tx.send(format!("__RESPONSE_ITEM__{}", json_str)).await;
+                                                                        }
+                                                                    }
+                                                                    "local_shell_call" => {
+                                                                        // LocalShellCall: serialize as ResponseItem::LocalShellCall
+                                                                        if let Ok(json_str) = serde_json::to_string(&item) {
+                                                                            let _ = tx.send(format!("__RESPONSE_ITEM__{}", json_str)).await;
+                                                                        }
+                                                                    }
+                                                                    _ => {
+                                                                        // Unknown item type: try to serialize as-is
+                                                                        if let Ok(json_str) = serde_json::to_string(&item) {
+                                                                            let _ = tx.send(format!("__RESPONSE_ITEM__{}", json_str)).await;
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
                                                         // output text stream
                                                         tt if tt.ends_with("output_text.delta") => {
                                                             if let Some(s) = v["delta"].as_str() {
                                                                 let _ = tx.send(s.to_string()).await; // plain text delta
                                                             }
                                                         }
-                                                        // tool call deltas
+                                                        // tool call deltas (Chat Completions API - keep for backward compatibility)
                                                         tt if tt.ends_with("tool_calls.delta") => {
                                                             let idx = v["index"].as_u64().or_else(|| v["item_index"].as_u64()).unwrap_or(0);
                                                             let entry = tool_calls.entry(idx).or_insert((None, String::new()));
@@ -399,7 +439,7 @@ impl OpenAiModelClient {
                                                             if let Some(n) = name { entry.0 = Some(n.to_string()); }
                                                             if let Some(args) = v["delta"]["function"]["arguments"].as_str() { entry.1.push_str(args); }
                                                         }
-                                                        // one tool call completed (flush)
+                                                        // one tool call completed (flush) (Chat Completions API)
                                                         tt if tt.ends_with("tool_calls.item.done") => {
                                                             let idx = v["index"].as_u64().or_else(|| v["item_index"].as_u64()).unwrap_or(0);
                                                             if let Some((maybe_name, args)) = tool_calls.remove(&idx) {
@@ -408,7 +448,7 @@ impl OpenAiModelClient {
                                                                 let _ = tx.send(marker).await;
                                                             }
                                                         }
-                                                        // all tool calls done (flush any remainder)
+                                                        // all tool calls done (flush any remainder) (Chat Completions API)
                                                         tt if tt.ends_with("tool_calls.done") => {
                                                             for (_i, (maybe_name, args)) in tool_calls.drain() {
                                                                 let name = maybe_name.unwrap_or_else(|| "tool".to_string());

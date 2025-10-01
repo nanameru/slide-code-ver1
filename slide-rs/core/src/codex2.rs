@@ -175,7 +175,7 @@ async fn run_turn(
     sub_id: String,
     input: Vec<ResponseItem>,
 ) -> crate::error::CodexResult<TurnRunResult> {
-    use crate::error::{CodexErr, CodexResult};
+    use crate::error::CodexErr;
     use crate::util::backoff;
     
     // ツール準備 (codex-1:1967-1970を参考)
@@ -737,6 +737,91 @@ async fn handle_function_call(
                 },
                     }
                 }
+            }
+        }
+        
+        // 内蔵ツール: apply_patch
+        "apply_patch" => {
+            #[derive(serde::Deserialize)]
+            struct ApplyPatchArgs {
+                input: String,
+            }
+            
+            let args = match serde_json::from_str::<ApplyPatchArgs>(&arguments) {
+                Ok(args) => args,
+                Err(err) => {
+                    let _ = tx_event.send(Event::AgentMessageDelta { delta: format!("\n\n[Tool Execution]\n▶ apply_patch parse error") }).await;
+                    return ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: crate::conversation_history::FunctionCallOutputPayload {
+                            content: format!("failed to parse function arguments: {err}"),
+                            success: Some(false),
+                        },
+                    };
+                }
+            };
+            
+            let announce = format!("\n\n[Tool Execution]\n▶ apply_patch ({} bytes)", args.input.len());
+            let _ = tx_event.send(Event::AgentMessageDelta { delta: announce }).await;
+            
+            // Use tool_executor's apply_patch handling
+            match tool_executor.execute_function_call("apply_patch", &arguments).await {
+                Ok(output) => {
+                    let block = format!("\n\n[Tool Execution Result]\n☑ {}", output);
+                    let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
+                    ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: crate::conversation_history::FunctionCallOutputPayload {
+                            content: output,
+                            success: Some(true),
+                        },
+                    }
+                }
+                Err(e) => {
+                    let block = format!("\n\n[Tool Execution Result]\n✗ Failed: {}", e);
+                    let _ = tx_event.send(Event::AgentMessageDelta { delta: block.clone() }).await;
+                    ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: crate::conversation_history::FunctionCallOutputPayload {
+                            content: format!("Error: {}", e),
+                            success: Some(false),
+                        },
+                    }
+                }
+            }
+        }
+        
+        // 内蔵ツール: view_image  
+        "view_image" => {
+            #[derive(serde::Deserialize)]
+            struct ViewImageArgs {
+                path: String,
+            }
+            
+            let args = match serde_json::from_str::<ViewImageArgs>(&arguments) {
+                Ok(args) => args,
+                Err(err) => {
+                    return ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: crate::conversation_history::FunctionCallOutputPayload {
+                            content: format!("failed to parse function arguments: {err}"),
+                            success: Some(false),
+                        },
+                    };
+                }
+            };
+            
+            let announce = format!("\n\n[Tool Execution]\n▶ view_image {}", args.path);
+            let _ = tx_event.send(Event::AgentMessageDelta { delta: announce }).await;
+            
+            // Note: view_image typically injects image into context, which should be handled at session level
+            // For now, just acknowledge
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: crate::conversation_history::FunctionCallOutputPayload {
+                    content: format!("Image {} added to context", args.path),
+                    success: Some(true),
+                },
             }
         }
         

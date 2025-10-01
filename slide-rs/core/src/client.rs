@@ -110,6 +110,14 @@ impl ModelClient for OpenAiAdapter {
             tokio::spawn(async move {
                 while let Some(delta) = rx_text.recv().await {
                     if delta.is_empty() { let _ = tx.send(ResponseEvent::Completed).await; break; }
+                    // Handle __RESPONSE_ITEM__ marker (Responses API structured items)
+                    if let Some(rest) = delta.strip_prefix("__RESPONSE_ITEM__") {
+                        if let Ok(item) = serde_json::from_str::<crate::conversation_history::ResponseItem>(rest) {
+                            let _ = tx.send(ResponseEvent::OutputItemDone(item)).await;
+                            continue;
+                        }
+                    }
+                    // Handle __TOOL_CALL__ marker (legacy Chat Completions format)
                     if let Some(rest) = delta.strip_prefix("__TOOL_CALL__") {
                         if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) {
                             let name = v["name"].as_str().unwrap_or("").to_string();
@@ -147,6 +155,14 @@ impl ModelClient for OpenAiAdapter {
                 tokio::spawn(async move {
                     while let Some(delta) = rx_text.recv().await {
                         if delta.is_empty() { let _ = tx.send(ResponseEvent::Completed).await; break; }
+                        // Handle __RESPONSE_ITEM__ marker
+                        if let Some(rest) = delta.strip_prefix("__RESPONSE_ITEM__") {
+                            if let Ok(item) = serde_json::from_str::<crate::conversation_history::ResponseItem>(rest) {
+                                let _ = tx.send(ResponseEvent::OutputItemDone(item)).await;
+                                continue;
+                            }
+                        }
+                        // Handle __TOOL_CALL__ marker (legacy)
                         if let Some(rest) = delta.strip_prefix("__TOOL_CALL__") {
                             if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) {
                                 let name = v["name"].as_str().unwrap_or("").to_string();
@@ -180,7 +196,14 @@ impl ModelClient for OpenAiAdapter {
                     let _ = tx.send(ResponseEvent::Completed).await;
                     break;
                 }
-                // Detect tool-call marker lines emitted by slide-chatgpt client
+                // Handle __RESPONSE_ITEM__ marker (Responses API structured items)
+                if let Some(rest) = delta.strip_prefix("__RESPONSE_ITEM__") {
+                    if let Ok(item) = serde_json::from_str::<crate::conversation_history::ResponseItem>(rest) {
+                        let _ = tx.send(ResponseEvent::OutputItemDone(item)).await;
+                        continue;
+                    }
+                }
+                // Detect tool-call marker lines emitted by slide-chatgpt client (legacy)
                 if let Some(rest) = delta.strip_prefix("__TOOL_CALL__") {
                     // rest is JSON like {"name":"...","arguments":{...}}
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) {
