@@ -281,46 +281,12 @@ impl ToolExecutor {
                     timeout_ms,
                 })
             }
-            "read_file" => {
-                let path = value["path"]
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("Missing file path"))?;
-                Ok(ToolCall::ReadFile {
-                    path: self.normalize_path_str(path),
-                })
-            }
-            "write_file" => {
-                let path = value["path"]
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("Missing file path"))?;
-                let content = value["content"]
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("Missing file content"))?;
-                Ok(ToolCall::WriteFile {
-                    path: self.normalize_path_str(path),
-                    content: content.to_string(),
-                })
-            }
             "apply_patch" => {
                 let input = value["input"]
                     .as_str()
                     .ok_or_else(|| anyhow::anyhow!("Missing patch input"))?;
                 Ok(ToolCall::ApplyPatch {
                     input: input.to_string(),
-                })
-            }
-            "list_files" => {
-                let path = value["path"].as_str().map(|s| self.normalize_path_str(s));
-                Ok(ToolCall::ListFiles { path })
-            }
-            "search_files" => {
-                let query = value["query"]
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("Missing search query"))?;
-                let path = value["path"].as_str().map(|s| self.normalize_path_str(s));
-                Ok(ToolCall::SearchFiles {
-                    query: query.to_string(),
-                    path,
                 })
             }
             _ => Err(anyhow::anyhow!("Unknown tool: {}", tool_name)),
@@ -414,79 +380,6 @@ impl ToolExecutor {
                 )
                 .await
             }
-            ToolCall::ReadFile { path } => {
-                let full_path = if path.is_absolute() {
-                    path
-                } else {
-                    self.cwd.join(path)
-                };
-
-                match tokio::fs::read_to_string(&full_path).await {
-                    Ok(content) => Ok(format!(
-                        "Explored\n- Read {}\n\nFile content:\n{}",
-                        full_path.display(),
-                        content
-                    )),
-                    Err(e) => Ok(format!(
-                        "Explored\n- Failed to read file {}: {}",
-                        full_path.display(),
-                        e
-                    )),
-                }
-            }
-            ToolCall::WriteFile { path, content } => {
-                let full_path = if path.is_absolute() {
-                    path
-                } else {
-                    self.cwd.join(path)
-                };
-
-                // Check if the path is writable according to sandbox policy
-                if !self.is_path_writable(&full_path) {
-                    return Ok(format!(
-                        "Permission Denied\n❌ Cannot write to {} - outside of allowed writable directories.\nAllowed directories: {:?}",
-                        full_path.display(),
-                        self.sandbox_policy.get_writable_roots_with_cwd(&self.cwd).iter().map(|r| &r.root).collect::<Vec<_>>()
-                    ));
-                }
-
-                // ディレクトリが存在しない場合は作成
-                if let Some(parent) = full_path.parent() {
-                    if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                        return Ok(format!(
-                            "Change Approved\nFailed to create directory {}: {}",
-                            parent.display(),
-                            e
-                        ));
-                    }
-                }
-
-                let before = tokio::fs::read_to_string(&full_path).await.ok();
-                match tokio::fs::write(&full_path, content.clone()).await {
-                    Ok(_) => Ok(format!(
-                        "Change Approved {}\n☑ Successfully wrote to {}",
-                        full_path.display(),
-                        full_path.display()
-                    )),
-                    Err(e) => Ok(format!(
-                        "Change Approved {}\nFailed to write file {}: {}",
-                        full_path.display(),
-                        full_path.display(),
-                        e
-                    )),
-                }.map(|msg| {
-                    if let Some(tr) = &self.turn_diff_tracker {
-                        let after_now = content.clone();
-                        let trc = tr.clone();
-                        let p = full_path.clone();
-                        tokio::spawn(async move {
-                            let mut g = trc.lock().await;
-                            g.record_write_file(&p, before, &after_now);
-                        });
-                    }
-                    msg
-                })
-            }
             ToolCall::ApplyPatch { input } => {
                 let result = tool_apply_patch(ApplyPatchInput { patch: input.clone() }, true);
                 if result.applied {
@@ -500,64 +393,6 @@ impl ToolExecutor {
                     Ok(format!("Change Approved\n☑ {}", result.message))
                 } else {
                     Ok(format!("Proposed Change failed\n{}", result.message))
-                }
-            }
-            ToolCall::ListFiles { path } => {
-                let target_path = path.unwrap_or_else(|| self.cwd.clone());
-
-                match tokio::fs::read_dir(&target_path).await {
-                    Ok(mut entries) => {
-                        let mut files = Vec::new();
-                        while let Some(entry) = entries.next_entry().await.unwrap_or(None) {
-                            if let Ok(name) = entry.file_name().into_string() {
-                                files.push(name);
-                            }
-                        }
-                        files.sort();
-                        Ok(format!(
-                            "Explored\n- List files in {}\n\nFiles found:\n{}",
-                            target_path.display(),
-                            files
-                                .iter()
-                                .map(|f| format!("  {}", f))
-                                .collect::<Vec<_>>()
-                                .join("\n")
-                        ))
-                    }
-                    Err(e) => Ok(format!(
-                        "Explored\n- Failed to list files in {}: {}",
-                        target_path.display(),
-                        e
-                    )),
-                }
-            }
-            ToolCall::SearchFiles { query, path } => {
-                let search_path = path.unwrap_or_else(|| self.cwd.clone());
-                // シンプルなファイル名検索（実際のプロジェクトではより高度な検索を実装）
-                match self.search_files_recursive(&search_path, &query).await {
-                    Ok(results) => {
-                        if results.is_empty() {
-                            Ok(format!(
-                                "Explored\n- Search for '{}' in {}\n\nNo files found matching '{}'",
-                                query,
-                                search_path.display(),
-                                query
-                            ))
-                        } else {
-                            Ok(format!(
-                                "Explored\n- Search for '{}' in {}\n\nFound {} matches:\n{}",
-                                query,
-                                search_path.display(),
-                                results.len(),
-                                results
-                                    .iter()
-                                    .map(|r| format!("  {}", r))
-                                    .collect::<Vec<_>>()
-                                    .join("\n")
-                            ))
-                        }
-                    }
-                    Err(e) => Ok(format!("Explored\n- Search for '{}' failed: {}", query, e)),
                 }
             }
         }
@@ -636,33 +471,6 @@ impl ToolExecutor {
         Ok(message)
     }
 
-    /// ファイルを再帰的に検索
-    async fn search_files_recursive(&self, dir: &PathBuf, query: &str) -> Result<Vec<String>> {
-        let mut results = Vec::new();
-        let mut stack = vec![dir.clone()];
-
-        while let Some(current_dir) = stack.pop() {
-            if let Ok(mut entries) = tokio::fs::read_dir(&current_dir).await {
-                while let Some(entry) = entries.next_entry().await.unwrap_or(None) {
-                    let path = entry.path();
-                    let file_name = entry.file_name();
-
-                    if let Some(name_str) = file_name.to_str() {
-                        if name_str.contains(query) {
-                            results.push(path.to_string_lossy().to_string());
-                        }
-                    }
-
-                    if path.is_dir() {
-                        stack.push(path);
-                    }
-                }
-            }
-        }
-
-        Ok(results)
-    }
-
     /// 設定の更新
     pub fn update_working_directory(&mut self, new_cwd: PathBuf) {
         self.cwd = new_cwd;
@@ -689,22 +497,8 @@ pub enum ToolCall {
         justification: Option<String>,
         timeout_ms: Option<u64>,
     },
-    ReadFile {
-        path: PathBuf,
-    },
-    WriteFile {
-        path: PathBuf,
-        content: String,
-    },
     ApplyPatch {
         input: String,
-    },
-    ListFiles {
-        path: Option<PathBuf>,
-    },
-    SearchFiles {
-        query: String,
-        path: Option<PathBuf>,
     },
 }
 
@@ -724,28 +518,8 @@ impl ToolCall {
                     format!("shell {}", joined)
                 }
             }
-            ToolCall::ReadFile { path } => {
-                format!("read_file {}", path.display())
-            }
-            ToolCall::WriteFile { path, content } => {
-                format!("write_file {} ({} bytes)", path.display(), content.len())
-            }
             ToolCall::ApplyPatch { input } => {
                 format!("apply_patch ({} bytes)", input.len())
-            }
-            ToolCall::ListFiles { path } => {
-                let target = path
-                    .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| ".".to_string());
-                format!("list_files {}", target)
-            }
-            ToolCall::SearchFiles { query, path } => {
-                let target = path
-                    .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| ".".to_string());
-                format!("search_files '{}' in {}", query, target)
             }
         }
     }
@@ -785,23 +559,4 @@ This command will display the contents of test.txt.
         }
     }
 
-    #[test]
-    fn test_parse_read_file_tool() {
-        let executor = ToolExecutor::new(
-            AskForApproval::Never,
-            SandboxPolicy::ReadOnly,
-            PathBuf::from("."),
-            ShellEnvironmentPolicy::default(),
-        );
-
-        let json = r#"{"tool": "read_file", "path": "example.txt"}"#;
-        let call = executor.parse_tool_call(json).unwrap();
-
-        match call {
-            ToolCall::ReadFile { path } => {
-                assert_eq!(path, PathBuf::from("example.txt"));
-            }
-            _ => panic!("Expected ReadFile tool call"),
-        }
-    }
 }

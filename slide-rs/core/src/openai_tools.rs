@@ -282,85 +282,6 @@ fn create_view_image_tool() -> OpenAiTool {
     })
 }
 
-fn create_read_file_tool() -> OpenAiTool {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "path".to_string(),
-        JsonSchema::String { description: Some("Absolute or relative path to the file to read".to_string()) },
-    );
-    OpenAiTool::Function(ResponsesApiTool {
-        name: "read_file".to_string(),
-        description: "Read a text file from the local filesystem and return its contents.".to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["path".to_string()]),
-            additional_properties: Some(false),
-        },
-    })
-}
-
-fn create_write_file_tool() -> OpenAiTool {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "path".to_string(),
-        JsonSchema::String { description: Some("Absolute or relative path to write to".to_string()) },
-    );
-    properties.insert(
-        "content".to_string(),
-        JsonSchema::String { description: Some("The full file content to write".to_string()) },
-    );
-    OpenAiTool::Function(ResponsesApiTool {
-        name: "write_file".to_string(),
-        description: "Write text content to a local file. Creates directories if needed.".to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["path".to_string(), "content".to_string()]),
-            additional_properties: Some(false),
-        },
-    })
-}
-
-fn create_list_files_tool() -> OpenAiTool {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "path".to_string(),
-        JsonSchema::String { description: Some("Directory path to list (optional; defaults to cwd)".to_string()) },
-    );
-    OpenAiTool::Function(ResponsesApiTool {
-        name: "list_files".to_string(),
-        description: "List files in a directory (non-recursive).".to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec![]),
-            additional_properties: Some(false),
-        },
-    })
-}
-
-fn create_search_files_tool() -> OpenAiTool {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "query".to_string(),
-        JsonSchema::String { description: Some("Substring to search for in file names".to_string()) },
-    );
-    properties.insert(
-        "path".to_string(),
-        JsonSchema::String { description: Some("Directory to search (optional; defaults to cwd)".to_string()) },
-    );
-    OpenAiTool::Function(ResponsesApiTool {
-        name: "search_files".to_string(),
-        description: "Search files by name substring within a directory (recursive).".to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["query".to_string()]),
-            additional_properties: Some(false),
-        },
-    })
-}
 /// TODO(dylan): deprecate once we get rid of json tool
 #[derive(Serialize, Deserialize)]
 pub(crate) struct ApplyPatchToolArgs {
@@ -585,12 +506,6 @@ pub(crate) fn get_openai_tools(
         }
     }
 
-    // Always provide core filesystem tools
-    tools.push(create_read_file_tool());
-    tools.push(create_write_file_tool());
-    tools.push(create_list_files_tool());
-    tools.push(create_search_files_tool());
-
     if config.plan_tool {
         tools.push(PLAN_TOOL.clone());
     }
@@ -643,23 +558,21 @@ pub fn render_tools_instructions(_config: &ToolsConfig, _approval_mode_hint: Opt
     lines.push("".to_string());
     lines.push("Examples:".to_string());
     lines.push("- read a file:".to_string());
-    lines.push("  {\"tool\":\"read_file\",\"path\":\"/absolute/path/to/file\"}".to_string());
-    lines.push("- run a safe shell read command:".to_string());
     lines.push("  {\"tool\":\"shell\",\"command\":[\"cat\",\"/absolute/path/to/file\"]}".to_string());
-    lines.push("- write a file:".to_string());
-    lines.push("  {\"tool\":\"write_file\",\"path\":\"/absolute/path/to/file\",\"content\":\"...\"}".to_string());
-    lines.push("- apply a patch (freeform diff string):".to_string());
-    lines.push("  {\"tool\":\"apply_patch\",\"input\":\"*** Begin Patch\\n*** Update File: path\\n- old\\n+ new\\n*** End Patch\"}".to_string());
     lines.push("- list files in a directory:".to_string());
-    lines.push("  {\"tool\":\"list_files\",\"path\":\"/absolute/path/to/dir\"}".to_string());
-    lines.push("- search files by name substring:".to_string());
-    lines.push("  {\"tool\":\"search_files\",\"query\":\"needle\",\"path\":\"/absolute/path\"}".to_string());
+    lines.push("  {\"tool\":\"shell\",\"command\":[\"ls\",\"-la\",\"/absolute/path/to/dir\"]}".to_string());
+    lines.push("- search files by name:".to_string());
+    lines.push("  {\"tool\":\"shell\",\"command\":[\"find\",\"/path\",\"-name\",\"pattern\"]}".to_string());
+    lines.push("- search text in files:".to_string());
+    lines.push("  {\"tool\":\"shell\",\"command\":[\"rg\",\"pattern\",\"/path\"]}".to_string());
+    lines.push("- apply a patch (edit files):".to_string());
+    lines.push("  {\"tool\":\"apply_patch\",\"input\":\"*** Begin Patch\\n*** Update File: path\\n- old\\n+ new\\n*** End Patch\"}".to_string());
     lines.push("".to_string());
     lines.push("Rules:".to_string());
     lines.push("- Output the JSON on its own line. Do not prepend/append any explanation or formatting.".to_string());
-    lines.push("- Use only supported tool names: shell, read_file, write_file, apply_patch, list_files, search_files.".to_string());
+    lines.push("- Use only supported tool names: shell, apply_patch.".to_string());
     lines.push("- Prefer absolute paths. Relative paths are resolved against the current working directory.".to_string());
-    lines.push("- For shell, prefer read-only commands (ls, cat, rg).".to_string());
+    lines.push("- For shell, use commands like cat, ls, find, rg, grep for file operations.".to_string());
     lines.push("- Alternatively, you may wrap the JSON in <tool_call>{...}</tool_call> on a single line.".to_string());
     lines.join("\n")
 }
