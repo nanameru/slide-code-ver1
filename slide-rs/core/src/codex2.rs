@@ -336,6 +336,13 @@ async fn try_run_turn(
                         "content":[{"type":"tool_use","name":name, "arguments": arguments, "call_id": call_id}]
                     }));
                 }
+                ResponseItem::FunctionCallOutput { call_id, output } => {
+                    // CRITICAL: Include tool execution results so AI can see them
+                    input_blocks.push(serde_json::json!({
+                        "role":"user",
+                        "content":[{"type":"tool_result","call_id": call_id, "output": output.content}]
+                    }));
+                }
                 _ => {}
             }
         }
