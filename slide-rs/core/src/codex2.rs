@@ -25,6 +25,10 @@ use slide_chatgpt::client::ChatGptClient;
 use regex;
 use uuid;
 
+// MEE-49: Review prompt
+// 参考: codex-1/codex-rs/core/src/client_common.rs:21
+const REVIEW_PROMPT: &str = include_str!("../review_prompt.md");
+
 // MEE-24: 処理済みレスポンスアイテム
 #[derive(Debug, Clone)]
 struct ProcessedResponseItem {
@@ -80,19 +84,42 @@ struct Prompt {
     base_instructions_override: Option<String>,
 }
 
-fn parse_review_output_event(text: &str) -> protocol::protocol::ReviewOutputEvent {
-    // 最小実装: テキスト全体を overall_explanation に、見出しっぽい行を findings に（将来強化可）
-    let mut findings = Vec::new();
-    for line in text.lines() {
-        let l = line.trim();
-        if l.starts_with('-') || l.starts_with('*') || l.starts_with('•') {
-            let content = l.trim_start_matches(['-', '*', '•', ' '].as_ref()).to_string();
-            if !content.is_empty() {
-                findings.push(protocol::protocol::ReviewFinding { title: content.clone(), body: String::new(), severity: None });
-            }
+/// MEE-49: レビュー出力のJSON形式パース
+/// 参考: codex-1/codex-rs/core/src/codex.rs (parse_review_output関数)
+fn parse_review_output(text: &str) -> Option<protocol::protocol::ReviewOutputEvent> {
+    // JSON部分を抽出（マークダウンフェンスやプロンプトの後の部分を探す）
+    let json_text = if let Some(start) = text.find('{') {
+        if let Some(end) = text.rfind('}') {
+            &text[start..=end]
+        } else {
+            text
+        }
+    } else {
+        text
+    };
+    
+    // JSONパース
+    match serde_json::from_str::<protocol::protocol::ReviewOutputEvent>(json_text) {
+        Ok(output) => Some(output),
+        Err(e) => {
+            // パース失敗時はログに記録して None を返す
+            tracing::warn!("Failed to parse review output as JSON: {}. Text: {}", e, &json_text[..json_text.len().min(200)]);
+            None
         }
     }
-    protocol::protocol::ReviewOutputEvent { overall_explanation: text.to_string(), findings }
+}
+
+/// 後方互換性のためのエイリアス（既存コードで使用されている）
+fn parse_review_output_event(text: &str) -> protocol::protocol::ReviewOutputEvent {
+    parse_review_output(text).unwrap_or_else(|| {
+        // フォールバック: テキスト全体を explanation として返す
+        protocol::protocol::ReviewOutputEvent {
+            findings: Vec::new(),
+            overall_correctness: "unknown".to_string(),
+            overall_explanation: text.to_string(),
+            overall_confidence_score: 0.5,
+        }
+    })
 }
 
 // MEE-25: missing_calls完全実装
@@ -1013,6 +1040,16 @@ pub enum Event {
         cwd: PathBuf,
         reason: Option<String>,
     },
+    /// MEE-49: レビューモード開始
+    /// 参考: codex-1/codex-rs/protocol/src/protocol.rs:514-515
+    EnteredReviewMode {
+        review_request: protocol::protocol::ReviewRequest,
+    },
+    /// MEE-49: レビューモード終了（所見付き）
+    /// 参考: codex-1/codex-rs/protocol/src/protocol.rs:517-518
+    ExitedReviewMode {
+        review_output: protocol::protocol::ExitedReviewModeEvent,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1771,15 +1808,23 @@ impl Codex {
                         }
                     }
                     Op::Review { review_request } => {
-                        // レビューモード: is_review_mode=true のサブ・コンテキストで isolated に実行
-                        let sess = Arc::new(Session::new(tx_event.clone(), mcp_manager.clone()));
+                        // MEE-49: レビューモードの正式化
+                        // 参考: codex-1/codex-rs/core/src/codex.rs:1569-1630
+                        
+                        // レビュー専用のSessionを作成
+                        let review_sess = Arc::new(Session::new(tx_event.clone(), mcp_manager.clone()));
+                        
+                        // レビュープロンプトをbase_instructionsに設定
+                        let base_instructions = REVIEW_PROMPT.to_string();
+                        let review_prompt = review_request.prompt.clone();
+                        
                         let review_turn_context = Arc::new(TurnContext {
                             client: current_model_client.clone(),
                             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
                             approval_policy: current_approval.clone(),
                             sandbox_policy: current_sandbox.clone(),
                             model: current_model.clone(),
-                            effort: current_effort,
+                            effort: Some(ReasoningEffort::Low), // レビューは低い推論で十分
                             tools_config: crate::openai_tools::ToolsConfig {
                                 shell_type: crate::openai_tools::ConfigShellToolType::Default,
                                 plan_tool: false,
@@ -1788,22 +1833,67 @@ impl Codex {
                                 include_view_image_tool: false,
                                 experimental_unified_exec_tool: false,
                             },
-                            base_instructions: None,
-                            is_review_mode: true,
+                            base_instructions: Some(base_instructions.clone()),
+                            is_review_mode: true, // 重要: レビューモードフラグ
                         });
+                        
                         let sub_id = uuid::Uuid::new_v4().to_string();
-                        // 先に EnteredReviewMode を通知（Protocol正式イベント実装前に暫定デルタ）
-                        let _ = tx_event.send(Event::AgentMessageDelta { delta: format!("\n>> Code review started: {} <<\n", review_request.user_facing_hint) }).await;
-                        // 初期入力は review_request.prompt をユーザメッセージとして渡す
+                        
+                        // 1. EnteredReviewModeイベントを送信
+                        let _ = tx_event.send(Event::EnteredReviewMode { 
+                            review_request: review_request.clone() 
+                        }).await;
+                        
+                        // 2. レビュープロンプトとユーザーリクエストを組み合わせて入力
                         let input = vec![crate::conversation_history::ResponseInputItem::Message {
                             role: "user".to_string(),
-                            content: vec![crate::conversation_history::ContentItem::InputText { text: review_request.prompt.clone() }],
+                            content: vec![crate::conversation_history::ContentItem::InputText { 
+                                text: format!("{}\n\n---\n\nNow, here's your task: {}", base_instructions, review_prompt)
+                            }],
                         }];
-                        if let Err(e) = run_task(sess.clone(), review_turn_context.clone(), sub_id.clone(), input).await {
-                            let _ = tx_event.send(Event::Error { message: e.to_string() }).await;
-                        }
-                        // 終了バナー（Protocol正式イベント実装前に暫定デルタ）
-                        let _ = tx_event.send(Event::AgentMessageDelta { delta: "\n<< Code review finished >>\n".to_string() }).await;
+                        
+                        // 3. run_taskを実行（レビューモードで）
+                        let review_result = run_task(
+                            Arc::clone(&review_sess), 
+                            review_turn_context.clone(), 
+                            sub_id.clone(), 
+                            input
+                        ).await;
+                        
+                        // 4. レビュー結果を取得
+                        // run_taskはResult<()>を返すので、Sessionの履歴から最後のメッセージを取得
+                        let review_output = if review_result.is_ok() {
+                            // Sessionの履歴から最後のアシスタントメッセージを取得
+                            let history = review_sess.get_history_contents().await;
+                            history.iter()
+                                .rev()
+                                .find_map(|item| {
+                                    if let ResponseItem::Message { role, content, .. } = item {
+                                        if role == "assistant" {
+                                            content.iter().find_map(|c| {
+                                                if let crate::conversation_history::ContentItem::OutputText { text } = c {
+                                                    parse_review_output(text)
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                })
+                        } else {
+                            None
+                        };
+                        
+                        // 5. ExitedReviewModeイベントを送信
+                        let _ = tx_event.send(Event::ExitedReviewMode { 
+                            review_output: protocol::protocol::ExitedReviewModeEvent {
+                                review_output,
+                            }
+                        }).await;
                     }
                     Op::Interrupt => {
                         let mut g = running_child.lock().await;
@@ -2270,11 +2360,15 @@ async fn run_task(
             if !out.findings.is_empty() {
                 body.push_str("\n\nFindings:\n");
                 for f in out.findings {
-                    if let Some(sev) = f.severity {
-                        body.push_str(&format!("- [{}] {}: {}\n", sev, f.title, f.body));
-                    } else {
-                        body.push_str(&format!("- {}: {}\n", f.title, f.body));
-                    }
+                    // MEE-49: priorityフィールドを使用（0=P0, 1=P1, 2=P2, 3=P3）
+                    let priority_label = match f.priority {
+                        0 => "P0",
+                        1 => "P1",
+                        2 => "P2",
+                        3 => "P3",
+                        _ => "P?",
+                    };
+                    body.push_str(&format!("- [{}] {}: {}\n", priority_label, f.title, f.body));
                 }
             }
             if !body.is_empty() {

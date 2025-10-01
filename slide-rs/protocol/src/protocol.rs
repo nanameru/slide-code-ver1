@@ -664,20 +664,65 @@ pub struct ReviewRequest {
     pub user_facing_hint: String,
 }
 
+/// A single review finding describing an observed issue or recommendation.
+/// 参考: codex-1/codex-rs/protocol/src/protocol.rs:1019-1025
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ReviewFinding {
+    /// ≤80 chars, imperative mood
     pub title: String,
+    /// Valid Markdown explaining why this is a problem
     pub body: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub severity: Option<String>,
+    /// Confidence level (0.0-1.0)
+    pub confidence_score: f32,
+    /// Priority: 0=P0 (critical), 1=P1 (urgent), 2=P2 (normal), 3=P3 (low)
+    pub priority: i32,
+    /// Location of the code related to this finding
+    pub code_location: ReviewCodeLocation,
 }
 
+/// Location of the code related to a review finding.
+/// 参考: codex-1/codex-rs/protocol/src/protocol.rs:1028-1032
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct ReviewCodeLocation {
+    pub absolute_file_path: PathBuf,
+    pub line_range: ReviewLineRange,
+}
+
+/// Inclusive line range in a file associated with the finding.
+/// 参考: codex-1/codex-rs/protocol/src/protocol.rs:1035-1039
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct ReviewLineRange {
+    pub start: u32,
+    pub end: u32,
+}
+
+/// Review output containing findings and overall assessment.
+/// 参考: codex-1/codex-rs/protocol/src/protocol.rs:999-1015
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ReviewOutputEvent {
-    pub overall_explanation: String,
+    /// List of findings
     pub findings: Vec<ReviewFinding>,
+    /// "patch is correct" | "patch is incorrect"
+    pub overall_correctness: String,
+    /// 1-3 sentence explanation justifying the overall_correctness verdict
+    pub overall_explanation: String,
+    /// Overall confidence level (0.0-1.0)
+    pub overall_confidence_score: f32,
 }
 
+impl Default for ReviewOutputEvent {
+    fn default() -> Self {
+        Self {
+            findings: Vec::new(),
+            overall_correctness: String::default(),
+            overall_explanation: String::default(),
+            overall_confidence_score: 0.0,
+        }
+    }
+}
+
+/// Exited review mode with an optional final result.
+/// 参考: codex-1/codex-rs/protocol/src/protocol.rs:522-524
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ExitedReviewModeEvent {
     #[serde(skip_serializing_if = "Option::is_none")]

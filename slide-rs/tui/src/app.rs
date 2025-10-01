@@ -944,6 +944,62 @@ fn handle_core_event(tui: &mut Tui, app: &mut App, ev: CoreEvent)
             append_log(&format!("[stream error] {}", message));
             // 必要に応じてユーザーに通知やリトライ状況を表示
         }
+        CoreEvent::EnteredReviewMode { review_request } => {
+            // MEE-49: レビューモード開始
+            // 参考: codex-1/codex-rs/tui/src/chatwidget.rs:1164-1170
+            let banner = format!(">> Code review started: {} <<", review_request.user_facing_hint);
+            let cell = HistoryCell::new_system_status(SystemLabel::Info, [&banner]);
+            app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+            append_log(&format!("[review] started: {}", review_request.user_facing_hint));
+        }
+        CoreEvent::ExitedReviewMode { review_output } => {
+            // MEE-49: レビューモード終了
+            // 参考: codex-1/codex-rs/tui/src/chatwidget.rs:1172-1180
+            if let Some(output) = review_output.review_output {
+                let findings_count = output.findings.len();
+                let banner = format!("<< Code review finished: {} findings >>", findings_count);
+                let cell = HistoryCell::new_system_status(SystemLabel::Info, [&banner]);
+                app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+                
+                // 所見を表示
+                if !output.overall_explanation.is_empty() {
+                    let cell = HistoryCell::new_system_status(
+                        SystemLabel::Info, 
+                        [&format!("Overall: {}", output.overall_explanation)]
+                    );
+                    app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+                }
+                
+                // 各Findingを表示
+                for finding in output.findings {
+                    let priority_label = match finding.priority {
+                        0 => "P0",
+                        1 => "P1",
+                        2 => "P2",
+                        3 => "P3",
+                        _ => "P?",
+                    };
+                    let finding_text = format!(
+                        "[{}] {}\n{}\nFile: {} (lines {}-{})",
+                        priority_label,
+                        finding.title,
+                        finding.body,
+                        finding.code_location.absolute_file_path.display(),
+                        finding.code_location.line_range.start,
+                        finding.code_location.line_range.end
+                    );
+                    let cell = HistoryCell::new_system_status(SystemLabel::Info, [&finding_text]);
+                    app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+                }
+                
+                append_log(&format!("[review] finished: {} findings", findings_count));
+            } else {
+                let banner = "<< Code review finished: no output >>";
+                let cell = HistoryCell::new_system_status(SystemLabel::Info, [banner]);
+                app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+                append_log("[review] finished: no output");
+            }
+        }
     }
 }
 
