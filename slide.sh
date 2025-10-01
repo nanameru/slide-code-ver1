@@ -23,6 +23,34 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# Determine target triple for this platform
+PLATFORM="$(uname -s)"
+ARCH="$(uname -m)"
+case "$PLATFORM" in
+    Linux)
+        case "$ARCH" in
+            x86_64) TARGET_TRIPLE="x86_64-unknown-linux-musl" ;;
+            aarch64) TARGET_TRIPLE="aarch64-unknown-linux-musl" ;;
+            *) echo -e "${RED}❌ Unsupported Linux architecture: $ARCH${NC}"; exit 1 ;;
+        esac
+        ;;
+    Darwin)
+        case "$ARCH" in
+            x86_64) TARGET_TRIPLE="x86_64-apple-darwin" ;;
+            arm64) TARGET_TRIPLE="aarch64-apple-darwin" ;;
+            *) echo -e "${RED}❌ Unsupported macOS architecture: $ARCH${NC}"; exit 1 ;;
+        esac
+        ;;
+    *)
+        echo -e "${RED}❌ Unsupported platform: $PLATFORM${NC}"
+        exit 1
+        ;;
+esac
+
+echo -e "${GREEN}📦 Copying binary to slide-cli/bin/slide-${TARGET_TRIPLE}...${NC}"
+cp target/release/slide "../slide-cli/bin/slide-${TARGET_TRIPLE}"
+chmod +x "../slide-cli/bin/slide-${TARGET_TRIPLE}"
+
 echo -e "${GREEN}🚀 Starting Slide CLI...${NC}"
 cd ../slide-cli
 export SLIDE_APP=1
