@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
+use tracing;
 
 #[derive(Debug, Serialize)]
 pub struct SlideRequest {
@@ -381,17 +382,21 @@ impl OpenAiModelClient {
                                             match serde_json::from_str::<serde_json::Value>(rest) {
                                                 Ok(v) => {
                                                     let t = v["type"].as_str().unwrap_or("");
+                                                    tracing::debug!("[responses-api-debug] event type: {}, full_json: {}", t, serde_json::to_string(&v).unwrap_or_default());
                                                     match t {
                                                         "response.created" => { 
                                                             // Silent - don't send anything to user
                                                         }
                                                         // Responses API: output_item.done with function_call
                                                         "response.output_item.done" => {
+                                                            tracing::info!("[responses-api] output_item.done detected");
                                                             if let Some(item) = v.get("item") {
                                                                 let item_type = item["type"].as_str().unwrap_or("");
+                                                                tracing::info!("[responses-api] item type: {}, item: {}", item_type, serde_json::to_string(item).unwrap_or_default());
                                                                 
                                                                 match item_type {
                                                                     "function_call" => {
+                                                                        tracing::info!("[responses-api] Processing function_call");
                                                                         // FunctionCall: serialize as ResponseItem::FunctionCall
                                                                         let function_call_item = serde_json::json!({
                                                                             "type": "function_call",
@@ -401,10 +406,12 @@ impl OpenAiModelClient {
                                                                             "call_id": item["call_id"].as_str().unwrap_or("")
                                                                         });
                                                                         if let Ok(json_str) = serde_json::to_string(&function_call_item) {
+                                                                            tracing::info!("[responses-api] Sending __RESPONSE_ITEM__: {}", json_str);
                                                                             let _ = tx.send(format!("__RESPONSE_ITEM__{}", json_str)).await;
                                                                         }
                                                                     }
                                                                     "message" => {
+                                                                        tracing::info!("[responses-api] Processing message");
                                                                         // Regular message: serialize as ResponseItem::Message
                                                                         if let Ok(json_str) = serde_json::to_string(&item) {
                                                                             let _ = tx.send(format!("__RESPONSE_ITEM__{}", json_str)).await;
