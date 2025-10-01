@@ -1316,12 +1316,12 @@ impl Codex {
                     effort: current_effort,
                     tools_config: crate::openai_tools::ToolsConfig {
                         shell_type: crate::openai_tools::ConfigShellToolType::Default,
-                        plan_tool: false,
-                        apply_patch_tool_type: None,
+                        plan_tool: true,
+                        apply_patch_tool_type: Some(crate::tool_apply_patch::ApplyPatchToolType::Freeform),
                         web_search_request: false,
                         include_view_image_tool: false,
                         experimental_unified_exec_tool: false,
-                    }, // MEE-29: デフォルト設定
+                    }, // MEE-29: 基本ツール有効化
                     base_instructions: None, // MEE-29: ベース指示なし
                     is_review_mode: false,
                 });
