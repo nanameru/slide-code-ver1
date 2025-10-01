@@ -312,49 +312,25 @@ async fn try_run_turn(
     let mut composed = String::new();
     let mut responses_payload: Option<serde_json::Value> = None;
     if supports_responses {
-        // Convert prompt.input (ResponseItem) to Responses API input blocks
-        let mut input_blocks: Vec<serde_json::Value> = Vec::new();
-        for item in &prompt.input {
-            match item {
-                ResponseItem::Message { role, content, .. } => {
-                    let mut blocks: Vec<serde_json::Value> = Vec::new();
-                    for c in content {
-                        match c {
-                            crate::conversation_history::ContentItem::InputText { text }
-                            | crate::conversation_history::ContentItem::OutputText { text } => {
-                                blocks.push(serde_json::json!({"type":"input_text","text": text}));
-                            }
-                            _ => {}
-                        }
-                    }
-                    input_blocks.push(serde_json::json!({"role": role, "content": blocks}));
-                }
-                ResponseItem::FunctionCall { name, arguments, call_id, .. } => {
-                    // Surface prior tool calls as assistant tool messages (optional)
-                    input_blocks.push(serde_json::json!({
-                        "role":"assistant",
-                        "content":[{"type":"tool_use","name":name, "arguments": arguments, "call_id": call_id}]
-                    }));
-                }
-                ResponseItem::FunctionCallOutput { call_id, output } => {
-                    // CRITICAL: Include tool execution results so AI can see them
-                    input_blocks.push(serde_json::json!({
-                        "role":"user",
-                        "content":[{"type":"tool_result","call_id": call_id, "output": output.content}]
-                    }));
-                }
-                _ => {}
-            }
-        }
-        // Tools JSON (already converted earlier for OpenAI chat); reuse as-is for Responses
+        // codex-1 style: Send ResponseItem directly without manual conversion
+        // The ResponseItem enum has #[derive(Serialize)] with #[serde(tag = "type")]
+        // which automatically produces the correct JSON format for Responses API
         let tools_json = prompt.tools.clone();
         let mut system_str = String::new();
-        if let Some(cw) = turn_context.client.model_context_window() { system_str.push_str(&format!("[context-window: {} tokens] ", cw)); }
-        if let Some(instr) = &prompt.base_instructions_override { system_str.push_str(instr); }
+        if let Some(cw) = turn_context.client.model_context_window() {
+            system_str.push_str(&format!("[context-window: {} tokens] ", cw));
+        }
+        if let Some(instr) = &prompt.base_instructions_override {
+            system_str.push_str(instr);
+        }
         responses_payload = Some(serde_json::json!({
-            "input": input_blocks,
+            "input": &prompt.input,  // Send ResponseItem directly!
             "tools": tools_json,
-            "system": if system_str.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(system_str) }
+            "system": if system_str.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::Value::String(system_str)
+            }
         }));
     } else {
         // Chat Completions fallback: reconstruct textual composed prompt

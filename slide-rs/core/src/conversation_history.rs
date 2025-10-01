@@ -148,10 +148,24 @@ pub enum ResponseInputItem {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct FunctionCallOutputPayload {
-    pub success: Option<bool>,
     pub content: String,
+    pub success: Option<bool>,
+}
+
+// The Responses API expects the `output` field to be a plain string, not an object.
+// The upstream TypeScript CLI and codex-1 implement this by serializing only the
+// `content` field. The `success` boolean is for local bookkeeping and is NOT sent
+// to the OpenAI endpoint.
+impl serde::Serialize for FunctionCallOutputPayload {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Always serialize as a plain string (the content field only)
+        serializer.serialize_str(&self.content)
+    }
 }
 
 // codex-1レベルのProcessedResponseItem構造体
