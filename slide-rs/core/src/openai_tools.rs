@@ -554,6 +554,10 @@ pub fn render_tools_instructions(_config: &ToolsConfig, _approval_mode_hint: Opt
     // "tool" key, or a <tool_call>{...}</tool_call> block. Any prose around
     // it will prevent detection, so we must be explicit.
     let mut lines: Vec<String> = Vec::new();
+    lines.push("# CRITICAL: How to Execute Tools".to_string());
+    lines.push("".to_string());
+    lines.push("YOU MUST output the exact JSON format below to execute tools. DO NOT just explain what you will do - actually output the JSON.".to_string());
+    lines.push("".to_string());
     lines.push("To execute a tool, include exactly one of the following as a standalone line with no surrounding text:".to_string());
     lines.push("".to_string());
     lines.push("Examples:".to_string());
