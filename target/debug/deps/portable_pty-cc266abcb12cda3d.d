@@ -1,8 +1,0 @@
-/Users/kimurataiyou/slide-code-test/target/debug/deps/portable_pty-cc266abcb12cda3d.d: /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/portable-pty-0.8.1/src/lib.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/portable-pty-0.8.1/src/cmdbuilder.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/portable-pty-0.8.1/src/unix.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/portable-pty-0.8.1/src/serial.rs
-
-/Users/kimurataiyou/slide-code-test/target/debug/deps/libportable_pty-cc266abcb12cda3d.rmeta: /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/portable-pty-0.8.1/src/lib.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/portable-pty-0.8.1/src/cmdbuilder.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/portable-pty-0.8.1/src/unix.rs /Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/portable-pty-0.8.1/src/serial.rs
-
-/Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/portable-pty-0.8.1/src/lib.rs:
-/Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/portable-pty-0.8.1/src/cmdbuilder.rs:
-/Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/portable-pty-0.8.1/src/unix.rs:
-/Users/kimurataiyou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/portable-pty-0.8.1/src/serial.rs:

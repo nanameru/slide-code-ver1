@@ -1,1 +1,0 @@
-/Users/kimurataiyou/slide-code-test/target/release/libslide_mcp_client.rlib: /Users/kimurataiyou/slide-code-test/slide-rs/mcp-client/src/lib.rs /Users/kimurataiyou/slide-code-test/slide-rs/mcp-client/src/mcp_client.rs

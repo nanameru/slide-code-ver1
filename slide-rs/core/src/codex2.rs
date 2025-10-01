@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use crate::path_utils;
 use std::time::Instant;
 use tokio::process::Command;
@@ -989,10 +990,13 @@ pub enum Event {
     ExecCommandEnd {
         exit_code: i32,
     },
+    /// MEE-48: パッチ適用の承認リクエスト
     ApplyPatchApprovalRequest {
         id: String,
-        changes: HashMap<PathBuf, String>,
+        call_id: String,
+        changes: Vec<protocol::protocol::FileChange>,
         reason: Option<String>,
+        grant_root: Option<PathBuf>,
     },
     PatchApplyBegin {},
     PatchApplyEnd {
@@ -1006,8 +1010,10 @@ pub enum Event {
         message: String,
     },
     ShutdownComplete,
+    /// MEE-48: コマンド実行の承認リクエスト
     ExecApprovalRequest {
         id: String,
+        call_id: String,
         command: Vec<String>,
         cwd: PathBuf,
         reason: Option<String>,
@@ -1082,6 +1088,7 @@ struct SessionState {
     history: crate::conversation_history::ConversationHistory,
     current_task: Option<String>, // 簡略版: codex-1では AgentTask
     previous_env_context: Option<crate::environment_context::EnvironmentContext>, // MEE-47: 環境変更検出用
+    pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>, // MEE-48: 承認リクエストの管理
 }
 
 /// MEE-33: codex-1互換のセッション構造体
@@ -1807,11 +1814,13 @@ impl Codex {
                             let _ = tx_event.send(Event::ToolEnd { id: rid, ok: false, exit_code: None, took_ms }).await;
                         }
                     }
-                    Op::ExecApproval { .. } => {
-                        // Minimal placeholder: in full core this would resolve a pending approval
+                    Op::ExecApproval { id, decision } => {
+                        // MEE-48: ユーザーの承認/却下を処理
+                        sess.notify_approval(&id, decision).await;
                     }
-                    Op::PatchApproval { .. } => {
-                        // Minimal placeholder
+                    Op::PatchApproval { id, decision } => {
+                        // MEE-48: ユーザーの承認/却下を処理
+                        sess.notify_approval(&id, decision).await;
                     }
                     Op::Shutdown => {
                         let _ = tx_event.send(Event::ShutdownComplete).await;
@@ -1936,6 +1945,96 @@ impl Session {
     /// イベント送信
     pub async fn send_event(&self, event: Event) {
         let _ = self.tx_event.send(event).await;
+    }
+
+    /// MEE-48: コマンド実行の承認をリクエスト
+    /// 参考: codex-1/codex-rs/core/src/codex.rs:582-612
+    pub async fn request_command_approval(
+        &self,
+        sub_id: String,
+        call_id: String,
+        command: Vec<String>,
+        cwd: PathBuf,
+        reason: Option<String>,
+    ) -> oneshot::Receiver<ReviewDecision> {
+        // チャネルを作成して pending_approvals に保存
+        let (tx_approve, rx_approve) = oneshot::channel();
+        let event_id = sub_id.clone();
+        
+        let prev_entry = {
+            let mut state = self.state.lock().await;
+            state.pending_approvals.insert(sub_id, tx_approve)
+        };
+        
+        if prev_entry.is_some() {
+            warn!("Overwriting existing pending approval for sub_id: {event_id}");
+        }
+
+        // 承認リクエストイベントを送信
+        let event = Event::ExecApprovalRequest {
+            id: event_id,
+            call_id,
+            command,
+            cwd,
+            reason,
+        };
+        self.send_event(event).await;
+        rx_approve
+    }
+
+    /// MEE-48: パッチ適用の承認をリクエスト
+    /// 参考: codex-1/codex-rs/core/src/codex.rs:614-644
+    pub async fn request_patch_approval(
+        &self,
+        sub_id: String,
+        call_id: String,
+        changes: Vec<protocol::protocol::FileChange>,
+        reason: Option<String>,
+        grant_root: Option<PathBuf>,
+    ) -> oneshot::Receiver<ReviewDecision> {
+        // チャネルを作成して pending_approvals に保存
+        let (tx_approve, rx_approve) = oneshot::channel();
+        let event_id = sub_id.clone();
+        
+        let prev_entry = {
+            let mut state = self.state.lock().await;
+            state.pending_approvals.insert(sub_id, tx_approve)
+        };
+        
+        if prev_entry.is_some() {
+            warn!("Overwriting existing pending approval for sub_id: {event_id}");
+        }
+
+        // 承認リクエストイベントを送信
+        let event = Event::ApplyPatchApprovalRequest {
+            id: event_id,
+            call_id,
+            changes,
+            reason,
+            grant_root,
+        };
+        self.send_event(event).await;
+        rx_approve
+    }
+
+    /// MEE-48: ユーザーの承認/却下を処理
+    /// 参考: codex-1/codex-rs/core/src/codex.rs:646-659
+    pub async fn notify_approval(&self, sub_id: &str, decision: ReviewDecision) {
+        let entry = {
+            let mut state = self.state.lock().await;
+            state.pending_approvals.remove(sub_id)
+        };
+        
+        match entry {
+            Some(tx_approve) => {
+                if tx_approve.send(decision).is_err() {
+                    warn!("Failed to send approval decision for sub_id: {sub_id}");
+                }
+            }
+            None => {
+                warn!("No pending approval found for sub_id: {sub_id}");
+            }
+        }
     }
     
     /// MEE-30: 履歴の内容を取得（auto-compact用）

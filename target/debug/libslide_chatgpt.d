@@ -1,1 +1,0 @@
-/Users/kimurataiyou/slide-code-test/target/debug/libslide_chatgpt.rlib: /Users/kimurataiyou/slide-code-test/slide-rs/chatgpt/src/client.rs /Users/kimurataiyou/slide-code-test/slide-rs/chatgpt/src/lib.rs
