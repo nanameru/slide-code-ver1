@@ -20,6 +20,11 @@ use strum_macros::Display;
 use ts_rs::TS;
 use uuid::Uuid;
 
+/// Open/close tags for special user-input blocks. Used across crates to avoid
+/// duplicated hardcoded strings.
+pub const ENVIRONMENT_CONTEXT_OPEN_TAG: &str = "<environment_context>";
+pub const ENVIRONMENT_CONTEXT_CLOSE_TAG: &str = "</environment_context>";
+
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::message_history::HistoryEntry;

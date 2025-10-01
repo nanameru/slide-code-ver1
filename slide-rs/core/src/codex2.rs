@@ -1081,6 +1081,7 @@ struct SessionState {
     pending_input: Vec<crate::conversation_history::ResponseInputItem>,
     history: crate::conversation_history::ConversationHistory,
     current_task: Option<String>, // 簡略版: codex-1では AgentTask
+    previous_env_context: Option<crate::environment_context::EnvironmentContext>, // MEE-47: 環境変更検出用
 }
 
 /// MEE-33: codex-1互換のセッション構造体
@@ -1895,6 +1896,41 @@ impl Session {
     pub async fn record_input_and_rollout_usermsg(&self, input: &crate::conversation_history::ResponseInputItem) {
         let mut state = self.state.lock().await;
         state.history.push(ResponseItem::from(input.clone()));
+    }
+
+    /// MEE-47: 環境文脈が変更された場合のみ履歴に記録
+    /// 参考: codex-1/codex-rs/core/src/codex.rs:1359-1365
+    pub async fn record_env_context_if_changed(&self, turn_context: &TurnContext) {
+        let current_env = crate::environment_context::EnvironmentContext::from(turn_context);
+        
+        let mut state = self.state.lock().await;
+        let should_record = match state.previous_env_context.as_ref() {
+            None => true, // 初回は必ず記録
+            Some(prev) => !current_env.equals_except_shell(prev),
+        };
+        
+        if should_record {
+            tracing::debug!("Environment context changed, recording to history");
+            let item = ResponseItem::from(current_env.clone());
+            state.history.push(item);
+            state.previous_env_context = Some(current_env);
+        }
+    }
+
+    /// MEE-47: 初回セッション時の環境文脈構築
+    /// 参考: codex-1/codex-rs/core/src/codex.rs:715-727
+    pub fn build_initial_context(&self, turn_context: &TurnContext) -> Vec<ResponseItem> {
+        let mut items = Vec::new();
+        
+        // 環境文脈を追加（Shell情報は省略 - slide-code-testには実装なし）
+        let env_context = crate::environment_context::EnvironmentContext::new(
+            Some(turn_context.cwd.clone()),
+            Some(turn_context.approval_policy.clone()),
+            Some(&turn_context.sandbox_policy),
+        );
+        items.push(ResponseItem::from(env_context));
+        
+        items
     }
 
     /// イベント送信
