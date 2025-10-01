@@ -75,9 +75,8 @@ impl EnvironmentContext {
                     if writable_roots.is_empty() {
                         None
                     } else {
-                        // Extract root paths from WritableRoot structs
-                        // writable_roots is Vec<WritableRoot> where WritableRoot { root: PathBuf, ... }
-                        Some(writable_roots.iter().map(|wr| wr.root.clone()).collect())
+                        // writable_roots is already Vec<PathBuf>
+                        Some(writable_roots.clone())
                     }
                 }
                 _ => None,
@@ -143,6 +142,7 @@ impl EnvironmentContext {
 
         if let Some(approval_policy) = self.approval_policy {
             let policy_str = match approval_policy {
+                AskForApproval::UnlessTrusted => "unless-trusted",
                 AskForApproval::Never => "never",
                 AskForApproval::OnRequest => "on-request",
                 AskForApproval::OnFailure => "on-failure",

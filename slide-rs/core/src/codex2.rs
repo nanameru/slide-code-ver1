@@ -10,11 +10,9 @@ use tokio::process::Command;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use std::process::Stdio;
 use tokio::sync::Mutex;
-use std::time::Duration;
 use tracing::warn;
 
 use crate::client::{ModelClient, ResponseEvent, OpenAiAdapter, StubClient};
-use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::openai_tools::{render_tools_instructions, ToolsConfig, ToolsConfigParams};
 use crate::protocol::{ReasoningEffort, ReasoningSummary};
 use protocol::protocol::InputItem;
@@ -23,7 +21,7 @@ use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::conversation_history::{ResponseItem, ResponseInputItem};
 use crate::event_mapping::map_response_item_to_event_messages;
-use slide_chatgpt::client::{ChatGptClient, SlideRequest};
+use slide_chatgpt::client::ChatGptClient;
 use regex;
 use uuid;
 
@@ -457,9 +455,6 @@ async fn try_run_turn(
                 });
             }
             ResponseEvent::WebSearchCallBegin { .. } => {
-                // optional: surface to UI later
-            }
-            ResponseEvent::RateLimits(_snapshot) => {
                 // optional: surface to UI later
             }
             ResponseEvent::ReasoningSummaryPartAdded => {
@@ -994,7 +989,7 @@ pub enum Event {
     ApplyPatchApprovalRequest {
         id: String,
         call_id: String,
-        changes: Vec<protocol::protocol::FileChange>,
+        changes: HashMap<PathBuf, protocol::protocol::FileChange>,
         reason: Option<String>,
         grant_root: Option<PathBuf>,
     },
@@ -1158,6 +1153,13 @@ impl Codex {
             
             // Initialize MCP Connection Manager
             let mcp_manager = Arc::new(McpConnectionManager::default());
+            
+            // MEE-48: 全操作で再利用するSessionを1回作成（承認ワークフロー用）
+            let sess = Arc::new(Session::new(
+                tx_event.clone(),
+                mcp_manager.clone(),
+            ));
+            
             // Handle to the currently running shell process (for interrupt)
             let running_child: Arc<tokio::sync::Mutex<Option<(u64, tokio::process::Child, Instant)>>> =
                 Arc::new(tokio::sync::Mutex::new(None));
@@ -1181,10 +1183,7 @@ impl Codex {
                     Op::UserInput { text } => {
                         // MEE-43: すべての入力を run_task に一本化（/slide 特別処理は廃止）
                         // MEE-33: セッション管理統合による動的判断ループ呼び出し
-                        let sess = Arc::new(Session::new(
-                            tx_event.clone(),
-                            mcp_manager.clone(),
-                        ));
+                        // MEE-48: ループ外で作成したsessを再利用
 
                 let turn_context = Arc::new(TurnContext {
                     client: current_model_client.clone(),
@@ -1209,7 +1208,7 @@ impl Codex {
                         let sub_id = uuid::Uuid::new_v4().to_string();
                         let input = vec![crate::conversation_history::ResponseInputItem::from_text(text.clone())];
                         if let Err(e) = run_task(
-                            sess,
+                            Arc::clone(&sess),
                             turn_context,
                             sub_id,
                             input,
@@ -1988,7 +1987,7 @@ impl Session {
         &self,
         sub_id: String,
         call_id: String,
-        changes: Vec<protocol::protocol::FileChange>,
+        changes: HashMap<PathBuf, protocol::protocol::FileChange>,
         reason: Option<String>,
         grant_root: Option<PathBuf>,
     ) -> oneshot::Receiver<ReviewDecision> {

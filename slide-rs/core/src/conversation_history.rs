@@ -305,6 +305,14 @@ impl From<Vec<protocol::protocol::InputItem>> for ResponseInputItem {
                         contents.push(ContentItem::InputImage { image_url });
                     }
                 }
+                protocol::protocol::InputItem::LocalImage { path } => {
+                    // Convert local path to file URL for image_url
+                    let url = format!("file://{}", path.display());
+                    contents.push(ContentItem::InputImage { image_url: url });
+                }
+                _ => {
+                    // Future-proof: skip unknown variants
+                }
             }
         }
 

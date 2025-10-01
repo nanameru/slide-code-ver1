@@ -34,6 +34,7 @@ use slide_core::codex::Op;
 use slide_core::protocol::InputItem;
 use slide_core::protocol::ReasoningEffort as ReasoningEffortConfig;
 use slide_core::protocol::{CoreAskForApproval as AskForApproval, CoreSandboxPolicy as SandboxPolicy};
+use slide_core::protocol::FileChange;
 
 // (leftover from earlier spinner impl) — intentionally removed
 
@@ -835,13 +836,22 @@ fn handle_core_event(tui: &mut Tui, app: &mut App, ev: CoreEvent)
         }
         CoreEvent::ApplyPatchApprovalRequest {
             id,
+            call_id: _,
             changes,
             reason,
+            grant_root: _,
         } => {
-            // Convert map of path->desc into a vector of display strings
+            // Convert HashMap<PathBuf, FileChange> into display strings
             let mut items: Vec<String> = changes
                 .into_iter()
-                .map(|(p, v)| format!("{}: {}", p.display(), v))
+                .map(|(path, change)| {
+                    let change_desc = match change {
+                        FileChange::Add { .. } => "add",
+                        FileChange::Delete => "delete",
+                        FileChange::Update { .. } => "update",
+                    };
+                    format!("{}: {}", path.display(), change_desc)
+                })
                 .collect();
             items.sort();
             let req = ApprovalRequest::Patch {
@@ -915,6 +925,7 @@ fn handle_core_event(tui: &mut Tui, app: &mut App, ev: CoreEvent)
         CoreEvent::ShutdownComplete => {}
         CoreEvent::ExecApprovalRequest {
             id,
+            call_id: _,
             command,
             cwd: _,
             reason,
