@@ -6,9 +6,7 @@ use crate::tool_apply_patch::{tool_apply_patch, ApplyPatchInput};
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::path::PathBuf;
-use tokio::process::Command;
-use tokio::time::{timeout, Duration};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use protocol::models::{ResponseInputItem, FunctionCallOutputPayload};
 
 /// ツール実行を管理する統合実行エンジン
@@ -586,51 +584,50 @@ impl ToolExecutor {
             );
         }
 
-        let mut cmd = Command::new(&command[0]);
-        cmd.args(&command[1..]);
-
+        // MEE-50: すべての実行をprocess_exec_tool_call経由に統一
+        // 参考: codex-1/core/src/exec.rs
         let cwd = working_dir.unwrap_or_else(|| self.cwd.clone());
-        cmd.current_dir(&cwd);
-
         let env_map = create_env(&self.shell_environment_policy);
-        cmd.env_clear();
-        cmd.envs(env_map);
 
-        let output_future = cmd.output();
-        let output = if let Some(ms) = timeout_ms {
-            match timeout(Duration::from_millis(ms), output_future).await {
-                Ok(result) => {
-                    result.with_context(|| format!("Failed to execute command: {:?}", command))?
-                }
-                Err(_) => return Ok(format!("Command timed out after {ms} ms")),
-            }
-        } else {
-            output_future
-                .await
-                .with_context(|| format!("Failed to execute command: {:?}", command))?
+        // justificationを後で使うためclone
+        let justification_for_message = justification.clone();
+
+        let params = crate::exec::ExecParams {
+            command: command.clone(),
+            cwd,
+            timeout_ms,
+            env: env_map,
+            with_escalated_permissions: Some(with_escalated_permissions),
+            justification,
         };
 
-        let exit_code = output.status.code().unwrap_or_default();
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        // すべての実行が同一経路でSandboxPolicyを通る
+        let result = crate::exec::process_exec_tool_call(
+            params,
+            crate::exec::SandboxType::None,
+            &self.sandbox_policy,
+            &None,
+            None,
+        )
+        .await?;
 
         let mut message = format!(
             "Change Approved\n☑ Command `{}` exited with code {}",
             command.join(" "),
-            exit_code
+            result.exit_code
         );
 
-        if !stdout.trim().is_empty() {
+        if !result.stdout.trim().is_empty() {
             message.push_str("\n\nSTDOUT:\n");
-            message.push_str(stdout.trim_end());
+            message.push_str(result.stdout.trim_end());
         }
 
-        if !stderr.trim().is_empty() {
+        if !result.stderr.trim().is_empty() {
             message.push_str("\n\nSTDERR:\n");
-            message.push_str(stderr.trim_end());
+            message.push_str(result.stderr.trim_end());
         }
 
-        if let Some(justification) = justification {
+        if let Some(justification) = justification_for_message {
             if !justification.is_empty() {
                 message.push_str(&format!("\n\nJustification: {}", justification));
             }

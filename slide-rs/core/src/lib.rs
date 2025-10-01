@@ -11,6 +11,7 @@ pub mod event_mapping;
 pub mod compact;
 pub mod environment_context;
 pub mod util;
+pub mod exec; // MEE-50: 統一実行エントリポイント
 pub mod exec_env;
 pub mod mcp_connection_manager;
 pub mod mcp_tool_call;
