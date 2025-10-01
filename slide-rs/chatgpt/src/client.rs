@@ -422,12 +422,32 @@ impl OpenAiModelClient {
                                                                                     if let Ok(tool_json) = serde_json::from_str::<serde_json::Value>(text) {
                                                                                         if let Some(tool_name) = tool_json.get("tool").and_then(|t| t.as_str()) {
                                                                                             tracing::info!("[responses-api] Found tool call in message: {}", tool_name);
+                                                                                            
+                                                                                            // Convert tool call JSON to proper arguments format
+                                                                                            let arguments = if tool_name == "shell" {
+                                                                                                // Convert {"tool":"shell","command":[...]} to {"cmd":[...],...}
+                                                                                                let cmd = tool_json.get("command").cloned().unwrap_or(serde_json::json!([]));
+                                                                                                let cwd = tool_json.get("workdir").cloned();
+                                                                                                let timeout_ms = tool_json.get("timeout_ms").cloned();
+                                                                                                let mut args = serde_json::json!({"cmd": cmd});
+                                                                                                if let Some(cwd) = cwd {
+                                                                                                    args["cwd"] = cwd;
+                                                                                                }
+                                                                                                if let Some(timeout) = timeout_ms {
+                                                                                                    args["timeout_ms"] = timeout;
+                                                                                                }
+                                                                                                serde_json::to_string(&args).unwrap_or_else(|_| "{}".to_string())
+                                                                                            } else {
+                                                                                                // For other tools, use the original JSON
+                                                                                                text.to_string()
+                                                                                            };
+                                                                                            
                                                                                             // Convert to FunctionCall format
                                                                                             let function_call_item = serde_json::json!({
                                                                                                 "type": "function_call",
                                                                                                 "id": item.get("id"),
                                                                                                 "name": tool_name,
-                                                                                                "arguments": text,
+                                                                                                "arguments": arguments,
                                                                                                 "call_id": format!("call_{}", item.get("id").and_then(|v| v.as_str()).unwrap_or(""))
                                                                                             });
                                                                                             if let Ok(json_str) = serde_json::to_string(&function_call_item) {
