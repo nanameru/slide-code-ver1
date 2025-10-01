@@ -412,9 +412,41 @@ impl OpenAiModelClient {
                                                                     }
                                                                     "message" => {
                                                                         tracing::info!("[responses-api] Processing message");
-                                                                        // Regular message: serialize as ResponseItem::Message
-                                                                        if let Ok(json_str) = serde_json::to_string(&item) {
-                                                                            let _ = tx.send(format!("__RESPONSE_ITEM__{}", json_str)).await;
+                                                                        
+                                                                        // Check if message contains tool call JSON
+                                                                        let mut found_tool_call = false;
+                                                                        if let Some(content_arr) = item.get("content").and_then(|c| c.as_array()) {
+                                                                            for content_item in content_arr {
+                                                                                if let Some(text) = content_item.get("text").and_then(|t| t.as_str()) {
+                                                                                    // Try to parse as tool call JSON
+                                                                                    if let Ok(tool_json) = serde_json::from_str::<serde_json::Value>(text) {
+                                                                                        if let Some(tool_name) = tool_json.get("tool").and_then(|t| t.as_str()) {
+                                                                                            tracing::info!("[responses-api] Found tool call in message: {}", tool_name);
+                                                                                            // Convert to FunctionCall format
+                                                                                            let function_call_item = serde_json::json!({
+                                                                                                "type": "function_call",
+                                                                                                "id": item.get("id"),
+                                                                                                "name": tool_name,
+                                                                                                "arguments": text,
+                                                                                                "call_id": format!("call_{}", item.get("id").and_then(|v| v.as_str()).unwrap_or(""))
+                                                                                            });
+                                                                                            if let Ok(json_str) = serde_json::to_string(&function_call_item) {
+                                                                                                tracing::info!("[responses-api] Converting message to FunctionCall: {}", json_str);
+                                                                                                let _ = tx.send(format!("__RESPONSE_ITEM__{}", json_str)).await;
+                                                                                                found_tool_call = true;
+                                                                                                break;
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                        
+                                                                        // If no tool call found, send as regular message
+                                                                        if !found_tool_call {
+                                                                            if let Ok(json_str) = serde_json::to_string(&item) {
+                                                                                let _ = tx.send(format!("__RESPONSE_ITEM__{}", json_str)).await;
+                                                                            }
                                                                         }
                                                                     }
                                                                     "local_shell_call" => {
