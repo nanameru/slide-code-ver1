@@ -382,7 +382,9 @@ impl OpenAiModelClient {
                                                 Ok(v) => {
                                                     let t = v["type"].as_str().unwrap_or("");
                                                     match t {
-                                                        "response.created" => { let _ = tx.send("__CREATED__".into()).await; }
+                                                        "response.created" => { 
+                                                            // Silent - don't send anything to user
+                                                        }
                                                         // output text stream
                                                         tt if tt.ends_with("output_text.delta") => {
                                                             if let Some(s) = v["delta"].as_str() {
