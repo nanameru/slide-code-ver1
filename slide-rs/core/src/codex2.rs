@@ -29,6 +29,9 @@ use uuid;
 // 参考: codex-1/codex-rs/core/src/client_common.rs:21
 const REVIEW_PROMPT: &str = include_str!("../review_prompt.md");
 
+// Base instructions for the agent (from prompt.md)
+const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
+
 // MEE-24: 処理済みレスポンスアイテム
 #[derive(Debug, Clone)]
 struct ProcessedResponseItem {
@@ -214,10 +217,12 @@ async fn run_turn(
     let prompt = Prompt {
         input,
         tools: tools_json.clone(),
-        base_instructions_override: None, // 簡略版: オーバーライドなし
+        base_instructions_override: Some(BASE_INSTRUCTIONS.to_string()),
     };
     
-    tracing::info!("run_turn called with {} tools, {} input items", prompt.tools.len(), prompt.input.len());
+    tracing::info!("run_turn called with {} tools, {} input items, base_instructions_len={}", 
+        prompt.tools.len(), prompt.input.len(), 
+        prompt.base_instructions_override.as_ref().map(|s| s.len()).unwrap_or(0));
 
     // リトライループ (codex-1:1978-2017を参考) - provider設定に基づく
     let mut retries = 0;
