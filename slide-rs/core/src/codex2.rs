@@ -208,14 +208,16 @@ async fn run_turn(
                 crate::openai_tools::OpenAiTool::Freeform(f) => format!("custom:{}", f.name),
             })
             .collect();
-        tracing::debug!("tools for turn (has_image={}): {:?}", has_image_in_input, names);
+        tracing::info!("tools for turn (has_image={}): {:?}", has_image_in_input, names);
     }
     
     let prompt = Prompt {
         input,
-        tools: tools_json,
+        tools: tools_json.clone(),
         base_instructions_override: None, // 簡略版: オーバーライドなし
     };
+    
+    tracing::info!("run_turn called with {} tools, {} input items", prompt.tools.len(), prompt.input.len());
 
     // リトライループ (codex-1:1978-2017を参考) - provider設定に基づく
     let mut retries = 0;
