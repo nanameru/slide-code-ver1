@@ -81,7 +81,7 @@ impl ChatComposer {
     fn handle_paste_burst_flush(&mut self, now: std::time::Instant) -> bool {
         match self.paste_burst.flush_if_due(now) {
             FlushResult::Paste(pasted) => {
-                self.textarea.insert_str(&pasted);
+                self.handle_paste(pasted);
                 true
             }
             FlushResult::Typed(ch) => {
@@ -90,6 +90,55 @@ impl ChatComposer {
             }
             FlushResult::None => false,
         }
+    }
+
+    /// Handle pasted text (e.g., from explicit paste events or drag-and-drop).
+    pub fn handle_paste(&mut self, pasted: String) -> bool {
+        use crate::clipboard_paste::{normalize_pasted_path, pasted_image_format};
+        
+        let char_count = pasted.chars().count();
+        
+        // Try to interpret as an image path
+        if char_count > 1 {
+            if let Some(path_buf) = normalize_pasted_path(&pasted) {
+                // Check if it's a valid image file
+                if let Ok((w, h)) = image::image_dimensions(&path_buf) {
+                    let format_label = pasted_image_format(&path_buf).label();
+                    tracing::info!("Pasted image path detected: {} ({}x{}, {})", 
+                        path_buf.display(), w, h, format_label);
+                    // For now, just insert a placeholder. In a full implementation,
+                    // this would attach the image to the submission.
+                    self.textarea.insert_str(&format!("[Image: {}]", path_buf.display()));
+                    self.paste_burst.clear_after_explicit_paste();
+                    return true;
+                }
+            }
+        }
+        
+        // Otherwise, insert as plain text
+        self.textarea.insert_str(&pasted);
+        
+        // Explicit paste events should not trigger Enter suppression.
+        self.paste_burst.clear_after_explicit_paste();
+        
+        true
+    }
+
+    /// Flush the paste burst buffer if enough time has elapsed.
+    pub fn flush_paste_burst_if_due(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        self.handle_paste_burst_flush(now)
+    }
+
+    /// Check if a paste burst is currently being buffered.
+    pub fn is_in_paste_burst(&self) -> bool {
+        self.paste_burst.is_active()
+    }
+
+    /// Recommended delay between paste burst flush checks (for periodic ticks).
+    pub fn recommended_paste_flush_delay() -> std::time::Duration {
+        use super::paste_burst::PASTE_BURST_CHAR_INTERVAL;
+        PASTE_BURST_CHAR_INTERVAL
     }
 
     /// Clamp a byte position to the nearest char boundary.

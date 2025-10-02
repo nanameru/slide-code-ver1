@@ -624,6 +624,9 @@ pub async fn run_app(init_recent_files: Vec<String>) -> Result<RunResult> {
                         }
                     }
                     crossterm::event::Event::Paste(pasted) => {
+                        // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
+                        // but our textarea expects \n. Normalize CR to LF.
+                        let pasted = pasted.replace("\r", "\n");
                         app.chat_widget.handle_paste(pasted);
                     }
                     crossterm::event::Event::Mouse(mev) => {

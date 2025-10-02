@@ -228,6 +228,26 @@ impl BottomPane {
         self.composer.set_has_focus(has_focus);
     }
 
+    /// Handle pasted text (e.g., from drag-and-drop or clipboard).
+    pub fn handle_paste(&mut self, pasted: String) {
+        if self.active_view.is_none() {
+            let needs_redraw = self.composer.handle_paste(pasted);
+            if needs_redraw {
+                // Request redraw handled by caller
+            }
+        }
+    }
+
+    /// Flush paste burst buffer if enough time has elapsed.
+    pub fn flush_paste_burst_if_due(&mut self) -> bool {
+        self.composer.flush_paste_burst_if_due()
+    }
+
+    /// Check if a paste burst is currently being buffered.
+    pub fn is_in_paste_burst(&self) -> bool {
+        self.composer.is_in_paste_burst()
+    }
+
     fn _setup_task_status(&mut self, running: bool) {
         if running {
             if self.status.is_none() {
