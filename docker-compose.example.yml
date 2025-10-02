@@ -1,0 +1,81 @@
+# ====================
+# Docker Compose設定例
+# ====================
+#
+# 複数のサービスを簡単に起動できます
+#
+# 使い方:
+#   docker-compose up
+#
+
+version: '3.8'
+
+services:
+  # Slide CLIサーバー
+  slide-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.example
+    container_name: slide-cli-server
+    ports:
+      - "8080:8080"  # HTTP API
+      - "6060:6060"  # ログビューワー
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}  # 環境変数から取得
+      - SLIDE_MODEL=gpt-4
+      - RUST_LOG=info
+    volumes:
+      # ワークスペースをマウント（ファイル操作用）
+      - ./workspace:/workspace
+      # ログを永続化
+      - slide-logs:/tmp
+    restart: unless-stopped
+    # リソース制限（安全のため）
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # 音声入力用エッジデバイス（シミュレーション）
+  voice-input-simulator:
+    build:
+      context: .
+      dockerfile: Dockerfile.voice-edge
+    container_name: slide-voice-edge
+    depends_on:
+      - slide-server
+    environment:
+      - SLIDE_SERVER_URL=http://slide-server:8080
+    ports:
+      - "3000:3000"  # Web UI
+    restart: unless-stopped
+
+volumes:
+  slide-logs:
+    driver: local
+
+networks:
+  default:
+    driver: bridge
+
+# ====================
+# 使用例:
+#
+# 1. 起動
+#   docker-compose up -d
+#
+# 2. ログ確認
+#   docker-compose logs -f slide-server
+#
+# 3. 停止
+#   docker-compose down
+#
+# 4. 音声入力テスト
+#   curl -X POST http://localhost:8080/api/voice-command \
+#     -H "Content-Type: application/json" \
+#     -d '{"text": "README.mdを表示して"}'
+# ====================

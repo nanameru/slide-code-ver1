@@ -1,0 +1,76 @@
+# ====================
+# Slide CLI - Dockerイメージ例
+# ====================
+# 
+# このDockerfileは、Slide CLIをクラウドで動かすための設定例です
+#
+
+# ----- ビルドステージ -----
+FROM rust:1.75 as builder
+
+# 作業ディレクトリ
+WORKDIR /workspace
+
+# 依存関係のキャッシュ最適化
+# (Cargo.tomlだけ先にコピーして、依存関係をビルド)
+COPY Cargo.toml ./
+COPY slide-rs/Cargo.toml slide-rs/
+COPY slide-rs/*/Cargo.toml slide-rs/*/
+
+# ダミーのsrc/main.rsを作成して依存関係をビルド
+RUN mkdir -p slide-rs/cli/src && \
+    echo "fn main() {}" > slide-rs/cli/src/main.rs && \
+    cargo build --release || true
+
+# 実際のソースコードをコピー
+COPY . .
+
+# リリースビルド
+RUN cargo build --release -p slide-cli
+
+# ----- 実行ステージ -----
+FROM debian:bookworm-slim
+
+# 必要なランタイム依存関係をインストール
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 実行ユーザーを作成（セキュリティのため）
+RUN useradd -m -u 1000 slideuser
+
+# 作業ディレクトリ
+WORKDIR /app
+
+# ビルド成果物をコピー
+COPY --from=builder /workspace/target/release/slide-cli /usr/local/bin/slide-cli
+
+# ログディレクトリの作成
+RUN mkdir -p /tmp && chown slideuser:slideuser /tmp
+
+# ユーザー切り替え
+USER slideuser
+
+# ポート公開（HTTPサーバー用）
+EXPOSE 8080
+EXPOSE 6060
+
+# ヘルスチェック
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:8080/health || exit 1
+
+# 起動コマンド（サーバーモードで起動する想定）
+CMD ["slide-cli", "--server-mode"]
+
+# ====================
+# ビルド方法:
+#   docker build -t slide-cli:latest .
+#
+# 起動方法:
+#   docker run -p 8080:8080 -p 6060:6060 slide-cli:latest
+#
+# 環境変数を渡す場合:
+#   docker run -e OPENAI_API_KEY=sk-xxx -p 8080:8080 slide-cli:latest
+# ====================
