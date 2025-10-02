@@ -326,7 +326,7 @@ async fn try_run_turn(
         responses_payload = Some(serde_json::json!({
             "input": &prompt.input,  // Send ResponseItem directly!
             "tools": tools_json,
-            "system": if system_str.is_empty() {
+            "instructions": if system_str.is_empty() {
                 serde_json::Value::Null
             } else {
                 serde_json::Value::String(system_str)

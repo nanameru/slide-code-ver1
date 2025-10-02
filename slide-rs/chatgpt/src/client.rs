@@ -320,10 +320,9 @@ impl OpenAiModelClient {
             "model": self.model,
             "stream": true,
         });
-        // Merge allowed fields from payload: input, tools, system/instructions
+        // Merge allowed fields from payload: input, tools, instructions
         if let Some(input) = payload.get("input") { body["input"] = input.clone(); }
         if let Some(tools) = payload.get("tools") { body["tools"] = tools.clone(); }
-        if let Some(system) = payload.get("system") { body["system"] = system.clone(); }
         if let Some(instructions) = payload.get("instructions") { body["instructions"] = instructions.clone(); }
 
         append_log(&format!("Request Body(responses): {}", serde_json::to_string_pretty(&body).unwrap_or_default()));
