@@ -14,6 +14,7 @@ use crate::ui_consts::LIVE_PREFIX_COLS;
 
 use super::{
     chat_composer_history::ChatComposerHistory,
+    paste_burst::{CharDecision, FlushResult, PasteBurst},
     textarea::{TextArea, TextAreaState},
 };
 // Clipboard paste is intercepted at BottomPane to enqueue images (codex-1 準拠)
@@ -38,6 +39,7 @@ pub struct ChatComposer {
     show_hints: bool,
     animations: AnimationManager,
     is_task_running: bool,
+    paste_burst: PasteBurst,
 }
 
 impl ChatComposer {
@@ -54,6 +56,7 @@ impl ChatComposer {
             show_hints: true,
             animations: AnimationManager::new(),
             is_task_running: false,
+            paste_burst: PasteBurst::default(),
         }
     }
 
@@ -75,12 +78,30 @@ impl ChatComposer {
         textarea_height.saturating_add(hints_height)
     }
 
+    fn handle_paste_burst_flush(&mut self, now: std::time::Instant) -> bool {
+        match self.paste_burst.flush_if_due(now) {
+            FlushResult::Paste(pasted) => {
+                self.textarea.insert_str(&pasted);
+                true
+            }
+            FlushResult::Typed(ch) => {
+                self.textarea.insert_str(&ch.to_string());
+                true
+            }
+            FlushResult::None => false,
+        }
+    }
+
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         if key_event.kind != KeyEventKind::Press {
             return (InputResult::None, false);
         }
 
         self.clear_hints();
+
+        // Flush any pending paste burst before handling new input (codex-1 style)
+        let now = std::time::Instant::now();
+        self.handle_paste_burst_flush(now);
 
         match key_event {
             // Ctrl+V is handled at BottomPane level to enqueue image attachments.

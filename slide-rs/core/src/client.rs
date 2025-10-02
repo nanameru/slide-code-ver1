@@ -91,10 +91,16 @@ impl ModelClient for OpenAiAdapter {
     async fn stream(&self, prompt: String) -> Result<Receiver<ResponseEvent>> {
         // If Responses API is supported, stream via /responses with structured payload
         if self.supports_responses_api() {
-            // Build minimal responses payload (input, optional tools/system added by caller)
-            let payload = serde_json::json!({
-                "input": [{"role":"user","content": [{"type":"input_text","text": prompt}]}]
-            });
+            // Try to parse prompt as JSON (it should be a full Responses API payload from codex2.rs)
+            let payload: serde_json::Value = if let Ok(parsed) = serde_json::from_str(&prompt) {
+                // If prompt is valid JSON, use it directly as the payload
+                parsed
+            } else {
+                // Fallback: treat as plain text and wrap in minimal structure
+                serde_json::json!({
+                    "input": [{"role":"user","content": [{"type":"input_text","text": prompt}]}]
+                })
+            };
             let meta = self.inner.stream_responses_with_meta(payload).await?;
             let (tx, rx) = tokio::sync::mpsc::channel(128);
             if let Some(info) = meta.rate_limits {

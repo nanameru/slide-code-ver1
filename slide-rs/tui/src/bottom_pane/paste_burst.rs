@@ -35,6 +35,12 @@ pub(crate) struct RetroGrab {
     pub grabbed: String,
 }
 
+pub(crate) enum FlushResult {
+    Paste(String),
+    Typed(char),
+    None,
+}
+
 impl PasteBurst {
     /// Recommended delay to wait between simulated keypresses (or before
     /// scheduling a UI tick) so that a pending fast keystroke is flushed
@@ -88,31 +94,31 @@ impl PasteBurst {
 
     /// Flush the buffered burst if the inter-key timeout has elapsed.
     ///
-    /// Returns Some(String) when either:
-    /// - We were actively buffering paste-like input and the buffer is now
-    ///   emitted as a single pasted string; or
-    /// - We had saved a single fast first-char with no subsequent burst and we
-    ///   now emit that char as normal typed input.
+    /// Returns FlushResult::Paste when we were actively buffering paste-like input
+    /// and the buffer is now emitted as a single pasted string.
     ///
-    /// Returns None if the timeout has not elapsed or there is nothing to flush.
-    pub fn flush_if_due(&mut self, now: Instant) -> Option<String> {
+    /// Returns FlushResult::Typed when we had saved a single fast first-char with
+    /// no subsequent burst and we now emit that char as normal typed input.
+    ///
+    /// Returns FlushResult::None if the timeout has not elapsed or there is nothing to flush.
+    pub fn flush_if_due(&mut self, now: Instant) -> FlushResult {
         let timed_out = self
             .last_plain_char_time
             .is_some_and(|t| now.duration_since(t) > PASTE_BURST_CHAR_INTERVAL);
         if timed_out && self.is_active_internal() {
             self.active = false;
             let out = std::mem::take(&mut self.buffer);
-            Some(out)
+            FlushResult::Paste(out)
         } else if timed_out {
             // If we were saving a single fast char and no burst followed,
             // flush it as normal typed input.
             if let Some((ch, _at)) = self.pending_first_char.take() {
-                Some(ch.to_string())
+                FlushResult::Typed(ch)
             } else {
-                None
+                FlushResult::None
             }
         } else {
-            None
+            FlushResult::None
         }
     }
 
