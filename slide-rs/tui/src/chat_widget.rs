@@ -477,14 +477,8 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {
-        // Paste衛生化: 代表的なドラッグ&ドロップ由来のパス崩れ（先頭スラッシュ欠落）を補正
-        let mut t = text;
-        let trimmed = t.trim();
-        if !trimmed.is_empty() {
-            let fixed = Self::sanitize_dropped_path_text(trimmed);
-            self.submit_message_with_images(fixed);
-            self.request_redraw();
-        }
+        self.bottom_pane.handle_paste(text);
+        self.request_redraw();
     }
 
     /// パスらしき単語に対して先頭スラッシュを補うなどの軽量サニタイズを行う
