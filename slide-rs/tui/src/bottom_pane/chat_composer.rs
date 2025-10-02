@@ -92,6 +92,28 @@ impl ChatComposer {
         }
     }
 
+    /// Clamp a byte position to the nearest char boundary.
+    fn clamp_to_char_boundary(text: &str, pos: usize) -> usize {
+        if pos >= text.len() {
+            return text.len();
+        }
+        let mut clamped = pos;
+        while !text.is_char_boundary(clamped) && clamped > 0 {
+            clamped -= 1;
+        }
+        clamped
+    }
+
+    /// Handle non-ASCII char by flushing any active burst and inserting directly.
+    fn handle_non_ascii_char(&mut self, input: KeyEvent) -> (InputResult, bool) {
+        let now = std::time::Instant::now();
+        if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
+            self.textarea.insert_str(&pasted);
+        }
+        self.textarea.input(input);
+        (InputResult::None, true)
+    }
+
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         if key_event.kind != KeyEventKind::Press {
             return (InputResult::None, false);
@@ -157,18 +179,82 @@ impl ChatComposer {
                 (InputResult::None, true)
             }
             other => {
-                // Before mutating textarea, capture @search short pattern for immediate popup
-                if let KeyEvent { code: KeyCode::Char(c), modifiers: KeyModifiers::NONE, .. } = other {
-                    // Append char locally to inspect pattern without committing state first
-                    let mut preview = self.textarea.text().to_string();
-                    preview.push(c);
-                    if extract_at_search_query(&preview).is_some() {
-                        // Store back the key into textarea and ask caller to redraw
-                        self.textarea.input(other);
-                        return (InputResult::None, true);
+                // Intercept plain Char inputs to optionally accumulate into a burst buffer
+                let now = std::time::Instant::now();
+                
+                if let KeyEvent {
+                    code: KeyCode::Char(ch),
+                    modifiers,
+                    ..
+                } = other
+                {
+                    let has_ctrl_or_alt =
+                        modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::ALT);
+                    if !has_ctrl_or_alt {
+                        // Non-ASCII characters (e.g., from IMEs) can arrive in quick bursts and be
+                        // misclassified by paste heuristics. Flush any active burst buffer and insert
+                        // non-ASCII characters directly.
+                        if !ch.is_ascii() {
+                            return self.handle_non_ascii_char(other);
+                        }
+
+                        match self.paste_burst.on_plain_char(ch, now) {
+                            CharDecision::BufferAppend => {
+                                self.paste_burst.append_char_to_buffer(ch, now);
+                                return (InputResult::None, true);
+                            }
+                            CharDecision::BeginBuffer { retro_chars } => {
+                                let cur = self.textarea.cursor();
+                                let txt = self.textarea.text();
+                                let safe_cur = Self::clamp_to_char_boundary(txt, cur);
+                                let before = &txt[..safe_cur];
+                                if let Some(grab) =
+                                    self.paste_burst
+                                        .decide_begin_buffer(now, before, retro_chars as usize)
+                                {
+                                    if !grab.grabbed.is_empty() {
+                                        self.textarea.replace_range(grab.start_byte..safe_cur, "");
+                                    }
+                                    self.paste_burst.begin_with_retro_grabbed(grab.grabbed, now);
+                                    self.paste_burst.append_char_to_buffer(ch, now);
+                                    return (InputResult::None, true);
+                                }
+                                // If decide_begin_buffer opted not to start buffering,
+                                // fall through to normal insertion below.
+                            }
+                            CharDecision::BeginBufferFromPending => {
+                                // First char was held; now append the current one.
+                                self.paste_burst.append_char_to_buffer(ch, now);
+                                return (InputResult::None, true);
+                            }
+                            CharDecision::RetainFirstChar => {
+                                // Keep the first fast char pending momentarily.
+                                return (InputResult::None, true);
+                            }
+                        }
+                    }
+                    if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
+                        self.textarea.insert_str(&pasted);
                     }
                 }
+
+                // For non-char inputs (or after flushing), handle normally
                 self.textarea.input(other);
+                
+                // Update paste-burst heuristic for plain Char (no Ctrl/Alt) events
+                if let KeyEvent {
+                    code: KeyCode::Char(_),
+                    modifiers,
+                    ..
+                } = other
+                {
+                    let has_ctrl_or_alt = modifiers.contains(KeyModifiers::CONTROL)
+                        || modifiers.contains(KeyModifiers::ALT);
+                    if has_ctrl_or_alt {
+                        self.paste_burst.clear_window_after_non_char();
+                    }
+                }
+                
                 (InputResult::None, true)
             }
         }
