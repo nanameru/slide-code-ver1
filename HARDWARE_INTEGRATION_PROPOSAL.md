@@ -31,11 +31,18 @@ impl VoiceInputManager {
     }
 
     pub async fn start_listening(&mut self) -> Result<()> {
-        // 実装例:
-        // 1. マイクからオーディオストリームを取得
-        // 2. Whisper API または Google Speech-to-Text に送信
-        // 3. トランスクリプションを取得
-        // 4. VoiceInputEvent::TranscriptionReady で送信
+        // TODO: Implement actual async operations:
+        // 1. マイクからオーディオストリームを取得 (async)
+        // 2. Whisper API または Google Speech-to-Text に送信 (async)
+        // 3. トランスクリプションを取得 (async)
+        // 4. VoiceInputEvent::TranscriptionReady で送信 (async)
+
+        self.tx.send(VoiceInputEvent::ListeningStarted).await
+            .map_err(|_| anyhow!("Failed to send listening started event"))?;
+
+        // Placeholder for actual implementation
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
         Ok(())
     }
 }
@@ -70,7 +77,11 @@ pub mod raspberry_pi {
     impl RaspberryPiInterface {
         pub fn new() -> Result<Self> {
             let gpio = Gpio::new()?;
-            let record_button = gpio.get(17)?.into_input_pullup();
+            let pin_number = std::env::var("RECORD_BUTTON_GPIO_PIN")
+                .unwrap_or_else(|_| "17".to_string())
+                .parse::<u8>()
+                .map_err(|_| anyhow!("Invalid GPIO pin number"))?;
+            let record_button = gpio.get(pin_number)?.into_input_pullup();
             Ok(Self { record_button })
         }
         
@@ -243,14 +254,14 @@ impl Widget for VoiceRecordingWidget {
 ## 実装ステップ
 
 ### Phase 1: 基本音声入力 (1-2週間)
-- [x] マイク入力キャプチャ実装 (`cpal` crate)
-- [x] Whisper API 統合
-- [x] 音声 → テキスト → 既存パイプライン接続
+- [ ] マイク入力キャプチャ実装 (`cpal` crate)
+- [ ] Whisper API 統合
+- [ ] 音声 → テキスト → 既存パイプライン接続
 
 ### Phase 2: ハードウェアインターフェース (1週間)
-- [x] GPIO ボタン入力対応 (Raspberry Pi)
-- [x] LED フィードバック実装
-- [x] ハードウェアイベントループ
+- [ ] GPIO ボタン入力対応 (Raspberry Pi)
+- [ ] LED フィードバック実装
+- [ ] ハードウェアイベントループ
 
 ### Phase 3: ローカル音声認識 (オプション) (2-3週間)
 - [ ] Vosk または Whisper.cpp 統合
